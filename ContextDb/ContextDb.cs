@@ -19,4 +19,8 @@ public class ConnectionDB(IConfiguration _config)
     {
         return new OracleConnection(_config.GetConnectionString("DefaultConnectionPRE"));
     }
+      public OracleConnection GetRhConnection()
+    {
+        return new OracleConnection(_config.GetConnectionString("DefaultConnectionRH"));
+    }
 }
