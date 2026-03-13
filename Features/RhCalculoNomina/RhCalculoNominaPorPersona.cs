@@ -3,28 +3,15 @@ using Oracle.ManagedDataAccess.Client;
 using OssmmasoftVerticalSlice.ContextDB;
 using OssmmasoftVerticalSlice.Helpers;
 using System.Data;
+using System.Reflection.Metadata;
 
 
 
 namespace OssmmasoftVerticalSlice.Features.RhCalculoNomina;
 
 //request
-public record RhCalculoNominaPorPersonaQuery(int CodigoPersona,int CodigoTipoNomina,int CodigoRelacionCargo,decimal Sueldo,int CodigoUsuario,int CodigoEmpresa,int PageSize,int PageNumber,string SearchText);
+public record RhCalculoNominaPorPersonaQuery(int CodigoPersona,int CodigoTipoNomina,int CodigoUsuario,int CodigoEmpresa,int PageSize,int PageNumber,string SearchText);
 
-/*
-
-
-
-RD1.CODIGO AS CODIGO_FRECUENCIA,
-RD1.DESCRIPCION AS DESCRIPCION_FRECUENCIA,
-RC.CODIGO,
-RC.DENOMINACION,
-RC.TIPO_CONCEPTO,
-RC.MODULO_ID,
-RD2.CODIGO AS CODIGO_MODULO,
-RD2.DESCRIPCION AS DESCRIPCION_MODULO
-RMN.USUARIO_INS, RMN.FECHA_INS, RMN.USUARIO_UPD, RMN.FECHA_UPD, RMN.CODIGO_EMPRESA,
-*/
 
 //response
 public record GetRhCalculoNominaPorPersonaResponse(
@@ -51,7 +38,9 @@ public record GetRhCalculoNominaPorPersonaResponse(
 
     string Extra1,
     string Extra2,
-    string Extra3
+    string Extra3,
+    bool Automatico,
+    string SearchText
    
 
    );
@@ -76,9 +65,9 @@ public async Task<ResultDto<List<GetRhCalculoNominaPorPersonaResponse>>> HandleA
 
     // Parámetros de entrada
     cmd.Parameters.Add("p_codigo_tipo_nomina", OracleDbType.Int32).Value = value.CodigoTipoNomina;
-    cmd.Parameters.Add("p_codigo_relacion_cargo", OracleDbType.Int32).Value = value.CodigoRelacionCargo;
+    //cmd.Parameters.Add("p_codigo_relacion_cargo", OracleDbType.Int32).Value = value.CodigoRelacionCargo;
     cmd.Parameters.Add("p_Codigo_Persona", OracleDbType.Int32).Value = value.CodigoPersona;
-    cmd.Parameters.Add("p_sueldo", OracleDbType.Decimal).Value = value.CodigoPersona;
+    //cmd.Parameters.Add("p_sueldo", OracleDbType.Decimal).Value = value.CodigoPersona;
     cmd.Parameters.Add("p_codigo_usuario", OracleDbType.Int32).Value = value.CodigoUsuario;
     cmd.Parameters.Add("p_codigo_empresa", OracleDbType.Int32).Value = value.CodigoEmpresa;
     
@@ -105,34 +94,41 @@ public async Task<ResultDto<List<GetRhCalculoNominaPorPersonaResponse>>> HandleA
         {
             while (await reader.ReadAsync())
             {
-                list.Add(new GetRhCalculoNominaPorPersonaResponse(  
-                    reader.GetInt32(reader.GetOrdinal("CODIGO_MOV_NOMINA")),
-                    reader.GetInt32(reader.GetOrdinal("CODIGO_TIPO_NOMINA")),
-                    reader.GetInt32(reader.GetOrdinal("CODIGO_PERSONA")),
-                    reader.IsDBNull(reader.GetOrdinal("CODIGO_CONCEPTO")) ? 0 : reader.GetInt32(reader.GetOrdinal("CODIGO_CONCEPTO")),
-                    reader.IsDBNull(reader.GetOrdinal("COMPLEMENTO_CONCEPTO")) ? "" : reader.GetString(reader.GetOrdinal("COMPLEMENTO_CONCEPTO")),
-                    reader.IsDBNull(reader.GetOrdinal("TIPO")) ? "" : reader.GetString(reader.GetOrdinal("TIPO")),
-                    reader.GetInt32(reader.GetOrdinal("FRECUENCIA_ID")),
-                    reader.GetDecimal(reader.GetOrdinal("MONTO")),
-                    reader.GetDecimal(reader.GetOrdinal("ASIGNACION")),
-                    reader.GetDecimal(reader.GetOrdinal("DEDUCCION")),
-                    reader.GetDecimal(reader.GetOrdinal("ASIGNACION_DEDUCCION")),
-                    reader.IsDBNull(reader.GetOrdinal("STATUS")) ? "" : reader.GetString(reader.GetOrdinal("STATUS")),
-                    reader.GetString(reader.GetOrdinal("CODIGO_FRECUENCIA")),
-                    reader.IsDBNull(reader.GetOrdinal("DESCRIPCION_FRECUENCIA")) ? "" : reader.GetString(reader.GetOrdinal("DESCRIPCION_FRECUENCIA")),
-                    reader.IsDBNull(reader.GetOrdinal("CODIGO")) ? "" : reader.GetString(reader.GetOrdinal("CODIGO")),
-                    reader.IsDBNull(reader.GetOrdinal("DENOMINACION")) ? "" : reader.GetString(reader.GetOrdinal("DENOMINACION")),
-                    reader.IsDBNull(reader.GetOrdinal("TIPO_CONCEPTO")) ? "" : reader.GetString(reader.GetOrdinal("TIPO_CONCEPTO")),
-                    reader.IsDBNull(reader.GetOrdinal("MODULO_ID")) ? 0 : reader.GetInt32(reader.GetOrdinal("MODULO_ID")),
-                    reader.IsDBNull(reader.GetOrdinal("CODIGO_MODULO")) ? "" : reader.GetString(reader.GetOrdinal("CODIGO_MODULO")),
-                    reader.IsDBNull(reader.GetOrdinal("DESCRIPCION_MODULO")) ? "" : reader.GetString(reader.GetOrdinal("DESCRIPCION_MODULO")),
-                    reader.IsDBNull(reader.GetOrdinal("EXTRA1")) ? "" : reader.GetString(reader.GetOrdinal("EXTRA1")),
-                    reader.IsDBNull(reader.GetOrdinal("EXTRA2")) ? "" : reader.GetString(reader.GetOrdinal("EXTRA2")),
-                    reader.IsDBNull(reader.GetOrdinal("EXTRA3")) ? "" : reader.GetString(reader.GetOrdinal("EXTRA3"))
-                
-                   
-
-                ));
+                    string searchText =  
+                    reader.SafeGetString("CODIGO_FRECUENCIA") + "-" + 
+                    reader.SafeGetString("DESCRIPCION_FRECUENCIA")+ "-"  +
+                     reader.SafeGetString("CODIGO")+ "-" +  
+                     reader.SafeGetString("DENOMINACION") + "-" + 
+                     reader.SafeGetString("TIPO_CONCEPTO") + "-" + 
+                      reader.SafeGetString("CODIGO_MODULO") + "-" + 
+                       reader.SafeGetString("DESCRIPCION_MODULO") + "-" + reader.SafeGetString("TIPO_CONCEPTO"); ;
+                    list.Add(new GetRhCalculoNominaPorPersonaResponse(
+                        reader.SafeGetInt32("CODIGO_MOV_NOMINA"),
+                        reader.SafeGetInt32("CODIGO_TIPO_NOMINA"),
+                        reader.SafeGetInt32("CODIGO_PERSONA"),
+                        reader.SafeGetInt32("CODIGO_CONCEPTO"),
+                        reader.SafeGetString("COMPLEMENTO_CONCEPTO"),
+                        reader.SafeGetString("TIPO"),
+                        reader.SafeGetInt32("FRECUENCIA_ID"),
+                        reader.SafeGetDecimal("MONTO"),
+                        reader.SafeGetDecimal("ASIGNACION"),
+                        reader.SafeGetDecimal("DEDUCCION"),
+                        reader.SafeGetDecimal("ASIGNACION_DEDUCCION"),
+                        reader.SafeGetString("STATUS"),
+                        reader.SafeGetString("CODIGO_FRECUENCIA"),
+                        reader.SafeGetString("DESCRIPCION_FRECUENCIA"),
+                        reader.SafeGetString("CODIGO"),
+                        reader.SafeGetString("DENOMINACION"),
+                        reader.SafeGetString("TIPO_CONCEPTO"),
+                        reader.SafeGetInt32("MODULO_ID"),
+                        reader.SafeGetString("CODIGO_MODULO"),
+                        reader.SafeGetString("DESCRIPCION_MODULO"),
+                        reader.SafeGetString("EXTRA1"),
+                        reader.SafeGetString("EXTRA2"),
+                        reader.SafeGetString("EXTRA3"),
+                        reader.SafeGetBoolean("AUTOMATICO"),
+                        searchText
+                    ));
             }
         }
 
@@ -143,6 +139,15 @@ public async Task<ResultDto<List<GetRhCalculoNominaPorPersonaResponse>>> HandleA
         // Determinamos si la operación fue exitosa según el mensaje del SP
         bool isSuccess = dbMessage.Equals("Success", StringComparison.OrdinalIgnoreCase);
 
+            var totales = list.Aggregate(new { Monto = 0m, Asig = 0m, Ded = 0m }, 
+            (acc, x) => new { 
+                Monto = acc.Monto + x.Monto, 
+                Asig = acc.Asig + x.Asignacion, 
+                Ded = acc.Ded + x.Deduccion 
+            });
+
+
+
         return new ResultDto<List<GetRhCalculoNominaPorPersonaResponse>>(list)
         {
             Data = isSuccess ? list : null, // Si falló, limpiamos la data
@@ -150,7 +155,10 @@ public async Task<ResultDto<List<GetRhCalculoNominaPorPersonaResponse>>> HandleA
             Page = value.PageNumber,
             TotalPage = dbTotalPages,
             IsValid = isSuccess,
-            Message = dbMessage
+            Message = dbMessage,
+            Total1 = totales.Monto,
+            Total2 = totales.Asig,
+            Total3 = totales.Ded,
         };
     }
     catch (Exception ex)
