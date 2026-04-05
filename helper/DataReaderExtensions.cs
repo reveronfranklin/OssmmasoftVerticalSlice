@@ -26,4 +26,9 @@ public static class DataReaderExtensions
         int ordinal = reader.GetOrdinal(columnName);
         return reader.IsDBNull(ordinal) ? false : reader.GetBoolean(ordinal);
     }
+    public static long SafeGetInt64(this IDataReader reader, string columnName)
+    {
+        int ordinal = reader.GetOrdinal(columnName);
+        return reader.IsDBNull(ordinal) ? 0L : Convert.ToInt64(reader.GetValue(ordinal));
+    }
 }
