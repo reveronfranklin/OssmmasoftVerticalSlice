@@ -26,7 +26,9 @@ public record GetRhTmpMovNominaGetAllResponse(
    string Tipo,
    int FrecuenciaId,
    string Frecuencia,
-   decimal Monto
+   decimal Monto,
+   int CodigoIcp,
+   string Icp
 
 );
 
@@ -86,6 +88,8 @@ public class GetRhTmpMovNominaGetAllHandler(ConnectionDB _connectionDB)
                         var dbFrecuenciaId = reader.SafeGetInt32("FRECUENCIA_ID");
                         var dbFrecuencia = reader.SafeGetString("DESCRIPCION");
                         var dbMonto = reader.SafeGetDecimal("MONTO");
+                        var dbCodigoIcp = reader.SafeGetInt32("CODIGO_ICP");
+                        var dbIcp = reader.SafeGetString("DENOMINACION_ICP");
 
                         list.Add(new GetRhTmpMovNominaGetAllResponse(
                             dbCodigoPeriodo,
@@ -103,7 +107,9 @@ public class GetRhTmpMovNominaGetAllHandler(ConnectionDB _connectionDB)
                             dbTipo,
                             dbFrecuenciaId,
                             dbFrecuencia,
-                            dbMonto
+                            dbMonto,
+                            dbCodigoIcp,
+                            dbIcp
                         ));
                     }catch (Exception ex)
                     {
