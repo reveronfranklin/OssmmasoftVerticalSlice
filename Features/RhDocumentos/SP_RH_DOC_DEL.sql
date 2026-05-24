@@ -1,0 +1,28 @@
+CREATE OR REPLACE PROCEDURE RH.SP_RH_DOC_DEL (
+    p_CODIGO_DOCUMENTO IN NUMBER,
+    p_CODIGO_EMPRESA   IN NUMBER,
+    p_Message          OUT VARCHAR2
+) AS
+    v_exists NUMBER;
+BEGIN
+    SELECT COUNT(1)
+      INTO v_exists
+      FROM RH.RH_DOCUMENTOS
+     WHERE CODIGO_DOCUMENTO = p_CODIGO_DOCUMENTO
+       AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+
+    IF v_exists = 0 THEN
+        p_Message := 'CODIGO_DOCUMENTO no existe en RH.RH_DOCUMENTOS para la empresa configurada';
+        RETURN;
+    END IF;
+
+    DELETE FROM RH.RH_DOCUMENTOS
+     WHERE CODIGO_DOCUMENTO = p_CODIGO_DOCUMENTO
+       AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+
+    p_Message := 'suscces';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SUBSTR(SQLERRM, 1, 4000);
+END SP_RH_DOC_DEL;
+/
