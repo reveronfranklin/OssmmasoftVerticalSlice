@@ -3,7 +3,7 @@
 ## Base
 
 ```http
-Base URL: http://ossmmasoft.com.ve:5142
+Base URL: https://ossmmasoft.com.ve:5143
 Content-Type: application/json
 ```
 
@@ -30,15 +30,15 @@ El frontend no debe enviar `codigoEmpresa`. El backend toma la empresa desde `se
 }
 ```
 
-| Campo | Tipo | Descripcion |
-| --- | --- | --- |
-| `data` | object/array/number/null | Resultado de la operacion. |
-| `isValid` | boolean | `true` cuando el stored procedure retorna exito. |
-| `message` | string | En exito retorna `suscces`. En error retorna el mensaje de validacion o error de base de datos. |
-| `page` | number | Pagina actual. Solo aplica en `GetAll`. |
-| `totalPage` | number | Total de paginas. Solo aplica en `GetAll`. |
-| `cantidadRegistros` | number | Total de registros encontrados. |
-| `total1..total4` | number | Campos genericos del backend; no se usan en este CRUD. |
+| Campo               | Tipo                     | Descripcion                                                                                     |
+| ------------------- | ------------------------ | ----------------------------------------------------------------------------------------------- |
+| `data`              | object/array/number/null | Resultado de la operacion.                                                                      |
+| `isValid`           | boolean                  | `true` cuando el stored procedure retorna exito.                                                |
+| `message`           | string                   | En exito retorna `suscces`. En error retorna el mensaje de validacion o error de base de datos. |
+| `page`              | number                   | Pagina actual. Solo aplica en `GetAll`.                                                         |
+| `totalPage`         | number                   | Total de paginas. Solo aplica en `GetAll`.                                                      |
+| `cantidadRegistros` | number                   | Total de registros encontrados.                                                                 |
+| `total1..total4`    | number                   | Campos genericos del backend; no se usan en este CRUD.                                          |
 
 ## Modelo Documento
 
@@ -66,25 +66,25 @@ El frontend no debe enviar `codigoEmpresa`. El backend toma la empresa desde `se
 }
 ```
 
-| Campo | Tipo | Descripcion |
-| --- | --- | --- |
-| `codigoPersona` | number | Codigo de persona asociado al documento. |
-| `codigoDocumento` | number | Identificador del documento. Lo genera backend en create. |
-| `tipoDocumentoId` | number | FK contra `RH.RH_DESCRIPTIVAS.DESCRIPCION_ID`. |
-| `tipoDocumento` | string | Descripcion del tipo de documento. |
-| `numeroDocumento` | string | Numero del documento. |
-| `fechaVencimiento` | string/null | Fecha ISO. Puede venir `null`. |
-| `tipoGradoId` | number/null | FK contra `RH.RH_DESCRIPTIVAS.DESCRIPCION_ID`. Solo se valida si es mayor a `0`. |
-| `tipoGrado` | string | Descripcion del tipo de grado. |
-| `gradoId` | number/null | FK contra `RH.RH_DESCRIPTIVAS.DESCRIPCION_ID`. Solo se valida si es mayor a `0`. |
-| `grado` | string | Descripcion del grado. |
-| `extra1`, `extra2`, `extra3` | string | Campos auxiliares. |
-| `usuarioIns` | number | Usuario que creo el registro. |
-| `fechaIns` | string/null | Fecha de creacion. |
-| `usuarioUpd` | number/null | Usuario que actualizo el registro. |
-| `fechaUpd` | string/null | Fecha de actualizacion. |
-| `codigoEmpresa` | number | Empresa tomada por backend desde `settings:EmpresaConfig`. |
-| `persona` | string | Nombre y apellido concatenado. |
+| Campo                        | Tipo        | Descripcion                                                                      |
+| ---------------------------- | ----------- | -------------------------------------------------------------------------------- |
+| `codigoPersona`              | number      | Codigo de persona asociado al documento.                                         |
+| `codigoDocumento`            | number      | Identificador del documento. Lo genera backend en create.                        |
+| `tipoDocumentoId`            | number      | FK contra `RH.RH_DESCRIPTIVAS.DESCRIPCION_ID`.                                   |
+| `tipoDocumento`              | string      | Descripcion del tipo de documento.                                               |
+| `numeroDocumento`            | string      | Numero del documento.                                                            |
+| `fechaVencimiento`           | string/null | Fecha ISO. Puede venir `null`.                                                   |
+| `tipoGradoId`                | number/null | FK contra `RH.RH_DESCRIPTIVAS.DESCRIPCION_ID`. Solo se valida si es mayor a `0`. |
+| `tipoGrado`                  | string      | Descripcion del tipo de grado.                                                   |
+| `gradoId`                    | number/null | FK contra `RH.RH_DESCRIPTIVAS.DESCRIPCION_ID`. Solo se valida si es mayor a `0`. |
+| `grado`                      | string      | Descripcion del grado.                                                           |
+| `extra1`, `extra2`, `extra3` | string      | Campos auxiliares.                                                               |
+| `usuarioIns`                 | number      | Usuario que creo el registro.                                                    |
+| `fechaIns`                   | string/null | Fecha de creacion.                                                               |
+| `usuarioUpd`                 | number/null | Usuario que actualizo el registro.                                               |
+| `fechaUpd`                   | string/null | Fecha de actualizacion.                                                          |
+| `codigoEmpresa`              | number      | Empresa tomada por backend desde `settings:EmpresaConfig`.                       |
+| `persona`                    | string      | Nombre y apellido concatenado.                                                   |
 
 ## Validaciones de negocio
 
@@ -259,11 +259,11 @@ POST /api/RhDocumentos/GetAll
 }
 ```
 
-| Campo | Tipo | Requerido | Descripcion |
-| --- | --- | --- | --- |
-| `pageSize` | number | Si | Cantidad de registros por pagina. Si llega `0` o menor, backend usa `10`. |
-| `pageNumber` | number | Si | Pagina solicitada. Si llega `0` o menor, backend usa `1`. |
-| `searchText` | string | Si | Texto para filtrar campos texto. Enviar `""` para listar todo. |
+| Campo        | Tipo   | Requerido | Descripcion                                                               |
+| ------------ | ------ | --------- | ------------------------------------------------------------------------- |
+| `pageSize`   | number | Si        | Cantidad de registros por pagina. Si llega `0` o menor, backend usa `10`. |
+| `pageNumber` | number | Si        | Pagina solicitada. Si llega `0` o menor, backend usa `1`.                 |
+| `searchText` | string | Si        | Texto para filtrar campos texto. Enviar `""` para listar todo.            |
 
 ### Campos filtrados por `searchText`
 

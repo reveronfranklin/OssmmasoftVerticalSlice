@@ -30,7 +30,19 @@ public class UpdateRhDocumentoHandler(ConnectionDB _connectionDB, IConfiguration
         }
 
         using var cn = _connectionDB.GetRhConnection();
-        await cn.OpenAsync();
+        try
+        {
+            await cn.OpenAsync();
+        }
+        catch (Exception ex)
+        {
+            return new ResultDto<string>(string.Empty)
+            {
+                Data = null,
+                IsValid = false,
+                Message = $"Error técnico al abrir conexión RH: {ex.Message}"
+            };
+        }
 
         using var cmd = new OracleCommand("RH.SP_RH_DOC_UPD", cn);
         cmd.CommandType = CommandType.StoredProcedure;

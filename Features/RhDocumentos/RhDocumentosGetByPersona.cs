@@ -18,7 +18,18 @@ public class GetRhDocumentosByPersonaHandler(ConnectionDB _connectionDB, IConfig
         }
 
         using var cn = _connectionDB.GetRhConnection();
-        await cn.OpenAsync();
+        try
+        {
+            await cn.OpenAsync();
+        }
+        catch (Exception ex)
+        {
+            return new ResultDto<List<RhDocumentoResponse>>(null!)
+            {
+                IsValid = false,
+                Message = $"Error técnico al abrir conexión RH: {ex.Message}"
+            };
+        }
 
         using var cmd = new OracleCommand("RH.SP_RH_DOC_GET_PER", cn);
         cmd.CommandType = CommandType.StoredProcedure;
