@@ -1,9 +1,13 @@
 # Contrato Frontend - OSS Usuario Rol
 
+## RUTA DEL FRONT
+
+/Users/freveron/Developer/Projects/MM/NextOssmasoft
+
 ## Base
 
 ```http
-Base URL: http://ossmmasoft.com.ve:5142
+Base URL: https://ossmmasoft.com.ve:51423
 Content-Type: application/json
 ```
 
@@ -40,13 +44,13 @@ Oracle 10g no valida JSON nativamente. El API valida que `jsonMenu` sea un objet
 }
 ```
 
-| Campo | Tipo | Descripcion |
-| --- | --- | --- |
-| `codigoUsuarioRol` | number | Identificador del registro. Lo genera backend en create. |
-| `usuario` | string | Usuario/login asociado al menu. |
-| `codigoUsuario` | number | Codigo numerico del usuario. Debe ser mayor a cero. |
-| `descripcion` | string/null | Descripcion del rol o perfil. |
-| `jsonMenu` | object/array | Menu que consume frontend. Debe ser JSON valido. |
+| Campo              | Tipo         | Descripcion                                              |
+| ------------------ | ------------ | -------------------------------------------------------- |
+| `codigoUsuarioRol` | number       | Identificador del registro. Lo genera backend en create. |
+| `usuario`          | string       | Usuario/login asociado al menu.                          |
+| `codigoUsuario`    | number       | Codigo numerico del usuario. Debe ser mayor a cero.      |
+| `descripcion`      | string/null  | Descripcion del rol o perfil.                            |
+| `jsonMenu`         | object/array | Menu que consume frontend. Debe ser JSON valido.         |
 
 ## Crear
 
