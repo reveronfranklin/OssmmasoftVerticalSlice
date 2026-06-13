@@ -28,4 +28,9 @@ public class ConnectionDB(IConfiguration _config)
     {
         return new OracleConnection(_config.GetConnectionString("DefaultConnectionSIS"));
     }
+
+    public OracleConnection GetCntConnection()
+    {
+        return new OracleConnection(_config.GetConnectionString("DefaultConnectionCNT"));
+    }
 }

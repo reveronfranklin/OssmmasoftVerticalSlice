@@ -1,5 +1,16 @@
 {
   "data": {
+    "periodo": {
+      "codigoPeriodo": 5959,
+      "descripcion": "NOMINA OCTUBRE 2025",
+      "codigoTipoNomina": 21,
+      "descripcionTipoNomina": "CONCEJALES",
+      "fechaNomina": "2025-10-13T00:00:00",
+      "periodo": 1,
+      "descripcionPeriodo": "1ra. Quincena",
+      "tipoNomina": "N",
+      "tipoNominaDescripcion": "NORMAL"
+    },
     "general": [
       {
         "rTipoConcepto": "A",
@@ -285,6 +296,7 @@
     "firma": [
       {
         "oficina": "1",
+        "descripcionOficina": "GERENCIA DE BENEFICIOS Y GESTION HUMANA",
         "orden": "1-1",
         "codigoPersona": 2330,
         "nombre": "ANA CAROLINA",
@@ -294,6 +306,7 @@
       },
       {
         "oficina": "2",
+        "descripcionOficina": "GERENCIA DE NOMINA, COMPENSACION LABORAL Y CONTROL PRESUPUESTARIO",
         "orden": "2-1",
         "codigoPersona": 1948,
         "nombre": "VENUSKA",
@@ -303,6 +316,7 @@
       },
       {
         "oficina": "2",
+        "descripcionOficina": "GERENCIA DE NOMINA, COMPENSACION LABORAL Y CONTROL PRESUPUESTARIO",
         "orden": "2-2",
         "codigoPersona": 2365,
         "nombre": "MARIA FERNANDA",
@@ -312,6 +326,7 @@
       },
       {
         "oficina": "2",
+        "descripcionOficina": "GERENCIA DE NOMINA, COMPENSACION LABORAL Y CONTROL PRESUPUESTARIO",
         "orden": "2-4",
         "codigoPersona": 248,
         "nombre": "DARWIN ALEXANDER",

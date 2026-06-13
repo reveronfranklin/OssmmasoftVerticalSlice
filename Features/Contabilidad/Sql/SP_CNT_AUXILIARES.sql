@@ -1,0 +1,283 @@
+CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUX_GET_ALL (
+    p_CODIGO_MAYOR   IN NUMBER DEFAULT NULL,
+    p_SOLO_VIGENTES  IN NUMBER DEFAULT 0,
+    p_SEARCH_TEXT    IN VARCHAR2 DEFAULT NULL,
+    p_CODIGO_EMPRESA IN NUMBER,
+    p_ResultSet      OUT SYS_REFCURSOR,
+    p_Message        OUT VARCHAR2
+) AS
+BEGIN
+    OPEN p_ResultSet FOR
+        SELECT a.CODIGO_AUXILIAR,
+               a.CODIGO_MAYOR,
+               m.NUMERO_MAYOR,
+               m.DENOMINACION AS MAYOR,
+               a.SEGMENTO1,
+               a.SEGMENTO2,
+               a.SEGMENTO3,
+               a.SEGMENTO4,
+               a.SEGMENTO5,
+               a.SEGMENTO6,
+               a.SEGMENTO7,
+               a.SEGMENTO8,
+               a.SEGMENTO9,
+               a.SEGMENTO10,
+               a.DENOMINACION,
+               a.DESCRIPCION,
+               a.EXTRA1,
+               a.EXTRA2,
+               a.EXTRA3,
+               a.CODIGO_EMPRESA,
+               a.FECHA_FIN_VIGENCIA,
+               a.CODIGO_PROVEEDOR
+          FROM CNT.CNT_AUXILIARES a
+          JOIN CNT.CNT_MAYORES m
+            ON m.CODIGO_MAYOR = a.CODIGO_MAYOR
+           AND m.CODIGO_EMPRESA = a.CODIGO_EMPRESA
+         WHERE a.CODIGO_EMPRESA = p_CODIGO_EMPRESA
+           AND (p_CODIGO_MAYOR IS NULL OR a.CODIGO_MAYOR = p_CODIGO_MAYOR)
+           AND (NVL(p_SOLO_VIGENTES, 0) = 0 OR a.FECHA_FIN_VIGENCIA IS NULL OR a.FECHA_FIN_VIGENCIA >= TRUNC(SYSDATE))
+           AND (
+                p_SEARCH_TEXT IS NULL
+                OR UPPER(a.SEGMENTO1) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%'
+                OR UPPER(a.DENOMINACION) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%'
+                OR UPPER(NVL(a.DESCRIPCION, '')) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%'
+                OR UPPER(m.NUMERO_MAYOR) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%'
+                OR UPPER(m.DENOMINACION) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%'
+           )
+         ORDER BY m.NUMERO_MAYOR, a.SEGMENTO1, a.DENOMINACION;
+
+    p_Message := 'Success';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SQLERRM;
+END;
+/
+
+CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUX_INS (
+    p_CODIGO_MAYOR       IN NUMBER,
+    p_SEGMENTO1          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO2          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO3          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO4          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO5          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO6          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO7          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO8          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO9          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO10         IN VARCHAR2 DEFAULT NULL,
+    p_DENOMINACION       IN VARCHAR2,
+    p_DESCRIPCION        IN VARCHAR2 DEFAULT NULL,
+    p_EXTRA1             IN VARCHAR2 DEFAULT NULL,
+    p_EXTRA2             IN VARCHAR2 DEFAULT NULL,
+    p_EXTRA3             IN VARCHAR2 DEFAULT NULL,
+    p_FECHA_FIN_VIGENCIA IN DATE DEFAULT NULL,
+    p_CODIGO_PROVEEDOR   IN NUMBER DEFAULT NULL,
+    p_USUARIO_ID         IN NUMBER,
+    p_CODIGO_EMPRESA     IN NUMBER,
+    p_CODIGO_OUT         OUT NUMBER,
+    p_Message            OUT VARCHAR2
+) AS
+    v_count NUMBER;
+BEGIN
+    p_CODIGO_OUT := 0;
+
+    IF p_CODIGO_MAYOR IS NULL OR p_DENOMINACION IS NULL THEN
+        p_Message := 'El mayor y la denominacion del auxiliar son requeridos.';
+        RETURN;
+    END IF;
+
+    SELECT COUNT(1)
+      INTO v_count
+      FROM CNT.CNT_MAYORES
+     WHERE CODIGO_MAYOR = p_CODIGO_MAYOR
+       AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+
+    IF v_count = 0 THEN
+        p_Message := 'El mayor seleccionado no existe.';
+        RETURN;
+    END IF;
+
+    SELECT CNT.CNT_S_CODIGO_AUXILIAR.NEXTVAL INTO p_CODIGO_OUT FROM DUAL;
+
+    INSERT INTO CNT.CNT_AUXILIARES (
+        CODIGO_AUXILIAR, CODIGO_MAYOR, SEGMENTO1, SEGMENTO2, SEGMENTO3, SEGMENTO4, SEGMENTO5,
+        SEGMENTO6, SEGMENTO7, SEGMENTO8, SEGMENTO9, SEGMENTO10, DENOMINACION, DESCRIPCION,
+        EXTRA1, EXTRA2, EXTRA3, USUARIO_INS, FECHA_INS, CODIGO_EMPRESA, FECHA_FIN_VIGENCIA,
+        CODIGO_PROVEEDOR
+    ) VALUES (
+        p_CODIGO_OUT, p_CODIGO_MAYOR, p_SEGMENTO1, p_SEGMENTO2, p_SEGMENTO3, p_SEGMENTO4, p_SEGMENTO5,
+        p_SEGMENTO6, p_SEGMENTO7, p_SEGMENTO8, p_SEGMENTO9, p_SEGMENTO10, p_DENOMINACION, p_DESCRIPCION,
+        p_EXTRA1, p_EXTRA2, p_EXTRA3, p_USUARIO_ID, SYSDATE, p_CODIGO_EMPRESA, p_FECHA_FIN_VIGENCIA,
+        p_CODIGO_PROVEEDOR
+    );
+
+    p_Message := 'Success';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SQLERRM;
+        p_CODIGO_OUT := 0;
+END;
+/
+
+CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUX_UPD (
+    p_CODIGO_AUXILIAR    IN NUMBER,
+    p_CODIGO_MAYOR       IN NUMBER,
+    p_SEGMENTO1          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO2          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO3          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO4          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO5          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO6          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO7          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO8          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO9          IN VARCHAR2 DEFAULT NULL,
+    p_SEGMENTO10         IN VARCHAR2 DEFAULT NULL,
+    p_DENOMINACION       IN VARCHAR2,
+    p_DESCRIPCION        IN VARCHAR2 DEFAULT NULL,
+    p_EXTRA1             IN VARCHAR2 DEFAULT NULL,
+    p_EXTRA2             IN VARCHAR2 DEFAULT NULL,
+    p_EXTRA3             IN VARCHAR2 DEFAULT NULL,
+    p_FECHA_FIN_VIGENCIA IN DATE DEFAULT NULL,
+    p_CODIGO_PROVEEDOR   IN NUMBER DEFAULT NULL,
+    p_USUARIO_ID         IN NUMBER,
+    p_CODIGO_EMPRESA     IN NUMBER,
+    p_Message            OUT VARCHAR2
+) AS
+    v_count NUMBER;
+BEGIN
+    IF p_CODIGO_AUXILIAR IS NULL OR p_CODIGO_MAYOR IS NULL OR p_DENOMINACION IS NULL THEN
+        p_Message := 'El codigo, mayor y denominacion del auxiliar son requeridos.';
+        RETURN;
+    END IF;
+
+    SELECT COUNT(1)
+      INTO v_count
+      FROM CNT.CNT_AUXILIARES
+     WHERE CODIGO_AUXILIAR = p_CODIGO_AUXILIAR
+       AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+
+    IF v_count = 0 THEN
+        p_Message := 'El auxiliar no existe.';
+        RETURN;
+    END IF;
+
+    SELECT COUNT(1)
+      INTO v_count
+      FROM CNT.CNT_MAYORES
+     WHERE CODIGO_MAYOR = p_CODIGO_MAYOR
+       AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+
+    IF v_count = 0 THEN
+        p_Message := 'El mayor seleccionado no existe.';
+        RETURN;
+    END IF;
+
+    UPDATE CNT.CNT_AUXILIARES
+       SET CODIGO_MAYOR = p_CODIGO_MAYOR,
+           SEGMENTO1 = p_SEGMENTO1,
+           SEGMENTO2 = p_SEGMENTO2,
+           SEGMENTO3 = p_SEGMENTO3,
+           SEGMENTO4 = p_SEGMENTO4,
+           SEGMENTO5 = p_SEGMENTO5,
+           SEGMENTO6 = p_SEGMENTO6,
+           SEGMENTO7 = p_SEGMENTO7,
+           SEGMENTO8 = p_SEGMENTO8,
+           SEGMENTO9 = p_SEGMENTO9,
+           SEGMENTO10 = p_SEGMENTO10,
+           DENOMINACION = p_DENOMINACION,
+           DESCRIPCION = p_DESCRIPCION,
+           EXTRA1 = p_EXTRA1,
+           EXTRA2 = p_EXTRA2,
+           EXTRA3 = p_EXTRA3,
+           FECHA_FIN_VIGENCIA = p_FECHA_FIN_VIGENCIA,
+           CODIGO_PROVEEDOR = p_CODIGO_PROVEEDOR,
+           USUARIO_UPD = p_USUARIO_ID,
+           FECHA_UPD = SYSDATE
+     WHERE CODIGO_AUXILIAR = p_CODIGO_AUXILIAR
+       AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+
+    p_Message := 'Success';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SQLERRM;
+END;
+/
+
+CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUX_USED (
+    p_CODIGO_AUXILIAR IN NUMBER,
+    p_CODIGO_EMPRESA  IN NUMBER,
+    p_CANTIDAD        OUT NUMBER,
+    p_Message         OUT VARCHAR2
+) AS
+BEGIN
+    SELECT SUM(cantidad)
+      INTO p_CANTIDAD
+      FROM (
+            SELECT COUNT(1) cantidad
+              FROM CNT.CNT_DETALLE_COMPROBANTE
+             WHERE CODIGO_AUXILIAR = p_CODIGO_AUXILIAR
+               AND CODIGO_EMPRESA = p_CODIGO_EMPRESA
+            UNION ALL
+            SELECT COUNT(1)
+              FROM CNT.CNT_SALDOS
+             WHERE CODIGO_AUXILIAR = p_CODIGO_AUXILIAR
+               AND CODIGO_EMPRESA = p_CODIGO_EMPRESA
+            UNION ALL
+            SELECT COUNT(1)
+              FROM CNT.CNT_AUXILIARES_PUC
+             WHERE CODIGO_AUXILIAR = p_CODIGO_AUXILIAR
+               AND CODIGO_EMPRESA = p_CODIGO_EMPRESA
+      );
+
+    p_Message := 'Success';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_CANTIDAD := 0;
+        p_Message := SQLERRM;
+END;
+/
+
+CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUX_DEL (
+    p_CODIGO_AUXILIAR IN NUMBER,
+    p_CODIGO_EMPRESA  IN NUMBER,
+    p_Message         OUT VARCHAR2
+) AS
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(1) INTO v_count FROM CNT.CNT_DETALLE_COMPROBANTE
+     WHERE CODIGO_AUXILIAR = p_CODIGO_AUXILIAR AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+    IF v_count > 0 THEN
+        p_Message := 'No se puede eliminar el auxiliar porque tiene movimientos contables.';
+        RETURN;
+    END IF;
+
+    SELECT COUNT(1) INTO v_count FROM CNT.CNT_SALDOS
+     WHERE CODIGO_AUXILIAR = p_CODIGO_AUXILIAR AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+    IF v_count > 0 THEN
+        p_Message := 'No se puede eliminar el auxiliar porque tiene saldos asociados.';
+        RETURN;
+    END IF;
+
+    SELECT COUNT(1) INTO v_count FROM CNT.CNT_AUXILIARES_PUC
+     WHERE CODIGO_AUXILIAR = p_CODIGO_AUXILIAR AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+    IF v_count > 0 THEN
+        p_Message := 'No se puede eliminar el auxiliar porque tiene relaciones PUC.';
+        RETURN;
+    END IF;
+
+    DELETE FROM CNT.CNT_AUXILIARES
+     WHERE CODIGO_AUXILIAR = p_CODIGO_AUXILIAR
+       AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+
+    IF SQL%ROWCOUNT = 0 THEN
+        p_Message := 'El auxiliar no existe.';
+        RETURN;
+    END IF;
+
+    p_Message := 'Success';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SQLERRM;
+END;
+/

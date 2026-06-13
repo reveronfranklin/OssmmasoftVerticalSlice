@@ -13,6 +13,7 @@ Content-Type: application/json
 
 Este endpoint devuelve en una sola llamada la informacion necesaria para pintar el Reporte General de Nomina:
 
+- `periodo`: datos descriptivos del periodo consultado, cuando se envia `p_codigo_periodo`.
 - `general`: resumen consolidado por concepto.
 - `detalle`: movimientos de nomina por trabajador/concepto.
 - `firma`: firmantes activos del reporte.
@@ -110,6 +111,17 @@ El frontend solo debe enviar parametros funcionales. No debe enviar tablas, filt
 ```json
 {
   "data": {
+    "periodo": {
+      "codigoPeriodo": 5959,
+      "descripcion": "NOMINA OCTUBRE 2025",
+      "codigoTipoNomina": 21,
+      "descripcionTipoNomina": "CONCEJALES",
+      "fechaNomina": "2025-10-13T00:00:00",
+      "periodo": 1,
+      "descripcionPeriodo": "1ra. Quincena",
+      "tipoNomina": "N",
+      "tipoNominaDescripcion": "NORMAL"
+    },
     "general": [
       {
         "rTipoConcepto": "A",
@@ -158,6 +170,7 @@ El frontend solo debe enviar parametros funcionales. No debe enviar tablas, filt
     "firma": [
       {
         "oficina": "1",
+        "descripcionOficina": "GERENCIA DE BENEFICIOS Y GESTION HUMANA",
         "orden": "1-1",
         "codigoPersona": 2330,
         "nombre": "ANA CAROLINA",
@@ -185,12 +198,28 @@ El frontend solo debe enviar parametros funcionales. No debe enviar tablas, filt
 
 | Campo                                  | Tipo        | Descripcion                                                                                                                     |
 | -------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `data`                                 | object/null | Contiene `general`, `detalle` y `firma` cuando `isValid = true`. Puede venir `null` si hay error de validacion o base de datos. |
+| `data`                                 | object/null | Contiene `periodo`, `general`, `detalle` y `firma` cuando `isValid = true`. Puede venir `null` si hay error de validacion o base de datos. |
 | `isValid`                              | boolean     | Indica si la consulta fue exitosa.                                                                                              |
 | `message`                              | string      | Mensaje de resultado. En exito normalmente viene `Success`.                                                                     |
 | `cantidadRegistros`                    | number      | Total reportado por la orquestacion del backend.                                                                                |
 | `page`, `totalPage`                    | number      | Actualmente no se usan para paginacion en este endpoint.                                                                        |
 | `total1`, `total2`, `total3`, `total4` | number      | Totales genericos del `ResultDto`; actualmente no se usan para este reporte.                                                    |
+
+## Modelo `data.periodo`
+
+Puede venir `null` cuando `p_codigo_periodo` no se envia, por ejemplo en una pre-nomina temporal con `p_tipo_generacion = 1`.
+
+| Campo                    | Tipo        | Uso sugerido                                                          |
+| ------------------------ | ----------- | --------------------------------------------------------------------- |
+| `codigoPeriodo`          | number      | Codigo del periodo consultado.                                        |
+| `descripcion`            | string      | Descripcion registrada en `RH_PERIODOS`.                              |
+| `codigoTipoNomina`       | number      | Codigo del tipo de nomina asociado al periodo.                        |
+| `descripcionTipoNomina`  | string      | Descripcion del tipo de nomina.                                       |
+| `fechaNomina`            | string/null | Fecha de nomina del periodo.                                          |
+| `periodo`                | number      | Numero de periodo/quincena.                                           |
+| `descripcionPeriodo`     | string      | Texto calculado: `1ra. Quincena`, `2da. Quincena` o no definido.      |
+| `tipoNomina`             | string      | Codigo de tipo de nomina: `E`, `N` u otro valor registrado.           |
+| `tipoNominaDescripcion`  | string      | Texto calculado: `ESPECIAL`, `NORMAL` o no definido.                  |
 
 ## Modelo `data.general`
 
@@ -244,6 +273,7 @@ El frontend solo debe enviar parametros funcionales. No debe enviar tablas, filt
 | Campo              | Tipo   | Uso sugerido                           |
 | ------------------ | ------ | -------------------------------------- |
 | `oficina`          | string | Grupo/oficina de firma.                |
+| `descripcionOficina` | string | Descripcion calculada desde `oficina`. Si `oficina = "1"`, retorna `GERENCIA DE BENEFICIOS Y GESTION HUMANA`. Si `oficina = "2"`, retorna `GERENCIA DE NOMINA, COMPENSACION LABORAL Y CONTROL PRESUPUESTARIO`. Para otros valores retorna vacio. |
 | `orden`            | string | Orden de presentacion. Ejemplo: `2-1`. |
 | `codigoPersona`    | number | Identificador interno de persona.      |
 | `nombre`           | string | Nombre del firmante.                   |
@@ -289,6 +319,7 @@ Tambien puede responder HTTP 500 si ocurre una excepcion no controlada:
 - Mostrar estado de carga durante la consulta.
 - Si `isValid = false`, mostrar `message` al usuario y no intentar leer `data`.
 - Si `isValid = true` pero alguna lista viene vacia, mostrar estado vacio por seccion.
+- `data.periodo` contiene el encabezado/descriptivo del periodo cuando la consulta incluye `p_codigo_periodo`.
 - Formatear montos como moneda/numero decimal segun la configuracion visual del sistema.
 - Tratar cedulas, numeros de cuenta y codigos con ceros o guiones como texto.
 - Las fechas llegan como ISO con hora (`YYYY-MM-DDT00:00:00`) en la respuesta; para visualizacion se pueden mostrar como `DD/MM/YYYY`.

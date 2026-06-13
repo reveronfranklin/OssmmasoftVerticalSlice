@@ -27,6 +27,7 @@ El cliente debe enviar parametros de negocio. No debe enviar fragmentos SQL como
 ## Componentes
 
 - `ReporteGeneralNominaCompletoGetAll.cs`: orquesta reporte general, detalle y firma.
+- `ReporteGeneralNominaPeriodoGetByCodigo.cs`: obtiene los datos descriptivos del periodo consultado.
 - `ReporteGeneralNominaGetAll.cs`: obtiene resumen general por conceptos.
 - `ReporteGeneralNominaDetalleGetAll.cs`: obtiene detalle por persona, cargo, concepto y monto.
 - `ReporteGeneralNominaFirmaGetAll.cs`: obtiene firmas activas.

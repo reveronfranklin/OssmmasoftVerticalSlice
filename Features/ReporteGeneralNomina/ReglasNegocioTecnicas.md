@@ -104,17 +104,36 @@ RVPC.CEDULA = '{p_cedula}'
 
 Si viene `null`, vacia o con espacios, se envia como cadena vacia al handler de detalle.
 
+## Descripcion de oficina en firma
+
+`GetReporteGeneralNominaFirmaGetAllHandler` calcula `DescripcionOficina` contra el valor completo de `OFICINA`:
+
+- `1`: `GERENCIA DE BENEFICIOS Y GESTION HUMANA`
+- `2`: `GERENCIA DE NOMINA, COMPENSACION LABORAL Y CONTROL PRESUPUESTARIO`
+- Cualquier otro valor: cadena vacia
+
 ## Orquestacion interna
 
 El handler completo ejecuta secuencialmente:
 
-1. `GetReporteGeneralNominaGetAllHandler`
-2. `GetReporteGeneralNominaDetalleGetAllHandler`
-3. `GetReporteGeneralNominaFirmaGetAllHandler`
+1. `GetReporteGeneralNominaPeriodoGetByCodigoHandler`, cuando `p_codigo_periodo` viene informado
+2. `GetReporteGeneralNominaGetAllHandler`
+3. `GetReporteGeneralNominaDetalleGetAllHandler`
+4. `GetReporteGeneralNominaFirmaGetAllHandler`
 
 Si una ejecucion falla, se retorna `IsValid = false` con el mensaje del componente que fallo.
 
 ## Stored procedures usados
+
+### Periodo
+
+```sql
+RH.SP_REP_GRAL_NOM_PER_GET_ID
+```
+
+Parametros enviados:
+
+- `p_codigo_periodo`
 
 ### General
 

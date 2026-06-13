@@ -13,6 +13,7 @@ public record ReporteGeneralNominaFirmaGetAllQuery();
 // Response
 public record GetReporteGeneralNominaFirmaGetAllResponse(
     string Oficina,
+    string DescripcionOficina,
     string Orden,
     decimal CodigoPersona,
     string Nombre,
@@ -44,8 +45,11 @@ public class GetReporteGeneralNominaFirmaGetAllHandler(ConnectionDB _connectionD
             {
                 while (await reader.ReadAsync())
                 {
+                    var oficina = GetValueAsString(reader, "OFICINA");
+
                     list.Add(new GetReporteGeneralNominaFirmaGetAllResponse(
-                        GetValueAsString(reader, "OFICINA"),
+                        oficina,
+                        GetDescripcionOficina(oficina),
                         GetValueAsString(reader, "ORDEN"),
                         reader.SafeGetDecimal("CODIGO_PERSONA"),
                         GetValueAsString(reader, "NOMBRE"),
@@ -95,6 +99,16 @@ public class GetReporteGeneralNominaFirmaGetAllHandler(ConnectionDB _connectionD
     {
         int ordinal = reader.GetOrdinal(columnName);
         return reader.IsDBNull(ordinal) ? string.Empty : reader.GetValue(ordinal).ToString() ?? string.Empty;
+    }
+
+    private static string GetDescripcionOficina(string oficina)
+    {
+        return oficina.Trim() switch
+        {
+            "1" => "GERENCIA DE BENEFICIOS Y GESTION HUMANA",
+            "2" => "GERENCIA DE NOMINA, COMPENSACION LABORAL Y CONTROL PRESUPUESTARIO",
+            _ => string.Empty
+        };
     }
 
 }

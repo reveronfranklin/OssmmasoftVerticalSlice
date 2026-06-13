@@ -1,0 +1,200 @@
+CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUX_PUC_GET (
+    p_CODIGO_AUXILIAR IN NUMBER,
+    p_CODIGO_PUC      IN NUMBER,
+    p_SEARCH_TEXT     IN VARCHAR2,
+    p_CODIGO_EMPRESA  IN NUMBER,
+    p_ResultSet       OUT SYS_REFCURSOR,
+    p_Message         OUT VARCHAR2
+) AS
+BEGIN
+    OPEN p_ResultSet FOR
+        SELECT ap.CODIGO_AUXILIAR_PUC,
+               ap.CODIGO_AUXILIAR,
+               a.SEGMENTO1 || ' ' || a.SEGMENTO2 || ' - ' || a.DENOMINACION AS AUXILIAR,
+               a.CODIGO_MAYOR,
+               m.NUMERO_MAYOR || ' - ' || m.DENOMINACION AS MAYOR,
+               ap.CODIGO_PUC,
+               ap.TIPO_DOCUMENTO_ID,
+               ap.CODIGO_EMPRESA
+          FROM CNT.CNT_AUXILIARES_PUC ap,
+               CNT.CNT_AUXILIARES a,
+               CNT.CNT_MAYORES m
+         WHERE a.CODIGO_AUXILIAR = ap.CODIGO_AUXILIAR
+           AND m.CODIGO_MAYOR = a.CODIGO_MAYOR
+           AND (ap.CODIGO_EMPRESA IS NULL OR ap.CODIGO_EMPRESA = p_CODIGO_EMPRESA)
+           AND (a.CODIGO_EMPRESA IS NULL OR a.CODIGO_EMPRESA = p_CODIGO_EMPRESA)
+           AND (m.CODIGO_EMPRESA IS NULL OR m.CODIGO_EMPRESA = p_CODIGO_EMPRESA)
+           AND (p_CODIGO_AUXILIAR IS NULL OR ap.CODIGO_AUXILIAR = p_CODIGO_AUXILIAR)
+           AND (p_CODIGO_PUC IS NULL OR ap.CODIGO_PUC = p_CODIGO_PUC)
+           AND (
+                p_SEARCH_TEXT IS NULL
+                OR TO_CHAR(ap.CODIGO_PUC) LIKE '%' || p_SEARCH_TEXT || '%'
+                OR UPPER(ap.TIPO_DOCUMENTO_ID) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%'
+                OR UPPER(a.DENOMINACION) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%'
+                OR UPPER(a.SEGMENTO1) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%'
+                OR UPPER(m.DENOMINACION) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%'
+           )
+         ORDER BY m.NUMERO_MAYOR, a.SEGMENTO1, ap.CODIGO_PUC;
+
+    p_Message := 'OK';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SQLERRM;
+END;
+/
+
+CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUX_PUC_INS (
+    p_CODIGO_AUXILIAR IN NUMBER,
+    p_CODIGO_PUC      IN NUMBER,
+    p_TIPO_DOC_ID     IN VARCHAR2,
+    p_USUARIO_ID      IN NUMBER,
+    p_CODIGO_EMPRESA  IN NUMBER,
+    p_CODIGO_OUT      OUT NUMBER,
+    p_Message         OUT VARCHAR2
+) AS
+    v_count NUMBER;
+BEGIN
+    IF p_CODIGO_AUXILIAR IS NULL OR p_CODIGO_PUC IS NULL THEN
+        p_Message := 'El auxiliar y el PUC son requeridos.';
+        RETURN;
+    END IF;
+
+    SELECT COUNT(1) INTO v_count
+      FROM CNT.CNT_AUXILIARES
+     WHERE CODIGO_AUXILIAR = p_CODIGO_AUXILIAR
+       AND (CODIGO_EMPRESA IS NULL OR CODIGO_EMPRESA = p_CODIGO_EMPRESA);
+
+    IF v_count = 0 THEN
+        p_Message := 'El auxiliar indicado no existe.';
+        RETURN;
+    END IF;
+
+    SELECT COUNT(1) INTO v_count
+      FROM CNT.CNT_AUXILIARES_PUC
+     WHERE CODIGO_AUXILIAR = p_CODIGO_AUXILIAR
+       AND CODIGO_PUC = p_CODIGO_PUC
+       AND NVL(TIPO_DOCUMENTO_ID, ' ') = NVL(SUBSTR(p_TIPO_DOC_ID, 1, 2), ' ')
+       AND (CODIGO_EMPRESA IS NULL OR CODIGO_EMPRESA = p_CODIGO_EMPRESA);
+
+    IF v_count > 0 THEN
+        p_Message := 'Ya existe una relacion para el auxiliar, PUC y tipo de documento.';
+        RETURN;
+    END IF;
+
+    LOCK TABLE CNT.CNT_AUXILIARES_PUC IN EXCLUSIVE MODE;
+
+    SELECT NVL(MAX(CODIGO_AUXILIAR_PUC), 0) + 1
+      INTO p_CODIGO_OUT
+      FROM CNT.CNT_AUXILIARES_PUC;
+
+    INSERT INTO CNT.CNT_AUXILIARES_PUC (
+        CODIGO_AUXILIAR_PUC,
+        CODIGO_AUXILIAR,
+        CODIGO_PUC,
+        TIPO_DOCUMENTO_ID,
+        USUARIO_INS,
+        FECHA_INS,
+        CODIGO_EMPRESA
+    ) VALUES (
+        p_CODIGO_OUT,
+        p_CODIGO_AUXILIAR,
+        p_CODIGO_PUC,
+        SUBSTR(p_TIPO_DOC_ID, 1, 2),
+        p_USUARIO_ID,
+        SYSDATE,
+        p_CODIGO_EMPRESA
+    );
+
+    p_Message := 'OK';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SQLERRM;
+END;
+/
+
+CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUX_PUC_UPD (
+    p_CODIGO_AUX_PUC  IN NUMBER,
+    p_CODIGO_AUXILIAR IN NUMBER,
+    p_CODIGO_PUC      IN NUMBER,
+    p_TIPO_DOC_ID     IN VARCHAR2,
+    p_USUARIO_ID      IN NUMBER,
+    p_CODIGO_EMPRESA  IN NUMBER,
+    p_Message         OUT VARCHAR2
+) AS
+    v_count NUMBER;
+BEGIN
+    IF p_CODIGO_AUX_PUC IS NULL OR p_CODIGO_AUXILIAR IS NULL OR p_CODIGO_PUC IS NULL THEN
+        p_Message := 'La relacion, el auxiliar y el PUC son requeridos.';
+        RETURN;
+    END IF;
+
+    SELECT COUNT(1) INTO v_count
+      FROM CNT.CNT_AUXILIARES_PUC
+     WHERE CODIGO_AUXILIAR_PUC = p_CODIGO_AUX_PUC
+       AND (CODIGO_EMPRESA IS NULL OR CODIGO_EMPRESA = p_CODIGO_EMPRESA);
+
+    IF v_count = 0 THEN
+        p_Message := 'La relacion indicada no existe.';
+        RETURN;
+    END IF;
+
+    SELECT COUNT(1) INTO v_count
+      FROM CNT.CNT_AUXILIARES
+     WHERE CODIGO_AUXILIAR = p_CODIGO_AUXILIAR
+       AND (CODIGO_EMPRESA IS NULL OR CODIGO_EMPRESA = p_CODIGO_EMPRESA);
+
+    IF v_count = 0 THEN
+        p_Message := 'El auxiliar indicado no existe.';
+        RETURN;
+    END IF;
+
+    SELECT COUNT(1) INTO v_count
+      FROM CNT.CNT_AUXILIARES_PUC
+     WHERE CODIGO_AUXILIAR_PUC <> p_CODIGO_AUX_PUC
+       AND CODIGO_AUXILIAR = p_CODIGO_AUXILIAR
+       AND CODIGO_PUC = p_CODIGO_PUC
+       AND NVL(TIPO_DOCUMENTO_ID, ' ') = NVL(SUBSTR(p_TIPO_DOC_ID, 1, 2), ' ')
+       AND (CODIGO_EMPRESA IS NULL OR CODIGO_EMPRESA = p_CODIGO_EMPRESA);
+
+    IF v_count > 0 THEN
+        p_Message := 'Ya existe una relacion para el auxiliar, PUC y tipo de documento.';
+        RETURN;
+    END IF;
+
+    UPDATE CNT.CNT_AUXILIARES_PUC
+       SET CODIGO_AUXILIAR = p_CODIGO_AUXILIAR,
+           CODIGO_PUC = p_CODIGO_PUC,
+           TIPO_DOCUMENTO_ID = SUBSTR(p_TIPO_DOC_ID, 1, 2),
+           USUARIO_UPD = p_USUARIO_ID,
+           FECHA_UPD = SYSDATE,
+           CODIGO_EMPRESA = p_CODIGO_EMPRESA
+     WHERE CODIGO_AUXILIAR_PUC = p_CODIGO_AUX_PUC;
+
+    p_Message := 'OK';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SQLERRM;
+END;
+/
+
+CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUX_PUC_DEL (
+    p_CODIGO_AUX_PUC IN NUMBER,
+    p_CODIGO_EMPRESA IN NUMBER,
+    p_Message        OUT VARCHAR2
+) AS
+BEGIN
+    DELETE FROM CNT.CNT_AUXILIARES_PUC
+     WHERE CODIGO_AUXILIAR_PUC = p_CODIGO_AUX_PUC
+       AND (CODIGO_EMPRESA IS NULL OR CODIGO_EMPRESA = p_CODIGO_EMPRESA);
+
+    IF SQL%ROWCOUNT = 0 THEN
+        p_Message := 'La relacion indicada no existe.';
+        RETURN;
+    END IF;
+
+    p_Message := 'OK';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SQLERRM;
+END;
+/

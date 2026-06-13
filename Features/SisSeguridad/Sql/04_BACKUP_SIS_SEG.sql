@@ -1,0 +1,13 @@
+PROMPT Respaldo SIS Seguridad legacy/cache
+
+DECLARE
+  v_suffix VARCHAR2(20) := TO_CHAR(SYSDATE, 'YYYYMMDDHH24MISS');
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE TABLE B_OSS_UROL_' || v_suffix || ' AS SELECT * FROM OSS_USUARIO_ROL';
+  EXECUTE IMMEDIATE 'CREATE TABLE B_OSS_NUROL_' || v_suffix || ' AS SELECT * FROM OSS_USR_ROL';
+  EXECUTE IMMEDIATE 'CREATE TABLE B_OSS_NUPERM_' || v_suffix || ' AS SELECT * FROM OSS_USR_PERM';
+  DBMS_OUTPUT.PUT_LINE('Backup creado con sufijo: ' || v_suffix);
+END;
+/
+
+PROMPT Respaldo SIS Seguridad finalizado

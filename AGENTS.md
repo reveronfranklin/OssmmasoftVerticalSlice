@@ -28,6 +28,9 @@ Prefer the existing feature structure over introducing broad architectural layer
 - Use `Oracle.ManagedDataAccess.Client` and stored procedures for Oracle operations.
 - Set `cmd.CommandType = CommandType.StoredProcedure` and `cmd.BindByName = true`.
 - Use explicit Oracle parameter names that match the stored procedure contract.
+- Oracle 10g compatibility is mandatory: keep every Oracle object identifier at 30 characters or fewer. This applies to tables, views, sequences, indexes, constraints, stored procedures, functions, packages, triggers, columns, aliases intended as persisted object names, and generated SQL artifacts.
+- Before adding or renaming Oracle objects, manually count the final identifier length and prefer established abbreviations such as `CNT`, `BCO`, `ARC`, `CTL`, `DET`, `EXT`, `SEQ`, `IDX`, `PK`, and `FK`.
+- When adding or changing SQL scripts, run `scripts/check-oracle-identifiers.sh <path>` against the touched SQL folder or file set before finishing.
 - Convert optional/null values to `DBNull.Value` through local helper methods instead of ad hoc inline checks.
 - Preserve existing database message behavior, including treating both `success` and the legacy `suscces` as success where current slices do so.
 

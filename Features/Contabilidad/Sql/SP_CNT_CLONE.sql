@@ -1,0 +1,355 @@
+CREATE OR REPLACE PROCEDURE CNT.SP_CNT_CLONE_DES (
+    p_EMPRESA_ORIGEN  IN NUMBER,
+    p_EMPRESA_DESTINO IN NUMBER,
+    p_USUARIO_ID      IN NUMBER,
+    p_TITULOS         OUT NUMBER,
+    p_DESCRIPTIVAS    OUT NUMBER,
+    p_Message         OUT VARCHAR2
+) AS
+BEGIN
+    p_TITULOS := 0;
+    p_DESCRIPTIVAS := 0;
+
+    IF p_EMPRESA_ORIGEN IS NULL OR p_EMPRESA_DESTINO IS NULL THEN
+        p_Message := 'Empresa origen y destino son requeridas.';
+        RETURN;
+    END IF;
+
+    IF p_EMPRESA_ORIGEN = p_EMPRESA_DESTINO THEN
+        p_Message := 'La empresa origen debe ser distinta a la empresa destino.';
+        RETURN;
+    END IF;
+
+    INSERT INTO CNT.CNT_TITULOS (
+        TITULO_ID, TITULO_FK_ID, TITULO, CODIGO,
+        EXTRA1, EXTRA2, EXTRA3, USUARIO_INS, FECHA_INS, CODIGO_EMPRESA
+    )
+    SELECT CNT.CNT_S_TITULO_ID.NEXTVAL,
+           NULL,
+           o.TITULO,
+           o.CODIGO,
+           o.EXTRA1,
+           o.EXTRA2,
+           o.EXTRA3,
+           p_USUARIO_ID,
+           SYSDATE,
+           p_EMPRESA_DESTINO
+      FROM CNT.CNT_TITULOS o
+     WHERE NVL(o.CODIGO_EMPRESA, p_EMPRESA_ORIGEN) = p_EMPRESA_ORIGEN
+       AND NOT EXISTS (
+            SELECT 1
+              FROM CNT.CNT_TITULOS d
+             WHERE NVL(d.CODIGO_EMPRESA, p_EMPRESA_DESTINO) = p_EMPRESA_DESTINO
+               AND NVL(UPPER(d.CODIGO), UPPER(d.TITULO)) = NVL(UPPER(o.CODIGO), UPPER(o.TITULO))
+       );
+
+    p_TITULOS := SQL%ROWCOUNT;
+
+    INSERT INTO CNT.CNT_DESCRIPTIVAS (
+        DESCRIPCION_ID, DESCRIPCION_FK_ID, TITULO_ID, DESCRIPCION, CODIGO,
+        EXTRA1, EXTRA2, EXTRA3, USUARIO_INS, FECHA_INS, CODIGO_EMPRESA
+    )
+    SELECT CNT.CNT_S_DESCRIPCION_ID.NEXTVAL,
+           NULL,
+           dt.TITULO_ID,
+           o.DESCRIPCION,
+           o.CODIGO,
+           o.EXTRA1,
+           o.EXTRA2,
+           o.EXTRA3,
+           p_USUARIO_ID,
+           SYSDATE,
+           p_EMPRESA_DESTINO
+      FROM CNT.CNT_DESCRIPTIVAS o,
+           CNT.CNT_TITULOS ot,
+           CNT.CNT_TITULOS dt
+     WHERE ot.TITULO_ID = o.TITULO_ID
+       AND NVL(ot.CODIGO_EMPRESA, p_EMPRESA_ORIGEN) = p_EMPRESA_ORIGEN
+       AND NVL(o.CODIGO_EMPRESA, p_EMPRESA_ORIGEN) = p_EMPRESA_ORIGEN
+       AND NVL(dt.CODIGO_EMPRESA, p_EMPRESA_DESTINO) = p_EMPRESA_DESTINO
+       AND NVL(UPPER(dt.CODIGO), UPPER(dt.TITULO)) = NVL(UPPER(ot.CODIGO), UPPER(ot.TITULO))
+       AND NOT EXISTS (
+            SELECT 1
+              FROM CNT.CNT_DESCRIPTIVAS d
+             WHERE d.TITULO_ID = dt.TITULO_ID
+               AND NVL(d.CODIGO_EMPRESA, p_EMPRESA_DESTINO) = p_EMPRESA_DESTINO
+               AND NVL(UPPER(d.CODIGO), UPPER(d.DESCRIPCION)) = NVL(UPPER(o.CODIGO), UPPER(o.DESCRIPCION))
+       );
+
+    p_DESCRIPTIVAS := SQL%ROWCOUNT;
+
+    UPDATE CNT.CNT_DESCRIPTIVAS d
+       SET d.DESCRIPCION_FK_ID = (
+           SELECT dp.DESCRIPCION_ID
+             FROM CNT.CNT_DESCRIPTIVAS o,
+                  CNT.CNT_DESCRIPTIVAS op,
+                  CNT.CNT_DESCRIPTIVAS dp,
+                  CNT.CNT_TITULOS ot,
+                  CNT.CNT_TITULOS dt,
+                  CNT.CNT_TITULOS dpt
+            WHERE ot.TITULO_ID = o.TITULO_ID
+              AND dt.TITULO_ID = d.TITULO_ID
+              AND op.DESCRIPCION_ID = o.DESCRIPCION_FK_ID
+              AND dpt.TITULO_ID = dp.TITULO_ID
+              AND NVL(o.CODIGO_EMPRESA, p_EMPRESA_ORIGEN) = p_EMPRESA_ORIGEN
+              AND NVL(op.CODIGO_EMPRESA, p_EMPRESA_ORIGEN) = p_EMPRESA_ORIGEN
+              AND NVL(dp.CODIGO_EMPRESA, p_EMPRESA_DESTINO) = p_EMPRESA_DESTINO
+              AND NVL(ot.CODIGO_EMPRESA, p_EMPRESA_ORIGEN) = p_EMPRESA_ORIGEN
+              AND NVL(dt.CODIGO_EMPRESA, p_EMPRESA_DESTINO) = p_EMPRESA_DESTINO
+              AND NVL(dpt.CODIGO_EMPRESA, p_EMPRESA_DESTINO) = p_EMPRESA_DESTINO
+              AND NVL(UPPER(dt.CODIGO), UPPER(dt.TITULO)) = NVL(UPPER(ot.CODIGO), UPPER(ot.TITULO))
+              AND NVL(UPPER(d.CODIGO), UPPER(d.DESCRIPCION)) = NVL(UPPER(o.CODIGO), UPPER(o.DESCRIPCION))
+              AND NVL(UPPER(dp.CODIGO), UPPER(dp.DESCRIPCION)) = NVL(UPPER(op.CODIGO), UPPER(op.DESCRIPCION))
+              AND NVL(UPPER(dpt.CODIGO), UPPER(dpt.TITULO)) = (
+                    SELECT NVL(UPPER(opt.CODIGO), UPPER(opt.TITULO))
+                      FROM CNT.CNT_TITULOS opt
+                     WHERE opt.TITULO_ID = op.TITULO_ID
+              )
+       )
+     WHERE NVL(d.CODIGO_EMPRESA, p_EMPRESA_DESTINO) = p_EMPRESA_DESTINO
+       AND d.DESCRIPCION_FK_ID IS NULL
+       AND EXISTS (
+           SELECT 1
+             FROM CNT.CNT_DESCRIPTIVAS o,
+                  CNT.CNT_TITULOS ot,
+                  CNT.CNT_TITULOS dt
+            WHERE ot.TITULO_ID = o.TITULO_ID
+              AND dt.TITULO_ID = d.TITULO_ID
+              AND o.DESCRIPCION_FK_ID IS NOT NULL
+              AND NVL(o.CODIGO_EMPRESA, p_EMPRESA_ORIGEN) = p_EMPRESA_ORIGEN
+              AND NVL(ot.CODIGO_EMPRESA, p_EMPRESA_ORIGEN) = p_EMPRESA_ORIGEN
+              AND NVL(dt.CODIGO_EMPRESA, p_EMPRESA_DESTINO) = p_EMPRESA_DESTINO
+              AND NVL(UPPER(dt.CODIGO), UPPER(dt.TITULO)) = NVL(UPPER(ot.CODIGO), UPPER(ot.TITULO))
+              AND NVL(UPPER(d.CODIGO), UPPER(d.DESCRIPCION)) = NVL(UPPER(o.CODIGO), UPPER(o.DESCRIPCION))
+       );
+
+    p_Message := 'Success';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SQLERRM;
+END;
+/
+
+CREATE OR REPLACE PROCEDURE CNT.SP_CNT_CLONE_PLAN (
+    p_EMPRESA_ORIGEN  IN NUMBER,
+    p_EMPRESA_DESTINO IN NUMBER,
+    p_USUARIO_ID      IN NUMBER,
+    p_RUBROS          OUT NUMBER,
+    p_BALANCES        OUT NUMBER,
+    p_MAYORES         OUT NUMBER,
+    p_AUXILIARES      OUT NUMBER,
+    p_REL_PUC         OUT NUMBER,
+    p_Message         OUT VARCHAR2
+) AS
+BEGIN
+    p_RUBROS := 0;
+    p_BALANCES := 0;
+    p_MAYORES := 0;
+    p_AUXILIARES := 0;
+    p_REL_PUC := 0;
+
+    IF p_EMPRESA_ORIGEN IS NULL OR p_EMPRESA_DESTINO IS NULL THEN
+        p_Message := 'Empresa origen y destino son requeridas.';
+        RETURN;
+    END IF;
+
+    IF p_EMPRESA_ORIGEN = p_EMPRESA_DESTINO THEN
+        p_Message := 'La empresa origen debe ser distinta a la empresa destino.';
+        RETURN;
+    END IF;
+
+    INSERT INTO CNT.CNT_RUBROS (
+        CODIGO_RUBRO, NUMERO_RUBRO, DENOMINACION, DESCRIPCION,
+        EXTRA1, EXTRA2, EXTRA3, USUARIO_INS, FECHA_INS, CODIGO_EMPRESA
+    )
+    SELECT CNT.CNT_S_CODIGO_RUBRO.NEXTVAL,
+           o.NUMERO_RUBRO,
+           o.DENOMINACION,
+           o.DESCRIPCION,
+           o.EXTRA1,
+           o.EXTRA2,
+           o.EXTRA3,
+           p_USUARIO_ID,
+           SYSDATE,
+           p_EMPRESA_DESTINO
+      FROM CNT.CNT_RUBROS o
+     WHERE o.CODIGO_EMPRESA = p_EMPRESA_ORIGEN
+       AND NOT EXISTS (
+           SELECT 1 FROM CNT.CNT_RUBROS d
+            WHERE d.CODIGO_EMPRESA = p_EMPRESA_DESTINO
+              AND d.NUMERO_RUBRO = o.NUMERO_RUBRO
+       );
+
+    p_RUBROS := SQL%ROWCOUNT;
+
+    INSERT INTO CNT.CNT_BALANCES (
+        CODIGO_BALANCE, NUMERO_BALANCE, DENOMINACION, DESCRIPCION,
+        EXTRA1, EXTRA2, EXTRA3, USUARIO_INS, FECHA_INS, CODIGO_EMPRESA, CODIGO_RUBRO
+    )
+    SELECT CNT.CNT_S_CODIGO_BALANCE.NEXTVAL,
+           o.NUMERO_BALANCE,
+           o.DENOMINACION,
+           o.DESCRIPCION,
+           o.EXTRA1,
+           o.EXTRA2,
+           o.EXTRA3,
+           p_USUARIO_ID,
+           SYSDATE,
+           p_EMPRESA_DESTINO,
+           dr.CODIGO_RUBRO
+      FROM CNT.CNT_BALANCES o,
+           CNT.CNT_RUBROS oru,
+           CNT.CNT_RUBROS dr
+     WHERE oru.CODIGO_RUBRO = o.CODIGO_RUBRO
+       AND oru.CODIGO_EMPRESA = p_EMPRESA_ORIGEN
+       AND dr.CODIGO_EMPRESA = p_EMPRESA_DESTINO
+       AND dr.NUMERO_RUBRO = oru.NUMERO_RUBRO
+       AND o.CODIGO_EMPRESA = p_EMPRESA_ORIGEN
+       AND NOT EXISTS (
+           SELECT 1 FROM CNT.CNT_BALANCES d
+            WHERE d.CODIGO_EMPRESA = p_EMPRESA_DESTINO
+              AND d.NUMERO_BALANCE = o.NUMERO_BALANCE
+       );
+
+    p_BALANCES := SQL%ROWCOUNT;
+
+    INSERT INTO CNT.CNT_MAYORES (
+        CODIGO_MAYOR, NUMERO_MAYOR, DENOMINACION, DESCRIPCION, CODIGO_BALANCE,
+        COLUMNA_BALANCE, EXTRA1, EXTRA2, EXTRA3, USUARIO_INS, FECHA_INS, CODIGO_EMPRESA
+    )
+    SELECT CNT.CNT_S_CODIGO_MAYOR.NEXTVAL,
+           o.NUMERO_MAYOR,
+           o.DENOMINACION,
+           o.DESCRIPCION,
+           db.CODIGO_BALANCE,
+           o.COLUMNA_BALANCE,
+           o.EXTRA1,
+           o.EXTRA2,
+           o.EXTRA3,
+           p_USUARIO_ID,
+           SYSDATE,
+           p_EMPRESA_DESTINO
+      FROM CNT.CNT_MAYORES o,
+           CNT.CNT_BALANCES ob,
+           CNT.CNT_BALANCES db
+     WHERE ob.CODIGO_BALANCE = o.CODIGO_BALANCE
+       AND ob.CODIGO_EMPRESA = p_EMPRESA_ORIGEN
+       AND db.CODIGO_EMPRESA = p_EMPRESA_DESTINO
+       AND db.NUMERO_BALANCE = ob.NUMERO_BALANCE
+       AND o.CODIGO_EMPRESA = p_EMPRESA_ORIGEN
+       AND NOT EXISTS (
+           SELECT 1 FROM CNT.CNT_MAYORES d
+            WHERE d.CODIGO_EMPRESA = p_EMPRESA_DESTINO
+              AND d.NUMERO_MAYOR = o.NUMERO_MAYOR
+       );
+
+    p_MAYORES := SQL%ROWCOUNT;
+
+    INSERT INTO CNT.CNT_AUXILIARES (
+        CODIGO_AUXILIAR, CODIGO_MAYOR, SEGMENTO1, SEGMENTO2, SEGMENTO3, SEGMENTO4, SEGMENTO5,
+        SEGMENTO6, SEGMENTO7, SEGMENTO8, SEGMENTO9, SEGMENTO10, DENOMINACION, DESCRIPCION,
+        EXTRA1, EXTRA2, EXTRA3, USUARIO_INS, FECHA_INS, CODIGO_EMPRESA, FECHA_FIN_VIGENCIA,
+        CODIGO_PROVEEDOR
+    )
+    SELECT CNT.CNT_S_CODIGO_AUXILIAR.NEXTVAL,
+           dm.CODIGO_MAYOR,
+           o.SEGMENTO1,
+           o.SEGMENTO2,
+           o.SEGMENTO3,
+           o.SEGMENTO4,
+           o.SEGMENTO5,
+           o.SEGMENTO6,
+           o.SEGMENTO7,
+           o.SEGMENTO8,
+           o.SEGMENTO9,
+           o.SEGMENTO10,
+           o.DENOMINACION,
+           o.DESCRIPCION,
+           o.EXTRA1,
+           o.EXTRA2,
+           o.EXTRA3,
+           p_USUARIO_ID,
+           SYSDATE,
+           p_EMPRESA_DESTINO,
+           o.FECHA_FIN_VIGENCIA,
+           o.CODIGO_PROVEEDOR
+      FROM CNT.CNT_AUXILIARES o,
+           CNT.CNT_MAYORES om,
+           CNT.CNT_MAYORES dm
+     WHERE om.CODIGO_MAYOR = o.CODIGO_MAYOR
+       AND om.CODIGO_EMPRESA = p_EMPRESA_ORIGEN
+       AND dm.CODIGO_EMPRESA = p_EMPRESA_DESTINO
+       AND dm.NUMERO_MAYOR = om.NUMERO_MAYOR
+       AND o.CODIGO_EMPRESA = p_EMPRESA_ORIGEN
+       AND NOT EXISTS (
+           SELECT 1
+             FROM CNT.CNT_AUXILIARES d
+            WHERE d.CODIGO_EMPRESA = p_EMPRESA_DESTINO
+              AND d.CODIGO_MAYOR = dm.CODIGO_MAYOR
+              AND NVL(d.SEGMENTO1, ' ') = NVL(o.SEGMENTO1, ' ')
+              AND NVL(d.SEGMENTO2, ' ') = NVL(o.SEGMENTO2, ' ')
+              AND NVL(d.SEGMENTO3, ' ') = NVL(o.SEGMENTO3, ' ')
+              AND NVL(d.SEGMENTO4, ' ') = NVL(o.SEGMENTO4, ' ')
+              AND NVL(d.SEGMENTO5, ' ') = NVL(o.SEGMENTO5, ' ')
+              AND NVL(d.SEGMENTO6, ' ') = NVL(o.SEGMENTO6, ' ')
+              AND NVL(d.SEGMENTO7, ' ') = NVL(o.SEGMENTO7, ' ')
+              AND NVL(d.SEGMENTO8, ' ') = NVL(o.SEGMENTO8, ' ')
+              AND NVL(d.SEGMENTO9, ' ') = NVL(o.SEGMENTO9, ' ')
+              AND NVL(d.SEGMENTO10, ' ') = NVL(o.SEGMENTO10, ' ')
+              AND UPPER(d.DENOMINACION) = UPPER(o.DENOMINACION)
+       );
+
+    p_AUXILIARES := SQL%ROWCOUNT;
+
+    INSERT INTO CNT.CNT_AUXILIARES_PUC (
+        CODIGO_AUXILIAR_PUC, CODIGO_AUXILIAR, CODIGO_PUC, TIPO_DOCUMENTO_ID,
+        USUARIO_INS, FECHA_INS, CODIGO_EMPRESA
+    )
+    SELECT (SELECT NVL(MAX(CODIGO_AUXILIAR_PUC), 0) FROM CNT.CNT_AUXILIARES_PUC) + ROWNUM,
+           da.CODIGO_AUXILIAR,
+           op.CODIGO_PUC,
+           op.TIPO_DOCUMENTO_ID,
+           p_USUARIO_ID,
+           SYSDATE,
+           p_EMPRESA_DESTINO
+      FROM CNT.CNT_AUXILIARES_PUC op,
+           CNT.CNT_AUXILIARES oa,
+           CNT.CNT_AUXILIARES da,
+           CNT.CNT_MAYORES om,
+           CNT.CNT_MAYORES dm
+     WHERE oa.CODIGO_AUXILIAR = op.CODIGO_AUXILIAR
+       AND om.CODIGO_MAYOR = oa.CODIGO_MAYOR
+       AND dm.NUMERO_MAYOR = om.NUMERO_MAYOR
+       AND dm.CODIGO_EMPRESA = p_EMPRESA_DESTINO
+       AND da.CODIGO_MAYOR = dm.CODIGO_MAYOR
+       AND NVL(da.SEGMENTO1, ' ') = NVL(oa.SEGMENTO1, ' ')
+       AND NVL(da.SEGMENTO2, ' ') = NVL(oa.SEGMENTO2, ' ')
+       AND NVL(da.SEGMENTO3, ' ') = NVL(oa.SEGMENTO3, ' ')
+       AND NVL(da.SEGMENTO4, ' ') = NVL(oa.SEGMENTO4, ' ')
+       AND NVL(da.SEGMENTO5, ' ') = NVL(oa.SEGMENTO5, ' ')
+       AND NVL(da.SEGMENTO6, ' ') = NVL(oa.SEGMENTO6, ' ')
+       AND NVL(da.SEGMENTO7, ' ') = NVL(oa.SEGMENTO7, ' ')
+       AND NVL(da.SEGMENTO8, ' ') = NVL(oa.SEGMENTO8, ' ')
+       AND NVL(da.SEGMENTO9, ' ') = NVL(oa.SEGMENTO9, ' ')
+       AND NVL(da.SEGMENTO10, ' ') = NVL(oa.SEGMENTO10, ' ')
+       AND UPPER(da.DENOMINACION) = UPPER(oa.DENOMINACION)
+       AND op.CODIGO_EMPRESA = p_EMPRESA_ORIGEN
+       AND oa.CODIGO_EMPRESA = p_EMPRESA_ORIGEN
+       AND om.CODIGO_EMPRESA = p_EMPRESA_ORIGEN
+       AND da.CODIGO_EMPRESA = p_EMPRESA_DESTINO
+       AND NOT EXISTS (
+           SELECT 1
+             FROM CNT.CNT_AUXILIARES_PUC dp
+            WHERE dp.CODIGO_EMPRESA = p_EMPRESA_DESTINO
+              AND dp.CODIGO_AUXILIAR = da.CODIGO_AUXILIAR
+              AND dp.CODIGO_PUC = op.CODIGO_PUC
+              AND NVL(dp.TIPO_DOCUMENTO_ID, ' ') = NVL(op.TIPO_DOCUMENTO_ID, ' ')
+       );
+
+    p_REL_PUC := SQL%ROWCOUNT;
+    p_Message := 'Success';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SQLERRM;
+END;
+/

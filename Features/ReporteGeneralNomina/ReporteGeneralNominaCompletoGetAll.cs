@@ -16,6 +16,7 @@ public record ReporteGeneralNominaCompletoGetAllQuery(
 
 // Response
 public record GetReporteGeneralNominaCompletoGetAllResponse(
+    GetReporteGeneralNominaPeriodoGetByCodigoResponse? Periodo,
     List<GetReporteGeneralNominaGetAllResponse> General,
     List<GetReporteGeneralNominaDetalleGetAllResponse> Detalle,
     List<GetReporteGeneralNominaFirmaGetAllResponse> Firma
@@ -33,6 +34,24 @@ public class GetReporteGeneralNominaCompletoGetAllHandler(ConnectionDB _connecti
         var generalHandler = new GetReporteGeneralNominaGetAllHandler(_connectionDB);
         var detalleHandler = new GetReporteGeneralNominaDetalleGetAllHandler(_connectionDB);
         var firmaHandler = new GetReporteGeneralNominaFirmaGetAllHandler(_connectionDB);
+        var periodoHandler = new GetReporteGeneralNominaPeriodoGetByCodigoHandler(_connectionDB);
+        GetReporteGeneralNominaPeriodoGetByCodigoResponse? periodo = null;
+        var periodoRecords = 0;
+
+        if (value.p_codigo_periodo.HasValue)
+        {
+            var periodoResult = await periodoHandler.HandleAsync(new ReporteGeneralNominaPeriodoGetByCodigoQuery(
+                value.p_codigo_periodo.Value
+            ));
+
+            if (!periodoResult.IsValid)
+            {
+                return BuildInvalidResult(periodoResult.Message);
+            }
+
+            periodo = periodoResult.Data;
+            periodoRecords = periodoResult.CantidadRegistros;
+        }
 
         var generalResult = await generalHandler.HandleAsync(new ReporteGeneralNominaGetAllQuery(
             reporteParameters.FromTable1,
@@ -71,6 +90,7 @@ public class GetReporteGeneralNominaCompletoGetAllHandler(ConnectionDB _connecti
         }
 
         var response = new GetReporteGeneralNominaCompletoGetAllResponse(
+            periodo,
             generalResult.Data ?? new List<GetReporteGeneralNominaGetAllResponse>(),
             detalleResult.Data ?? new List<GetReporteGeneralNominaDetalleGetAllResponse>(),
             firmaResult.Data ?? new List<GetReporteGeneralNominaFirmaGetAllResponse>()
@@ -79,7 +99,7 @@ public class GetReporteGeneralNominaCompletoGetAllHandler(ConnectionDB _connecti
         return new ResultDto<GetReporteGeneralNominaCompletoGetAllResponse>(response)
         {
             Data = response,
-            CantidadRegistros = generalResult.CantidadRegistros + detalleResult.CantidadRegistros + firmaResult.CantidadRegistros,
+            CantidadRegistros = periodoRecords + generalResult.CantidadRegistros + detalleResult.CantidadRegistros + firmaResult.CantidadRegistros,
             IsValid = true,
             Message = "Success"
         };
@@ -89,6 +109,7 @@ public class GetReporteGeneralNominaCompletoGetAllHandler(ConnectionDB _connecti
     {
         return new ResultDto<GetReporteGeneralNominaCompletoGetAllResponse>(
             new GetReporteGeneralNominaCompletoGetAllResponse(
+                null,
                 new List<GetReporteGeneralNominaGetAllResponse>(),
                 new List<GetReporteGeneralNominaDetalleGetAllResponse>(),
                 new List<GetReporteGeneralNominaFirmaGetAllResponse>()
