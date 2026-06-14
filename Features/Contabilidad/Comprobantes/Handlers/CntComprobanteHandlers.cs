@@ -34,15 +34,45 @@ public class GetCntComprobantesHandler(ConnectionDB connectionDB, IConfiguration
 
             using var cn = connectionDB.GetCntConnection();
             await cn.OpenAsync();
+
+            if (value.CodigoPeriodo.HasValue && (value.FechaDesde.HasValue || value.FechaHasta.HasValue))
+            {
+                using var periodCmd = new OracleCommand(@"
+                    SELECT FECHA_DESDE,
+                           FECHA_HASTA
+                      FROM CNT.CNT_PERIODOS
+                     WHERE CODIGO_PERIODO = :p_CODIGO_PERIODO
+                       AND CODIGO_EMPRESA = :p_CODIGO_EMPRESA", cn);
+                periodCmd.BindByName = true;
+                periodCmd.Parameters.Add("p_CODIGO_PERIODO", OracleDbType.Int32).Value = value.CodigoPeriodo.Value;
+                periodCmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
+
+                using var periodReader = await periodCmd.ExecuteReaderAsync();
+                if (!await periodReader.ReadAsync())
+                {
+                    return new ResultDto<List<CntComprobanteResponse>>(null!) { Data = null, IsValid = false, Message = "El periodo seleccionado no existe." };
+                }
+
+                var periodoDesde = CntDb.SafeGetDate(periodReader, "FECHA_DESDE").Date;
+                var periodoHasta = CntDb.SafeGetDate(periodReader, "FECHA_HASTA").Date;
+
+                if ((value.FechaDesde.HasValue && value.FechaDesde.Value.Date < periodoDesde)
+                    || (value.FechaHasta.HasValue && value.FechaHasta.Value.Date > periodoHasta)
+                    || (value.FechaDesde.HasValue && value.FechaHasta.HasValue && value.FechaDesde.Value.Date > value.FechaHasta.Value.Date))
+                {
+                    return new ResultDto<List<CntComprobanteResponse>>(null!) { Data = null, IsValid = false, Message = "Las fechas deben estar dentro del periodo seleccionado." };
+                }
+            }
+
             using var cmd = new OracleCommand("CNT.SP_CNT_CMP_GET_ALL", cn) { CommandType = CommandType.StoredProcedure, BindByName = true };
             cmd.Parameters.Add("p_PageSize", OracleDbType.Int32).Value = pageSize;
             cmd.Parameters.Add("p_PageNumber", OracleDbType.Int32).Value = pageNumber;
             cmd.Parameters.Add("p_SearchText", OracleDbType.Varchar2).Value = CntDb.StringDbValue(value.SearchText);
             cmd.Parameters.Add("p_CODIGO_PERIODO", OracleDbType.Int32).Value = CntDb.DbValue(value.CodigoPeriodo);
-            cmd.Parameters.Add("p_TIPO_COMPROBANTE_ID", OracleDbType.Int32).Value = CntDb.DbValue(value.TipoComprobanteId);
             cmd.Parameters.Add("p_ORIGEN_ID", OracleDbType.Int32).Value = CntDb.DbValue(value.OrigenId);
             cmd.Parameters.Add("p_FECHA_DESDE", OracleDbType.Date).Value = CntDb.DbValue(value.FechaDesde);
             cmd.Parameters.Add("p_FECHA_HASTA", OracleDbType.Date).Value = CntDb.DbValue(value.FechaHasta);
+            cmd.Parameters.Add("p_ES_AUTOMATICO", OracleDbType.Int32).Value = value.EsAutomatico.HasValue ? (value.EsAutomatico.Value ? 1 : 0) : DBNull.Value;
             cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
             cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
             var pMessage = cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);

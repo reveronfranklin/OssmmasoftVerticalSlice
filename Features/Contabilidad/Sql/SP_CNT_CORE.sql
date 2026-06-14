@@ -17,8 +17,9 @@ DECLARE
 BEGIN
     SELECT COUNT(*)
       INTO v_count
-      FROM USER_TABLES
-     WHERE TABLE_NAME = 'CNT_AUTOMATICO_LOG';
+      FROM ALL_TABLES
+     WHERE OWNER = 'CNT'
+       AND TABLE_NAME = 'CNT_AUTOMATICO_LOG';
 
     IF v_count = 0 THEN
         EXECUTE IMMEDIATE '
@@ -52,12 +53,14 @@ DECLARE
 BEGIN
     SELECT COUNT(*)
       INTO v_count
-      FROM USER_TABLES
-     WHERE TABLE_NAME = 'CNT_AUT_LINE_TMP';
+      FROM ALL_TABLES
+     WHERE OWNER = 'CNT'
+       AND TABLE_NAME = 'CNT_AUT_LINE_WRK';
 
     IF v_count = 0 THEN
         EXECUTE IMMEDIATE '
-            CREATE GLOBAL TEMPORARY TABLE CNT.CNT_AUT_LINE_TMP (
+            CREATE TABLE CNT.CNT_AUT_LINE_WRK (
+                RUN_ID VARCHAR2(32) NOT NULL,
                 SECUENCIA NUMBER,
                 CODIGO_MAYOR NUMBER,
                 MAYOR VARCHAR2(400),
@@ -67,8 +70,24 @@ BEGIN
                 REFERENCIA2 VARCHAR2(20),
                 REFERENCIA3 VARCHAR2(20),
                 DESCRIPCION VARCHAR2(200),
-                MONTO NUMBER(18,2)
-            ) ON COMMIT DELETE ROWS';
+                MONTO NUMBER(18,2),
+                FECHA_REGISTRO DATE DEFAULT SYSDATE NOT NULL
+            )';
+    END IF;
+END;
+/
+
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*)
+      INTO v_count
+      FROM ALL_INDEXES
+     WHERE OWNER = 'CNT'
+       AND INDEX_NAME = 'IDX_CNT_AUT_LINE_WRK_RUN';
+
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX CNT.IDX_CNT_AUT_LINE_WRK_RUN ON CNT.CNT_AUT_LINE_WRK (RUN_ID)';
     END IF;
 END;
 /
@@ -141,6 +160,7 @@ END;
 /
 
 CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUT_BUILD_OP (
+    p_RUN_ID              IN VARCHAR2,
     p_ORIGEN_ID           IN NUMBER,
     p_FECHA_DESDE         IN DATE,
     p_FECHA_HASTA         IN DATE,
@@ -149,9 +169,12 @@ CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUT_BUILD_OP (
     p_Message             OUT VARCHAR2
 ) AS
 BEGIN
-    DELETE FROM CNT.CNT_AUT_LINE_TMP;
+    DELETE FROM CNT.CNT_AUT_LINE_WRK
+     WHERE RUN_ID = p_RUN_ID
+        OR FECHA_REGISTRO < SYSDATE - 1;
 
-    INSERT INTO CNT.CNT_AUT_LINE_TMP (
+    INSERT INTO CNT.CNT_AUT_LINE_WRK (
+        RUN_ID,
         SECUENCIA,
         CODIGO_MAYOR,
         MAYOR,
@@ -163,7 +186,8 @@ BEGIN
         DESCRIPCION,
         MONTO
     )
-    SELECT ROWNUM,
+    SELECT p_RUN_ID,
+           ROWNUM,
            q.CODIGO_MAYOR,
            q.NUMERO_MAYOR,
            q.CODIGO_AUXILIAR,
@@ -171,7 +195,7 @@ BEGIN
            SUBSTR(q.NUMERO_ORDEN_PAGO, 1, 20),
            TO_CHAR(q.FECHA_ORDEN_PAGO, 'DD/MM/RRRR'),
            NULL,
-           SUBSTR('(' || q.TIPO_COMPROMISO || ') ' || q.MOTIVO, 1, 200),
+           SUBSTRB('(' || q.TIPO_COMPROMISO || ') ' || q.MOTIVO, 1, 200),
            CASE WHEN q.COLUMNA_BALANCE = 'D' THEN -ABS(NVL(q.MONTO, 0)) ELSE ABS(NVL(q.MONTO, 0)) END
       FROM (
             SELECT *
@@ -546,14 +570,126 @@ BEGIN
      ORDER BY q.TIPO_COMPROMISO, q.CODIGO_ORDEN_PAGO, q.CODIGO_MAYOR;
 
     IF p_ORIGEN_ID = CNT.CNT_DESCRIPTIVA_ID('ANODPAUT', 'ODC') THEN
-        UPDATE CNT.CNT_AUT_LINE_TMP
-           SET MONTO = -MONTO;
+        UPDATE CNT.CNT_AUT_LINE_WRK
+           SET MONTO = -MONTO
+         WHERE RUN_ID = p_RUN_ID;
     END IF;
 
     p_Message := 'Success';
 EXCEPTION
     WHEN OTHERS THEN
-        DELETE FROM CNT.CNT_AUT_LINE_TMP;
+        DELETE FROM CNT.CNT_AUT_LINE_WRK
+         WHERE RUN_ID = p_RUN_ID;
+        p_Message := SQLERRM;
+END;
+/
+
+CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUT_BUILD_COMP (
+    p_RUN_ID              IN VARCHAR2,
+    p_ORIGEN_ID           IN NUMBER,
+    p_FECHA_DESDE         IN DATE,
+    p_FECHA_HASTA         IN DATE,
+    p_CODIGO_PRESUPUESTO  IN NUMBER,
+    p_CODIGO_EMPRESA      IN NUMBER,
+    p_Message             OUT VARCHAR2
+) AS
+BEGIN
+    DELETE FROM CNT.CNT_AUT_LINE_WRK
+     WHERE RUN_ID = p_RUN_ID
+        OR FECHA_REGISTRO < SYSDATE - 1;
+
+    INSERT INTO CNT.CNT_AUT_LINE_WRK (
+        RUN_ID,
+        SECUENCIA,
+        CODIGO_MAYOR,
+        MAYOR,
+        CODIGO_AUXILIAR,
+        AUXILIAR,
+        REFERENCIA1,
+        REFERENCIA2,
+        REFERENCIA3,
+        DESCRIPCION,
+        MONTO
+    )
+    SELECT p_RUN_ID,
+           ROWNUM,
+           q.CODIGO_MAYOR,
+           q.NUMERO_MAYOR,
+           q.CODIGO_AUXILIAR,
+           q.SEGMENTO1 || '-' || q.SEGMENTO2 || ' ' || q.DENOMINACION,
+           SUBSTR(q.NUMERO_COMPROMISO, 1, 20),
+           TO_CHAR(q.FECHA_COMPROMISO, 'DD/MM/RRRR'),
+           NULL,
+           SUBSTRB('(' || q.TIPO_COMPROMISO || ') ' || q.MOTIVO, 1, 200),
+           CASE
+               WHEN p_ORIGEN_ID = CNT.CNT_DESCRIPTIVA_ID('COMP', 'ODC')
+                    THEN CASE WHEN q.COLUMNA_BALANCE = 'H' THEN -ABS(NVL(q.MONTO_COMPROMISO, 0)) ELSE ABS(NVL(q.MONTO_COMPROMISO, 0)) END
+               ELSE CASE WHEN q.COLUMNA_BALANCE = 'D' THEN -ABS(NVL(q.MONTO_COMPROMISO, 0)) ELSE ABS(NVL(q.MONTO_COMPROMISO, 0)) END
+           END
+      FROM (
+            SELECT CM.COLUMNA_BALANCE,
+                   AC.CODIGO_COMPROMISO,
+                   AC.NUMERO_COMPROMISO,
+                   AC.FECHA_COMPROMISO,
+                   AP.NOMBRE_PROVEEDOR,
+                   SUM(APC.MONTO) MONTO_COMPROMISO,
+                   CASE WHEN CM.COLUMNA_BALANCE = 'H' THEN NVL(CA.CODIGO_MAYOR, 9) ELSE NVL(CA.CODIGO_MAYOR, 3) END CODIGO_MAYOR,
+                   CA.CODIGO_AUXILIAR,
+                   CASE WHEN CM.COLUMNA_BALANCE = 'H' THEN NVL(CM.NUMERO_MAYOR, '300') ELSE NVL(CM.NUMERO_MAYOR, '103') END NUMERO_MAYOR,
+                   NVL(CA.SEGMENTO1, '001') SEGMENTO1,
+                   NVL(CA.SEGMENTO2, '000') SEGMENTO2,
+                   NVL(CA.DENOMINACION, '999') DENOMINACION,
+                   RTRIM(AC.MOTIVO) MOTIVO,
+                   'CP' TIPO_COMPROMISO
+              FROM PRE.PRE_COMPROMISOS AC,
+                   PRE.PRE_DETALLE_COMPROMISOS PDC,
+                   PRE.PRE_PUC_COMPROMISOS APC,
+                   ADM.ADM_PROVEEDORES AP,
+                   PRE.PRE_V_SALDOS PVS,
+                   CNT.CNT_MAYORES CM,
+                   CNT.CNT_AUXILIARES CA
+             WHERE AC.CODIGO_PRESUPUESTO = p_CODIGO_PRESUPUESTO
+               AND AC.CODIGO_EMPRESA = p_CODIGO_EMPRESA
+               AND AC.CODIGO_COMPROMISO = PDC.CODIGO_COMPROMISO
+               AND PDC.CODIGO_DETALLE_COMPROMISO = APC.CODIGO_DETALLE_COMPROMISO
+               AND AP.CODIGO_PROVEEDOR = AC.CODIGO_PROVEEDOR
+               AND PVS.CODIGO_SALDO = APC.CODIGO_SALDO
+               AND CM.COLUMNA_BALANCE IN ('D', 'H')
+               AND CM.CODIGO_MAYOR = CA.CODIGO_MAYOR
+               AND CA.CODIGO_PROVEEDOR = AC.CODIGO_PROVEEDOR
+               AND AC.CODIGO_PROVEEDOR NOT IN (8127, 8128)
+               AND (
+                    (p_ORIGEN_ID = CNT.CNT_DESCRIPTIVA_ID('COMP', 'ODC')
+                     AND AC.STATUS <> 'AN'
+                     AND AC.FECHA_COMPROMISO >= p_FECHA_DESDE
+                     AND AC.FECHA_COMPROMISO < p_FECHA_HASTA + 1)
+                    OR
+                    (p_ORIGEN_ID = CNT.CNT_DESCRIPTIVA_ID('ANCOMP', 'ODC')
+                     AND AC.STATUS = 'AN'
+                     AND TRUNC(AC.FECHA_UPD) >= p_FECHA_DESDE
+                     AND TRUNC(AC.FECHA_UPD) <= p_FECHA_HASTA)
+               )
+             GROUP BY CM.COLUMNA_BALANCE,
+                      AC.CODIGO_COMPROMISO,
+                      AC.NUMERO_COMPROMISO,
+                      AC.FECHA_COMPROMISO,
+                      AP.NOMBRE_PROVEEDOR,
+                      CASE WHEN CM.COLUMNA_BALANCE = 'H' THEN NVL(CA.CODIGO_MAYOR, 9) ELSE NVL(CA.CODIGO_MAYOR, 3) END,
+                      CA.CODIGO_AUXILIAR,
+                      CASE WHEN CM.COLUMNA_BALANCE = 'H' THEN NVL(CM.NUMERO_MAYOR, '300') ELSE NVL(CM.NUMERO_MAYOR, '103') END,
+                      NVL(CA.SEGMENTO1, '001'),
+                      NVL(CA.SEGMENTO2, '000'),
+                      NVL(CA.DENOMINACION, '999'),
+                      RTRIM(AC.MOTIVO)
+        ) q
+     WHERE NVL(q.MONTO_COMPROMISO, 0) <> 0
+     ORDER BY q.TIPO_COMPROMISO, q.CODIGO_COMPROMISO, q.COLUMNA_BALANCE DESC;
+
+    p_Message := 'Success';
+EXCEPTION
+    WHEN OTHERS THEN
+        DELETE FROM CNT.CNT_AUT_LINE_WRK
+         WHERE RUN_ID = p_RUN_ID;
         p_Message := SQLERRM;
 END;
 /
@@ -601,6 +737,7 @@ CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUT_PREV (
 ) AS
     v_dummy              NUMBER;
     v_codigo_presupuesto NUMBER;
+    v_run_id             VARCHAR2(32) := RAWTOHEX(SYS_GUID());
 
     PROCEDURE open_empty_result IS
     BEGIN
@@ -613,7 +750,7 @@ CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUT_PREV (
                    CAST(NULL AS VARCHAR2(20)) REFERENCIA1,
                    CAST(NULL AS VARCHAR2(20)) REFERENCIA2,
                    CAST(NULL AS VARCHAR2(20)) REFERENCIA3,
-                   CAST(NULL AS VARCHAR2(200)) DESCRIPCION,
+                   CAST(NULL AS VARCHAR2(1000)) DESCRIPCION,
                    CAST(NULL AS NUMBER) MONTO
               FROM DUAL
              WHERE 1 = 0;
@@ -643,14 +780,14 @@ BEGIN
       FROM CNT.CNT_DESCRIPTIVAS
      WHERE DESCRIPCION_ID = p_TIPO_COMPROBANTE_ID
        AND TITULO_ID = 5
-       AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+       AND (CODIGO_EMPRESA IS NULL OR CODIGO_EMPRESA = p_CODIGO_EMPRESA);
 
     SELECT 1
       INTO v_dummy
       FROM CNT.CNT_DESCRIPTIVAS
      WHERE DESCRIPCION_ID = p_ORIGEN_ID
        AND TITULO_ID = 1
-       AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+       AND (CODIGO_EMPRESA IS NULL OR CODIGO_EMPRESA = p_CODIGO_EMPRESA);
 
     BEGIN
         SELECT CODIGO_PRESUPUESTO
@@ -664,7 +801,9 @@ BEGIN
 
     IF p_ORIGEN_ID IN (
         CNT.CNT_DESCRIPTIVA_ID('ODPAUT', 'ODC'),
-        CNT.CNT_DESCRIPTIVA_ID('ANODPAUT', 'ODC')
+        CNT.CNT_DESCRIPTIVA_ID('ANODPAUT', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('COMP', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('ANCOMP', 'ODC')
     ) THEN
         IF v_codigo_presupuesto IS NULL THEN
             open_empty_result;
@@ -672,14 +811,30 @@ BEGIN
             RETURN;
         END IF;
 
-        CNT.SP_CNT_AUT_BUILD_OP(
-            p_ORIGEN_ID,
-            p_FECHA_DESDE,
-            p_FECHA_HASTA,
-            v_codigo_presupuesto,
-            p_CODIGO_EMPRESA,
-            p_Message
-        );
+        IF p_ORIGEN_ID IN (
+            CNT.CNT_DESCRIPTIVA_ID('ODPAUT', 'ODC'),
+            CNT.CNT_DESCRIPTIVA_ID('ANODPAUT', 'ODC')
+        ) THEN
+            CNT.SP_CNT_AUT_BUILD_OP(
+                v_run_id,
+                p_ORIGEN_ID,
+                p_FECHA_DESDE,
+                p_FECHA_HASTA,
+                v_codigo_presupuesto,
+                p_CODIGO_EMPRESA,
+                p_Message
+            );
+        ELSE
+            CNT.SP_CNT_AUT_BUILD_COMP(
+                v_run_id,
+                p_ORIGEN_ID,
+                p_FECHA_DESDE,
+                p_FECHA_HASTA,
+                v_codigo_presupuesto,
+                p_CODIGO_EMPRESA,
+                p_Message
+            );
+        END IF;
 
         IF NVL(p_Message, 'Error') <> 'Success' THEN
             open_empty_result;
@@ -697,10 +852,24 @@ BEGIN
                    REFERENCIA3,
                    DESCRIPCION,
                    MONTO
-              FROM CNT.CNT_AUT_LINE_TMP
+              FROM CNT.CNT_AUT_LINE_WRK
+             WHERE RUN_ID = v_run_id
              ORDER BY SECUENCIA;
 
         p_Message := 'Success';
+        RETURN;
+    END IF;
+
+    IF p_ORIGEN_ID IN (
+        CNT.CNT_DESCRIPTIVA_ID('CHEAUT', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('CHEPROAUT', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('CHERETAUT', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('CHERETDAUT', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('RETENFTDT', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('ANCHEAUT', 'ODC')
+    ) THEN
+        open_empty_result;
+        p_Message := 'El origen de cheques esta definido en Load Data, pero requiere migrar la logica PAGOS_RETENCIONES/cheques antes de generar automaticamente.';
         RETURN;
     END IF;
 
@@ -733,7 +902,7 @@ BEGIN
                            SUBSTR(x.NUMERO_COMPROMISO, 1, 20) REFERENCIA1,
                            TO_CHAR(x.FECHA_COMPROMISO, 'DD/MM/RRRR') REFERENCIA2,
                            NULL REFERENCIA3,
-                           SUBSTR('(' || x.TIPO_COMPROMISO || ') ' || x.MOTIVO, 1, 200) DESCRIPCION,
+                           SUBSTRB('(' || x.TIPO_COMPROMISO || ') ' || x.MOTIVO, 1, 200) DESCRIPCION,
                            CASE
                                WHEN p_ORIGEN_ID = CNT.CNT_DESCRIPTIVA_ID('COMPORDCOM', 'ODC') AND x.CODIGO_MAYOR = 9 THEN -ABS(NVL(x.MONTO_COMPROMISO, 0))
                                WHEN p_ORIGEN_ID = CNT.CNT_DESCRIPTIVA_ID('COMPORDCOM', 'ODC') THEN ABS(NVL(x.MONTO_COMPROMISO, 0))
@@ -886,7 +1055,7 @@ BEGIN
                            SUBSTR(x.NUMERO_COMPROMISO, 1, 20) REFERENCIA1,
                            TO_CHAR(x.FECHA_COMPROMISO, 'DD/MM/RRRR') REFERENCIA2,
                            NULL REFERENCIA3,
-                           SUBSTR('(' || x.TIPO_COMPROMISO || ') ' || x.MOTIVO, 1, 200) DESCRIPCION,
+                           SUBSTRB('(' || x.TIPO_COMPROMISO || ') ' || x.MOTIVO, 1, 200) DESCRIPCION,
                            CASE
                                WHEN p_ORIGEN_ID = CNT.CNT_DESCRIPTIVA_ID('COMPCONTOB', 'ODC') AND x.CODIGO_MAYOR = 9 THEN -ABS(NVL(x.MONTO_COMPROMISO, 0))
                                WHEN p_ORIGEN_ID = CNT.CNT_DESCRIPTIVA_ID('COMPCONTOB', 'ODC') THEN ABS(NVL(x.MONTO_COMPROMISO, 0))
@@ -908,7 +1077,7 @@ BEGIN
                                    NVL(CA.DENOMINACION, '999') DENOMINACION,
                                    NVL(CM.NUMERO_MAYOR, '300') NUMERO_MAYOR,
                                    NULL STATUS,
-                                   SUBSTR(A.OBRA, 1, 200) MOTIVO,
+                                   SUBSTRB(A.OBRA, 1, 200) MOTIVO,
                                    'CO' TIPO_COMPROMISO
                               FROM ADM.ADM_CONTRATOS A,
                                    ADM.ADM_PROVEEDORES B,
@@ -951,7 +1120,7 @@ BEGIN
                                    NVL(CA.DENOMINACION, '999') DENOMINACION,
                                    NVL(CM.NUMERO_MAYOR, '103') NUMERO_MAYOR,
                                    NULL STATUS,
-                                   SUBSTR(A.OBRA, 1, 200) MOTIVO,
+                                   SUBSTRB(A.OBRA, 1, 200) MOTIVO,
                                    'CO' TIPO_COMPROMISO
                               FROM ADM.ADM_CONTRATOS A,
                                    ADM.ADM_PROVEEDORES B,
@@ -1024,9 +1193,13 @@ CREATE OR REPLACE PROCEDURE CNT.SP_CNT_AUT_CONF (
     v_codigo_detalle     NUMBER;
     v_det_message        VARCHAR2(4000);
     v_cmp_message        VARCHAR2(4000);
+    v_run_id             VARCHAR2(32) := RAWTOHEX(SYS_GUID());
 
     PROCEDURE cleanup_comprobante IS
     BEGIN
+        DELETE FROM CNT.CNT_AUT_LINE_WRK
+         WHERE RUN_ID = v_run_id;
+
         IF NVL(p_CODIGO_COMPROBANTE, 0) > 0 THEN
             DELETE FROM CNT.CNT_DETALLE_COMPROBANTE
              WHERE CODIGO_COMPROBANTE = p_CODIGO_COMPROBANTE
@@ -1059,6 +1232,12 @@ BEGIN
         RETURN;
     END IF;
 
+    IF p_FECHA_COMPROBANTE < TRUNC(p_FECHA_DESDE)
+       OR p_FECHA_COMPROBANTE >= TRUNC(p_FECHA_HASTA) + 1 THEN
+        p_Message := 'La fecha del comprobante debe estar entre fecha desde y fecha hasta.';
+        RETURN;
+    END IF;
+
     SELECT 1
       INTO v_dummy
       FROM CNT.CNT_PERIODOS
@@ -1072,14 +1251,14 @@ BEGIN
       FROM CNT.CNT_DESCRIPTIVAS
      WHERE DESCRIPCION_ID = p_TIPO_COMPROBANTE_ID
        AND TITULO_ID = 5
-       AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+       AND (CODIGO_EMPRESA IS NULL OR CODIGO_EMPRESA = p_CODIGO_EMPRESA);
 
     SELECT 1
       INTO v_dummy
       FROM CNT.CNT_DESCRIPTIVAS
      WHERE DESCRIPCION_ID = p_ORIGEN_ID
        AND TITULO_ID = 1
-       AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
+       AND (CODIGO_EMPRESA IS NULL OR CODIGO_EMPRESA = p_CODIGO_EMPRESA);
 
     BEGIN
         SELECT CODIGO_PRESUPUESTO
@@ -1093,21 +1272,39 @@ BEGIN
 
     IF p_ORIGEN_ID IN (
         CNT.CNT_DESCRIPTIVA_ID('ODPAUT', 'ODC'),
-        CNT.CNT_DESCRIPTIVA_ID('ANODPAUT', 'ODC')
+        CNT.CNT_DESCRIPTIVA_ID('ANODPAUT', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('COMP', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('ANCOMP', 'ODC')
     ) THEN
         IF v_codigo_presupuesto IS NULL THEN
             p_Message := 'No existe presupuesto vigente para el rango indicado.';
             RETURN;
         END IF;
 
-        CNT.SP_CNT_AUT_BUILD_OP(
-            p_ORIGEN_ID,
-            p_FECHA_DESDE,
-            p_FECHA_HASTA,
-            v_codigo_presupuesto,
-            p_CODIGO_EMPRESA,
-            p_Message
-        );
+        IF p_ORIGEN_ID IN (
+            CNT.CNT_DESCRIPTIVA_ID('ODPAUT', 'ODC'),
+            CNT.CNT_DESCRIPTIVA_ID('ANODPAUT', 'ODC')
+        ) THEN
+            CNT.SP_CNT_AUT_BUILD_OP(
+                v_run_id,
+                p_ORIGEN_ID,
+                p_FECHA_DESDE,
+                p_FECHA_HASTA,
+                v_codigo_presupuesto,
+                p_CODIGO_EMPRESA,
+                p_Message
+            );
+        ELSE
+            CNT.SP_CNT_AUT_BUILD_COMP(
+                v_run_id,
+                p_ORIGEN_ID,
+                p_FECHA_DESDE,
+                p_FECHA_HASTA,
+                v_codigo_presupuesto,
+                p_CODIGO_EMPRESA,
+                p_Message
+            );
+        END IF;
 
         IF NVL(p_Message, 'Error') <> 'Success' THEN
             RETURN;
@@ -1144,7 +1341,8 @@ BEGIN
                    REFERENCIA3,
                    DESCRIPCION,
                    MONTO
-              FROM CNT.CNT_AUT_LINE_TMP
+              FROM CNT.CNT_AUT_LINE_WRK
+             WHERE RUN_ID = v_run_id
              ORDER BY SECUENCIA
         ) LOOP
             CNT.SP_CNT_DET_INS(
@@ -1159,7 +1357,8 @@ BEGIN
                 p_USUARIO_ID,
                 p_CODIGO_EMPRESA,
                 v_codigo_detalle,
-                v_det_message
+                v_det_message,
+                1
             );
 
             IF NVL(v_det_message, 'Error') <> 'Success' THEN
@@ -1172,6 +1371,9 @@ BEGIN
             p_TOTAL_DEBE := p_TOTAL_DEBE + CASE WHEN line.MONTO < 0 THEN ABS(line.MONTO) ELSE 0 END;
             p_TOTAL_HABER := p_TOTAL_HABER + CASE WHEN line.MONTO > 0 THEN line.MONTO ELSE 0 END;
         END LOOP;
+
+        DELETE FROM CNT.CNT_AUT_LINE_WRK
+         WHERE RUN_ID = v_run_id;
 
         IF p_CANTIDAD_LINEAS = 0 THEN
             cleanup_comprobante;
@@ -1197,6 +1399,18 @@ BEGIN
            AND CODIGO_EMPRESA = p_CODIGO_EMPRESA;
 
         p_Message := 'Success';
+        RETURN;
+    END IF;
+
+    IF p_ORIGEN_ID IN (
+        CNT.CNT_DESCRIPTIVA_ID('CHEAUT', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('CHEPROAUT', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('CHERETAUT', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('CHERETDAUT', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('RETENFTDT', 'ODC'),
+        CNT.CNT_DESCRIPTIVA_ID('ANCHEAUT', 'ODC')
+    ) THEN
+        p_Message := 'El origen de cheques esta definido en Load Data, pero requiere migrar la logica PAGOS_RETENCIONES/cheques antes de generar automaticamente.';
         RETURN;
     END IF;
 
@@ -1246,7 +1460,7 @@ BEGIN
                            SUBSTR(x.NUMERO_COMPROMISO, 1, 20) REFERENCIA1,
                            TO_CHAR(x.FECHA_COMPROMISO, 'DD/MM/RRRR') REFERENCIA2,
                            NULL REFERENCIA3,
-                           SUBSTR('(' || x.TIPO_COMPROMISO || ') ' || x.MOTIVO, 1, 200) DESCRIPCION,
+                           SUBSTRB('(' || x.TIPO_COMPROMISO || ') ' || x.MOTIVO, 1, 200) DESCRIPCION,
                            CASE
                                WHEN p_ORIGEN_ID = CNT.CNT_DESCRIPTIVA_ID('COMPORDCOM', 'ODC') AND x.CODIGO_MAYOR = 9 THEN -ABS(NVL(x.MONTO_COMPROMISO, 0))
                                WHEN p_ORIGEN_ID = CNT.CNT_DESCRIPTIVA_ID('COMPORDCOM', 'ODC') THEN ABS(NVL(x.MONTO_COMPROMISO, 0))
@@ -1381,7 +1595,8 @@ BEGIN
                 p_USUARIO_ID,
                 p_CODIGO_EMPRESA,
                 v_codigo_detalle,
-                v_det_message
+                v_det_message,
+                1
             );
 
             IF NVL(v_det_message, 'Error') <> 'Success' THEN
@@ -1468,7 +1683,7 @@ BEGIN
                            SUBSTR(x.NUMERO_COMPROMISO, 1, 20) REFERENCIA1,
                            TO_CHAR(x.FECHA_COMPROMISO, 'DD/MM/RRRR') REFERENCIA2,
                            NULL REFERENCIA3,
-                           SUBSTR('(' || x.TIPO_COMPROMISO || ') ' || x.MOTIVO, 1, 200) DESCRIPCION,
+                           SUBSTRB('(' || x.TIPO_COMPROMISO || ') ' || x.MOTIVO, 1, 200) DESCRIPCION,
                            CASE
                                WHEN p_ORIGEN_ID = CNT.CNT_DESCRIPTIVA_ID('COMPCONTOB', 'ODC') AND x.CODIGO_MAYOR = 9 THEN -ABS(NVL(x.MONTO_COMPROMISO, 0))
                                WHEN p_ORIGEN_ID = CNT.CNT_DESCRIPTIVA_ID('COMPCONTOB', 'ODC') THEN ABS(NVL(x.MONTO_COMPROMISO, 0))
@@ -1493,7 +1708,7 @@ BEGIN
                                    NVL(CA.DENOMINACION, '999') DENOMINACION,
                                    NVL(CM.NUMERO_MAYOR, '300') NUMERO_MAYOR,
                                    NULL STATUS,
-                                   SUBSTR(A.OBRA, 1, 200) MOTIVO,
+                                   SUBSTRB(A.OBRA, 1, 200) MOTIVO,
                                    'CO' TIPO_COMPROMISO
                               FROM ADM.ADM_CONTRATOS A,
                                    ADM.ADM_PROVEEDORES B,
@@ -1536,7 +1751,7 @@ BEGIN
                                    NVL(CA.DENOMINACION, '999') DENOMINACION,
                                    NVL(CM.NUMERO_MAYOR, '103') NUMERO_MAYOR,
                                    NULL STATUS,
-                                   SUBSTR(A.OBRA, 1, 200) MOTIVO,
+                                   SUBSTRB(A.OBRA, 1, 200) MOTIVO,
                                    'CO' TIPO_COMPROMISO
                               FROM ADM.ADM_CONTRATOS A,
                                    ADM.ADM_PROVEEDORES B,
@@ -1583,7 +1798,8 @@ BEGIN
                 p_USUARIO_ID,
                 p_CODIGO_EMPRESA,
                 v_codigo_detalle,
-                v_det_message
+                v_det_message,
+                1
             );
 
             IF NVL(v_det_message, 'Error') <> 'Success' THEN
@@ -1640,10 +1856,10 @@ CREATE OR REPLACE PROCEDURE CNT.SP_CNT_CMP_GET_ALL (
     p_PageNumber          IN NUMBER,
     p_SearchText          IN VARCHAR2,
     p_CODIGO_PERIODO      IN NUMBER,
-    p_TIPO_COMPROBANTE_ID IN NUMBER,
     p_ORIGEN_ID           IN NUMBER,
     p_FECHA_DESDE         IN DATE,
     p_FECHA_HASTA         IN DATE,
+    p_ES_AUTOMATICO       IN NUMBER,
     p_CODIGO_EMPRESA      IN NUMBER,
     p_ResultSet           OUT SYS_REFCURSOR,
     p_Message             OUT VARCHAR2,
@@ -1666,10 +1882,12 @@ BEGIN
       LEFT JOIN CNT.CNT_DESCRIPTIVAS o ON o.DESCRIPCION_ID = c.ORIGEN_ID
      WHERE c.CODIGO_EMPRESA = p_CODIGO_EMPRESA
        AND (p_CODIGO_PERIODO IS NULL OR c.CODIGO_PERIODO = p_CODIGO_PERIODO)
-       AND (p_TIPO_COMPROBANTE_ID IS NULL OR c.TIPO_COMPROBANTE_ID = p_TIPO_COMPROBANTE_ID)
        AND (p_ORIGEN_ID IS NULL OR c.ORIGEN_ID = p_ORIGEN_ID)
        AND (p_FECHA_DESDE IS NULL OR c.FECHA_COMPROBANTE >= p_FECHA_DESDE)
        AND (p_FECHA_HASTA IS NULL OR c.FECHA_COMPROBANTE < p_FECHA_HASTA + 1)
+       AND (p_ES_AUTOMATICO IS NULL
+            OR (p_ES_AUTOMATICO = 1 AND NVL(c.EXTRA1, ' ') = 'AUTOMATICO')
+            OR (p_ES_AUTOMATICO = 0 AND NVL(c.EXTRA1, ' ') <> 'AUTOMATICO'))
        AND (p_SearchText IS NULL
             OR UPPER(c.NUMERO_COMPROBANTE) LIKE '%' || UPPER(p_SearchText) || '%'
             OR UPPER(c.OBSERVACION) LIKE '%' || UPPER(p_SearchText) || '%'
@@ -1711,10 +1929,12 @@ BEGIN
                           ) d ON d.CODIGO_COMPROBANTE = c.CODIGO_COMPROBANTE
                          WHERE c.CODIGO_EMPRESA = p_CODIGO_EMPRESA
                            AND (p_CODIGO_PERIODO IS NULL OR c.CODIGO_PERIODO = p_CODIGO_PERIODO)
-                           AND (p_TIPO_COMPROBANTE_ID IS NULL OR c.TIPO_COMPROBANTE_ID = p_TIPO_COMPROBANTE_ID)
                            AND (p_ORIGEN_ID IS NULL OR c.ORIGEN_ID = p_ORIGEN_ID)
                            AND (p_FECHA_DESDE IS NULL OR c.FECHA_COMPROBANTE >= p_FECHA_DESDE)
                            AND (p_FECHA_HASTA IS NULL OR c.FECHA_COMPROBANTE < p_FECHA_HASTA + 1)
+                           AND (p_ES_AUTOMATICO IS NULL
+                                OR (p_ES_AUTOMATICO = 1 AND NVL(c.EXTRA1, ' ') = 'AUTOMATICO')
+                                OR (p_ES_AUTOMATICO = 0 AND NVL(c.EXTRA1, ' ') <> 'AUTOMATICO'))
                            AND (p_SearchText IS NULL
                                 OR UPPER(c.NUMERO_COMPROBANTE) LIKE '%' || UPPER(p_SearchText) || '%'
                                 OR UPPER(c.OBSERVACION) LIKE '%' || UPPER(p_SearchText) || '%'
@@ -1989,7 +2209,8 @@ CREATE OR REPLACE PROCEDURE CNT.SP_CNT_CMP_UPD (
     p_USUARIO_ID          IN NUMBER,
     p_CODIGO_EMPRESA      IN NUMBER,
     p_CODIGO_OUT          OUT NUMBER,
-    p_Message             OUT VARCHAR2
+    p_Message             OUT VARCHAR2,
+    p_PERMITIR_AUTOMATICO IN NUMBER DEFAULT 0
 ) AS
     v_dummy NUMBER;
 BEGIN
@@ -2128,7 +2349,7 @@ BEGIN
         USUARIO_INS, FECHA_INS, CODIGO_EMPRESA
     ) VALUES (
         p_CODIGO_OUT, p_CODIGO_COMPROBANTE, p_CODIGO_MAYOR, p_CODIGO_AUXILIAR,
-        p_REFERENCIA1, p_REFERENCIA2, p_REFERENCIA3, p_DESCRIPCION, p_MONTO,
+        p_REFERENCIA1, p_REFERENCIA2, p_REFERENCIA3, SUBSTRB(p_DESCRIPCION, 1, 200), p_MONTO,
         p_USUARIO_ID, SYSDATE, p_CODIGO_EMPRESA
     );
 
@@ -2299,7 +2520,7 @@ BEGIN
            REFERENCIA1 = p_REFERENCIA1,
            REFERENCIA2 = p_REFERENCIA2,
            REFERENCIA3 = p_REFERENCIA3,
-           DESCRIPCION = p_DESCRIPCION,
+           DESCRIPCION = SUBSTRB(p_DESCRIPCION, 1, 200),
            MONTO = p_MONTO,
            USUARIO_UPD = p_USUARIO_ID,
            FECHA_UPD = SYSDATE

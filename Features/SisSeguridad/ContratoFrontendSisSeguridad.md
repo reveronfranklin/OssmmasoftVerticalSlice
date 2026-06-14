@@ -35,6 +35,31 @@ El instalador crea:
 
 Tambien carga el seed inicial del modulo Soporte.
 Tambien carga menus/roles base de `CNT`, `RH`, `PRE` y `ADM` desde la estructura legacy conocida.
+Tambien carga un catalogo idempotente de rutas detectadas en `NextOssmasoft/src/pages/apps` mediante `08_SEED_APP_ROUTES.sql`; las rutas tecnicas/dinamicas se registran inactivas para no mostrarlas como opciones visibles del menu.
+
+El seeder de rutas crea roles genericos de menu por modulo para asignacion rapida a usuarios:
+
+- `SIS_MENU`
+- `SOP_MENU`
+- `CNT_MENU`
+- `RH_MENU`
+- `PRE_MENU`
+- `ADM_MENU`
+- `BM_MENU`
+- `APP_MENU`
+
+Estos roles asocian los menus activos del modulo. Los permisos operativos sensibles siguen dependiendo de roles especificos como `SOPORTE_ADMIN`, `CNT_ADMIN` o excepciones de permisos.
+
+Para montaje productivo del modulo Soporte usar ademas el runbook:
+
+```text
+Features/SisSeguridad/RUNBOOK_PROD_SOPORTE.md
+```
+
+Scripts complementarios:
+
+- `Features/SisSeguridad/Sql/06_VAL_SOP_SEC.sql`: valida tablas, seed de Soporte, roles y caches `JSON_MENU`.
+- `Features/SisSeguridad/Sql/07_BOOT_SOP_ADMIN.sql`: asigna `SOPORTE_ADMIN` inicial y crea cache legacy `JSON_MENU` para poder entrar a Seguridad cuando aun no existe administrador.
 
 ## Respaldo y Rollback
 

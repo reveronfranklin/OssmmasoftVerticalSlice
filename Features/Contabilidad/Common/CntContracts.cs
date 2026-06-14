@@ -40,7 +40,7 @@ public record CntClonePlanCuentasCommand(int UsuarioId, int EmpresaOrigen);
 public record CntPeriodoGetAllQuery(int UsuarioId = 0, bool SoloAbiertos = false, DateTime? Fecha = null);
 public record CntMayorSearchQuery(int UsuarioId = 0, string SearchText = "", int PageSize = 20);
 public record CntAuxiliarSearchQuery(int UsuarioId = 0, string SearchText = "", int? CodigoMayor = null, int PageSize = 20);
-public record CntComprobanteGetAllQuery(int UsuarioId, int PageSize = 10, int PageNumber = 1, string SearchText = "", int? CodigoPeriodo = null, int? TipoComprobanteId = null, int? OrigenId = null, DateTime? FechaDesde = null, DateTime? FechaHasta = null);
+public record CntComprobanteGetAllQuery(int UsuarioId, int PageSize = 10, int PageNumber = 1, string SearchText = "", int? CodigoPeriodo = null, int? OrigenId = null, DateTime? FechaDesde = null, DateTime? FechaHasta = null, bool? EsAutomatico = null);
 public record CntComprobanteGetByIdQuery(int CodigoComprobante, int UsuarioId);
 public record CntComprobantePrintQuery(int CodigoComprobante, int UsuarioId);
 public record CntComprobanteNumberQuery(int UsuarioId, int CodigoPeriodo, int TipoComprobanteId, DateTime FechaComprobante);
@@ -54,7 +54,7 @@ public record CntDetalleAddCommand(int CodigoComprobante, int UsuarioId, int Cod
 public record CntDetalleUpdateCommand(int CodigoDetalleComprobante, int UsuarioId, int CodigoMayor, int CodigoAuxiliar, string? Referencia1, string? Referencia2, string? Referencia3, string? Descripcion, decimal Monto);
 public record CntDetalleDeleteCommand(int CodigoDetalleComprobante, int UsuarioId);
 public record CntAutomaticPreviewCommand(int UsuarioId, int CodigoPeriodo, int TipoComprobanteId, int OrigenId, DateTime FechaDesde, DateTime FechaHasta);
-public record CntAutomaticConfirmCommand(int UsuarioId, int CodigoPeriodo, int TipoComprobanteId, int OrigenId, DateTime FechaDesde, DateTime FechaHasta, DateTime FechaComprobante, string? Observacion);
+public record CntAutomaticConfirmCommand(int UsuarioId, int CodigoPeriodo, int TipoComprobanteId, int OrigenId, DateTime FechaDesde, DateTime FechaHasta, DateTime? FechaComprobante, string? Observacion);
 public record CntMayorAnaliticoQuery(int UsuarioId, int PageSize = 10, int PageNumber = 1, string SearchText = "", int? CodigoPeriodo = null, int? CodigoMayor = null, int? CodigoAuxiliar = null, DateTime? FechaDesde = null, DateTime? FechaHasta = null);
 public record CntMovimientoAuxiliarQuery(int UsuarioId, int PageSize = 10, int PageNumber = 1, string SearchText = "", int? CodigoPeriodo = null, int? CodigoAuxiliar = null, DateTime? FechaDesde = null, DateTime? FechaHasta = null);
 public record CntPermissionQuery(int UsuarioId, string Permission);
@@ -141,13 +141,26 @@ public record CntAutomaticPreviewResponse(
     decimal Diferencia,
     List<CntAutomaticLineResponse> Lineas);
 
-public record CntAutomaticConfirmResponse(
+public record CntAutomaticDailyConfirmResponse(
+    DateTime FechaComprobante,
     int CodigoComprobante,
     string NumeroComprobante,
     int CantidadLineas,
     decimal TotalDebe,
     decimal TotalHaber,
-    decimal Diferencia);
+    decimal Diferencia,
+    string Estado,
+    string Mensaje);
+
+public record CntAutomaticConfirmResponse(
+    int CantidadComprobantes,
+    int CantidadDiasSinLineas,
+    int CantidadErrores,
+    int TotalLineas,
+    decimal TotalDebe,
+    decimal TotalHaber,
+    decimal Diferencia,
+    List<CntAutomaticDailyConfirmResponse> Comprobantes);
 
 public record CntMayorAnaliticoResponse(
     int? CodigoComprobante,
