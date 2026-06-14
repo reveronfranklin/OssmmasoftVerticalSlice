@@ -222,7 +222,11 @@ internal static class SupportSecurity
             refreshCmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
 
             var refreshResult = await refreshCmd.ExecuteScalarAsync();
-            return SupportDb.ToInt32(refreshResult);
+            var refreshUserId = SupportDb.ToInt32(refreshResult);
+            if (refreshUserId > 0)
+            {
+                return refreshUserId;
+            }
         }
 
         if (string.IsNullOrWhiteSpace(login))
