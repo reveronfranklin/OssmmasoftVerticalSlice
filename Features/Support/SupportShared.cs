@@ -192,6 +192,23 @@ internal static class SupportSecurity
     public const string DashboardView = "soporte.dashboard.ver";
     public const string SupportUsersConfig = "soporte.usuarios.configurar";
 
+    private static readonly string[] AllSupportPermissions =
+    [
+        TicketCreate,
+        TicketViewOwn,
+        TicketViewAssigned,
+        TicketViewUnassigned,
+        TicketViewAll,
+        TicketAssign,
+        TicketStatus,
+        TicketClose,
+        CommentCreate,
+        CommentInternal,
+        CatalogAdmin,
+        DashboardView,
+        SupportUsersConfig
+    ];
+
     public static string GetAuthenticatedLogin(ClaimsPrincipal user)
     {
         return user.FindFirstValue(ClaimTypes.Name)
@@ -387,8 +404,16 @@ internal static class SupportSecurity
 
     public static async Task<SupportPermissionsResponse> GetPermissionsAsync(OracleConnection connection, int usuarioId, int empresa)
     {
+        if (await IsSuperUserAsync(connection, usuarioId, empresa))
+        {
+            return new SupportPermissionsResponse(
+                usuarioId,
+                "SOPORTE_ADMIN",
+                AllSupportPermissions.OrderBy(x => x).ToList());
+        }
+
         using var cmd = new OracleCommand(@"
-            SELECT r.JSON_MENU
+            SELECT DBMS_LOB.SUBSTR(r.JSON_MENU, 4000, 1) JSON_MENU
              FROM SIS.OSS_USUARIO_ROL r
              JOIN SIS.SIS_USUARIOS u ON u.CODIGO_USUARIO = r.CODIGO_USUARIO
              WHERE r.CODIGO_USUARIO = :p_USUARIO_ID
@@ -412,6 +437,25 @@ internal static class SupportSecurity
 
         var list = permissions.OrderBy(x => x).ToList();
         return new SupportPermissionsResponse(usuarioId, ResolvePerfil(list), list);
+    }
+
+    private static async Task<bool> IsSuperUserAsync(OracleConnection connection, int usuarioId, int empresa)
+    {
+        using var cmd = new OracleCommand(@"
+            SELECT NVL(IS_SUPERUSER, 0)
+              FROM SIS.SIS_USUARIOS
+             WHERE CODIGO_USUARIO = :p_USUARIO_ID
+               AND CODIGO_EMPRESA = :p_CODIGO_EMPRESA
+               AND NVL(STATUS, '1') IN ('1', 'A')
+               AND ROWNUM = 1", connection)
+        {
+            BindByName = true
+        };
+
+        cmd.Parameters.Add("p_USUARIO_ID", OracleDbType.Int32).Value = usuarioId;
+        cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
+
+        return SupportDb.ToInt32(await cmd.ExecuteScalarAsync()) == 1;
     }
 
     public static bool HasAny(SupportPermissionsResponse response, params string[] permissions)
@@ -513,12 +557,22 @@ internal static class SupportSecurity
             return string.Empty;
         }
 
-        if (reader is OracleDataReader oracleReader)
+        var value = reader.GetValue(ordinal);
+        if (value is OracleString oracleString)
         {
-            using OracleClob clob = oracleReader.GetOracleClob(ordinal);
-            return clob.IsNull ? string.Empty : clob.Value;
+            return oracleString.IsNull ? string.Empty : oracleString.Value;
         }
 
-        return reader.GetValue(ordinal).ToString() ?? string.Empty;
+        if (value is string stringValue)
+        {
+            return stringValue;
+        }
+
+        if (value is OracleClob oracleClob)
+        {
+            return oracleClob.IsNull ? string.Empty : oracleClob.Value;
+        }
+
+        return value.ToString() ?? string.Empty;
     }
 }

@@ -40,11 +40,67 @@ public class SisUsuariosController(ConnectionDB connectionDB, IConfiguration con
             return Ok(new ResultDto<List<SisUsuarioResponse>>(null!) { IsValid = false, Message = access.Message });
         }
 
+        return Ok(await ExecuteGetAllAsync(value));
+    }
+
+    private async Task<ResultDto<List<SisUsuarioResponse>>> ExecuteGetAllAsync(SisUsuarioGetAllQuery value)
+    {
+        var primaryError = string.Empty;
+
+        try
+        {
+            return await ExecuteGetAllWithTotalsAsync(value);
+        }
+        catch (Exception ex)
+        {
+            primaryError = ex.Message;
+        }
+
+        try
+        {
+            var fallback = await ExecuteListAsync("SIS.SP_SIS_USR_GET_ALL", value);
+            if (fallback.IsValid)
+            {
+                return fallback;
+            }
+
+            primaryError = string.IsNullOrWhiteSpace(primaryError)
+                ? fallback.Message
+                : $"{primaryError} | {fallback.Message}";
+        }
+        catch (Exception ex)
+        {
+            primaryError = string.IsNullOrWhiteSpace(primaryError)
+                ? ex.Message
+                : $"{primaryError} | {ex.Message}";
+        }
+
+        try
+        {
+            return await ExecuteInlineGetAllAsync(value);
+        }
+        catch (Exception ex)
+        {
+            var message = string.IsNullOrWhiteSpace(primaryError)
+                ? ex.Message
+                : $"{primaryError} | {ex.Message}";
+
+            return new ResultDto<List<SisUsuarioResponse>>(null!)
+            {
+                Data = null,
+                IsValid = false,
+                Message = $"Error técnico al cargar usuarios SIS: {message}"
+            };
+        }
+    }
+
+    private async Task<ResultDto<List<SisUsuarioResponse>>> ExecuteGetAllWithTotalsAsync(SisUsuarioGetAllQuery value)
+    {
         if (!SupportDb.TryGetEmpresa(config, out int empresa, out string errorMessage))
         {
-            return Ok(new ResultDto<List<SisUsuarioResponse>>(null!) { IsValid = false, Message = errorMessage });
+            return new ResultDto<List<SisUsuarioResponse>>(null!) { IsValid = false, Message = errorMessage };
         }
-        //Prueba de actualoizacion
+
         int pageSize = value.PageSize <= 0 ? 10 : value.PageSize;
         int pageNumber = value.PageNumber <= 0 ? 1 : value.PageNumber;
         using var cn = connectionDB.GetSisConnection();
@@ -71,7 +127,7 @@ public class SisUsuariosController(ConnectionDB connectionDB, IConfiguration con
 
         var message = SupportDb.GetMessage(pMessage);
         var isSuccess = SupportDb.IsSuccessMessage(message);
-        return Ok(new ResultDto<List<SisUsuarioResponse>>(list)
+        return new ResultDto<List<SisUsuarioResponse>>(list)
         {
             Data = isSuccess ? list : null,
             IsValid = isSuccess,
@@ -79,7 +135,7 @@ public class SisUsuariosController(ConnectionDB connectionDB, IConfiguration con
             Page = pageNumber,
             TotalPage = SupportDb.GetIntOutput(pTotalPages),
             CantidadRegistros = SupportDb.GetIntOutput(pTotalRecords)
-        });
+        };
     }
 
     [HttpPost("getById")]
@@ -389,6 +445,170 @@ public class SisUsuariosController(ConnectionDB connectionDB, IConfiguration con
         return new ResultDto<List<SisUsuarioResponse>>(list) { Data = isSuccess ? list : null, IsValid = isSuccess, Message = message };
     }
 
+    private async Task<ResultDto<List<SisUsuarioResponse>>> ExecuteInlineGetAllAsync(SisUsuarioGetAllQuery value)
+    {
+        if (!SupportDb.TryGetEmpresa(config, out int empresa, out string errorMessage))
+        {
+            return new ResultDto<List<SisUsuarioResponse>>(null!) { IsValid = false, Message = errorMessage };
+        }
+
+        int pageSize = value.PageSize <= 0 ? 10 : value.PageSize;
+        int pageNumber = value.PageNumber <= 0 ? 1 : value.PageNumber;
+        int fromRow = ((pageNumber - 1) * pageSize) + 1;
+        int toRow = pageNumber * pageSize;
+
+        using var cn = connectionDB.GetSisConnection();
+        await cn.OpenAsync();
+
+        var columns = await GetSisUsuarioColumnsAsync(cn);
+        var hasCodigoEmpresa = columns.Contains("CODIGO_EMPRESA");
+        var empresaPredicate = hasCodigoEmpresa ? "AND u.CODIGO_EMPRESA = :p_CODIGO_EMPRESA" : string.Empty;
+        var codigoEmpresaExpr = hasCodigoEmpresa ? "u.CODIGO_EMPRESA" : ":p_CODIGO_EMPRESA";
+        var usuarioExpr = ColumnExpr(columns, "USUARIO", "u.USUARIO", "''");
+        var loginExpr = ColumnExpr(columns, "LOGIN", "u.LOGIN", "''");
+        var cedulaExpr = ColumnExpr(columns, "CEDULA", "u.CEDULA", "NULL");
+        var statusExpr = ColumnExpr(columns, "STATUS", "NVL(u.STATUS, 'A')", "'A'");
+        var emailExpr = ColumnExpr(columns, "EMAIL", "NVL(u.EMAIL, '')", "''");
+        var recibeEmailExpr = ColumnExpr(columns, "RECIBE_EMAIL", "NVL(u.RECIBE_EMAIL, 1)", "1");
+        var soporteExpr = ColumnExpr(columns, "ES_ANALISTA_SOPORTE", "NVL(u.ES_ANALISTA_SOPORTE, 0)", "0");
+        var cntExpr = ColumnExpr(columns, "ES_ANALISTA_CNT", "NVL(u.ES_ANALISTA_CNT, 0)", "0");
+        var adminCntExpr = ColumnExpr(columns, "ES_ADMIN_CNT", "NVL(u.ES_ADMIN_CNT, 0)", "0");
+        var superuserExpr = ColumnExpr(columns, "IS_SUPERUSER", "NVL(u.IS_SUPERUSER, 0)", "0");
+        var activePredicate = columns.Contains("STATUS")
+            ? "AND (:p_SOLO_ACTIVOS = 0 OR NVL(u.STATUS, 'A') IN ('1', 'A'))"
+            : string.Empty;
+
+        var searchColumns = new List<string>();
+        if (columns.Contains("USUARIO")) searchColumns.Add("UPPER(u.USUARIO)");
+        if (columns.Contains("LOGIN")) searchColumns.Add("UPPER(u.LOGIN)");
+        if (columns.Contains("EMAIL")) searchColumns.Add("UPPER(u.EMAIL)");
+        if (columns.Contains("CEDULA")) searchColumns.Add("TO_CHAR(u.CEDULA)");
+        var searchPredicate = searchColumns.Count == 0
+            ? string.Empty
+            : $"AND (:p_SEARCH_TEXT IS NULL OR {string.Join(" OR ", searchColumns.Select(column => $"{column} LIKE '%' || UPPER(:p_SEARCH_TEXT) || '%'"))})";
+
+        using var countCmd = new OracleCommand($@"
+            SELECT COUNT(1)
+              FROM SIS.SIS_USUARIOS u
+             WHERE 1 = 1
+               {empresaPredicate}
+               {activePredicate}
+               {searchPredicate}", cn)
+        {
+            BindByName = true
+        };
+        BindInlineListParameters(countCmd, value, empresa, hasCodigoEmpresa, hasSoloActivos: columns.Contains("STATUS"), hasSearch: searchColumns.Count > 0);
+        var totalRecords = SupportDb.ToInt32(await countCmd.ExecuteScalarAsync());
+
+        using var cmd = new OracleCommand($@"
+            SELECT CODIGO_USUARIO,
+                   USUARIO,
+                   LOGIN,
+                   CEDULA,
+                   STATUS,
+                   EMAIL,
+                   RECIBE_EMAIL,
+                   ES_ANALISTA_SOPORTE,
+                   ES_ANALISTA_CNT,
+                   ES_ADMIN_CNT,
+                   IS_SUPERUSER,
+                   CODIGO_EMPRESA
+              FROM (
+                    SELECT q.*, ROWNUM RN
+                      FROM (
+                            SELECT u.CODIGO_USUARIO,
+                                   {usuarioExpr} USUARIO,
+                                   {loginExpr} LOGIN,
+                                   {cedulaExpr} CEDULA,
+                                   {statusExpr} STATUS,
+                                   {emailExpr} EMAIL,
+                                   {recibeEmailExpr} RECIBE_EMAIL,
+                                   {soporteExpr} ES_ANALISTA_SOPORTE,
+                                   {cntExpr} ES_ANALISTA_CNT,
+                                   {adminCntExpr} ES_ADMIN_CNT,
+                                   {superuserExpr} IS_SUPERUSER,
+                                   {codigoEmpresaExpr} CODIGO_EMPRESA
+                              FROM SIS.SIS_USUARIOS u
+                             WHERE 1 = 1
+                               {empresaPredicate}
+                               {activePredicate}
+                               {searchPredicate}
+                             ORDER BY {usuarioExpr}
+                           ) q
+                     WHERE ROWNUM <= :p_TO_ROW
+                   )
+             WHERE RN >= :p_FROM_ROW", cn)
+        {
+            BindByName = true
+        };
+        BindInlineListParameters(cmd, value, empresa, bindEmpresa: true, hasSoloActivos: columns.Contains("STATUS"), hasSearch: searchColumns.Count > 0);
+        cmd.Parameters.Add("p_TO_ROW", OracleDbType.Int32).Value = toRow;
+        cmd.Parameters.Add("p_FROM_ROW", OracleDbType.Int32).Value = fromRow;
+
+        var list = new List<SisUsuarioResponse>();
+        using (var reader = await cmd.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                list.Add(MapUsuario(reader));
+            }
+        }
+
+        return new ResultDto<List<SisUsuarioResponse>>(list)
+        {
+            Data = list,
+            IsValid = true,
+            Message = "success",
+            Page = pageNumber,
+            TotalPage = pageSize <= 0 ? 1 : (int)Math.Ceiling(totalRecords / (double)pageSize),
+            CantidadRegistros = totalRecords
+        };
+    }
+
+    private static void BindInlineListParameters(OracleCommand cmd, SisUsuarioGetAllQuery value, int empresa, bool bindEmpresa, bool hasSoloActivos, bool hasSearch)
+    {
+        if (bindEmpresa)
+        {
+            cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
+        }
+
+        if (hasSoloActivos)
+        {
+            cmd.Parameters.Add("p_SOLO_ACTIVOS", OracleDbType.Int32).Value = value.SoloActivos ? 1 : 0;
+        }
+
+        if (hasSearch)
+        {
+            cmd.Parameters.Add("p_SEARCH_TEXT", OracleDbType.Varchar2).Value = SupportDb.StringDbValue(value.SearchText);
+        }
+    }
+
+    private static async Task<HashSet<string>> GetSisUsuarioColumnsAsync(OracleConnection cn)
+    {
+        using var cmd = new OracleCommand(@"
+            SELECT COLUMN_NAME
+              FROM ALL_TAB_COLUMNS
+             WHERE OWNER = 'SIS'
+               AND TABLE_NAME = 'SIS_USUARIOS'", cn)
+        {
+            BindByName = true
+        };
+
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            columns.Add(reader.SafeGetString("COLUMN_NAME"));
+        }
+
+        return columns;
+    }
+
+    private static string ColumnExpr(HashSet<string> columns, string columnName, string expression, string defaultExpression)
+    {
+        return columns.Contains(columnName) ? expression : defaultExpression;
+    }
+
     private async Task<ResultDto<SisUsuarioResponse>> ExecuteSingleAsync(string procedure, Action<OracleCommand> bind)
     {
         if (!SupportDb.TryGetEmpresa(config, out int empresa, out string errorMessage))
@@ -457,40 +677,65 @@ public class SisUsuariosController(ConnectionDB connectionDB, IConfiguration con
 
     private static SisUsuarioResponse MapUsuario(IDataReader reader)
     {
-        decimal? cedula = null;
-        int cedulaOrdinal = reader.GetOrdinal("CEDULA");
-        if (!reader.IsDBNull(cedulaOrdinal))
-        {
-            cedula = Convert.ToDecimal(reader.GetValue(cedulaOrdinal));
-        }
-
         return new SisUsuarioResponse(
-            reader.SafeGetInt32("CODIGO_USUARIO"),
-            reader.SafeGetString("USUARIO"),
-            reader.SafeGetString("LOGIN"),
-            cedula,
-            reader.SafeGetString("STATUS"),
-            reader.SafeGetString("EMAIL"),
-            SupportDb.SafeGetFlag(reader, "RECIBE_EMAIL"),
-            SupportDb.SafeGetFlag(reader, "ES_ANALISTA_SOPORTE"),
+            SafeGetOptionalInt(reader, "CODIGO_USUARIO"),
+            SafeGetOptionalString(reader, "USUARIO"),
+            SafeGetOptionalString(reader, "LOGIN"),
+            SafeGetOptionalDecimal(reader, "CEDULA"),
+            SafeGetOptionalString(reader, "STATUS", "A"),
+            SafeGetOptionalString(reader, "EMAIL"),
+            SafeGetOptionalFlag(reader, "RECIBE_EMAIL", true),
+            SafeGetOptionalFlag(reader, "ES_ANALISTA_SOPORTE"),
             SafeGetOptionalFlag(reader, "ES_ANALISTA_CNT"),
             SafeGetOptionalFlag(reader, "ES_ADMIN_CNT"),
-            SupportDb.SafeGetFlag(reader, "IS_SUPERUSER"),
-            reader.SafeGetInt32("CODIGO_EMPRESA")
+            SafeGetOptionalFlag(reader, "IS_SUPERUSER"),
+            SafeGetOptionalInt(reader, "CODIGO_EMPRESA")
         );
     }
 
-    private static bool SafeGetOptionalFlag(IDataReader reader, string columnName)
+    private static string SafeGetOptionalString(IDataReader reader, string columnName, string defaultValue = "")
+    {
+        var ordinal = TryGetOrdinal(reader, columnName);
+        return ordinal < 0 || reader.IsDBNull(ordinal)
+            ? defaultValue
+            : reader.GetValue(ordinal).ToString() ?? defaultValue;
+    }
+
+    private static int SafeGetOptionalInt(IDataReader reader, string columnName)
+    {
+        var ordinal = TryGetOrdinal(reader, columnName);
+        return ordinal < 0 || reader.IsDBNull(ordinal)
+            ? 0
+            : SupportDb.ToInt32(reader.GetValue(ordinal));
+    }
+
+    private static decimal? SafeGetOptionalDecimal(IDataReader reader, string columnName)
+    {
+        var ordinal = TryGetOrdinal(reader, columnName);
+        return ordinal < 0 || reader.IsDBNull(ordinal)
+            ? null
+            : SupportDb.ToDecimal(reader.GetValue(ordinal));
+    }
+
+    private static bool SafeGetOptionalFlag(IDataReader reader, string columnName, bool defaultValue = false)
+    {
+        var ordinal = TryGetOrdinal(reader, columnName);
+        return ordinal < 0 || reader.IsDBNull(ordinal)
+            ? defaultValue
+            : SupportDb.ToInt32(reader.GetValue(ordinal)) == 1;
+    }
+
+    private static int TryGetOrdinal(IDataReader reader, string columnName)
     {
         for (var i = 0; i < reader.FieldCount; i++)
         {
             if (string.Equals(reader.GetName(i), columnName, StringComparison.OrdinalIgnoreCase))
             {
-                return !reader.IsDBNull(i) && SupportDb.ToInt32(reader.GetValue(i)) == 1;
+                return i;
             }
         }
 
-        return false;
+        return -1;
     }
 
     private sealed record SupportPermissionTargetUser(string Usuario, string Login, bool EsAnalistaSoporte, bool EsAnalistaCnt, bool EsAdminCnt, bool IsSuperuser);
