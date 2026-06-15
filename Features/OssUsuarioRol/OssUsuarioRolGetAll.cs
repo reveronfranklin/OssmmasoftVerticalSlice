@@ -58,6 +58,11 @@ public class OssUsuarioRolGetAllHandler(ConnectionDB _connectionDB)
             int totalRecords = OssUsuarioRolDb.GetIntOutput(pTotalRecords);
             int totalPages = OssUsuarioRolDb.GetIntOutput(pTotalPages);
 
+            if (!isSuccess && dbMessage.Contains("TTC", StringComparison.OrdinalIgnoreCase))
+            {
+                return await ExecuteInlineAsync(cn, query, pageSize, pageNumber);
+            }
+
             return new ResultDto<List<OssUsuarioRolResponse>>(list)
             {
                 Data = isSuccess ? list : null,
@@ -70,12 +75,86 @@ public class OssUsuarioRolGetAllHandler(ConnectionDB _connectionDB)
         }
         catch (Exception ex)
         {
+            if (ex.Message.Contains("TTC", StringComparison.OrdinalIgnoreCase))
+            {
+                return await ExecuteInlineAsync(cn, query, pageSize, pageNumber);
+            }
+
             return new ResultDto<List<OssUsuarioRolResponse>>(null!)
             {
                 IsValid = false,
                 Message = $"Error técnico: {ex.Message}"
             };
         }
+    }
+
+    private static async Task<ResultDto<List<OssUsuarioRolResponse>>> ExecuteInlineAsync(OracleConnection cn, OssUsuarioRolGetAllQuery query, int pageSize, int pageNumber)
+    {
+        var search = string.IsNullOrWhiteSpace(query.SearchText) ? null : query.SearchText.Trim();
+        var fromRow = ((pageNumber - 1) * pageSize) + 1;
+        var toRow = pageNumber * pageSize;
+
+        using var countCmd = new OracleCommand(@"
+            SELECT COUNT(1)
+              FROM SIS.OSS_USUARIO_ROL
+             WHERE :p_SearchText IS NULL
+                OR UPPER(NVL(USUARIO, '')) LIKE '%' || UPPER(:p_SearchText) || '%'
+                OR UPPER(NVL(DESCRIPCION, '')) LIKE '%' || UPPER(:p_SearchText) || '%'", cn)
+        {
+            BindByName = true
+        };
+        countCmd.Parameters.Add("p_SearchText", OracleDbType.Varchar2).Value = search is null ? DBNull.Value : search;
+        var totalRecords = Convert.ToInt32(countCmd.ExecuteScalar());
+
+        using var cmd = new OracleCommand($@"
+            SELECT CODIGO_USUARIO_ROL,
+                   USUARIO,
+                   CODIGO_USUARIO,
+                   DESCRIPCION,
+                   {OssUsuarioRolDb.JsonMenuSelectList()}
+              FROM (
+                    SELECT q.*, ROWNUM RN
+                      FROM (
+                            SELECT CODIGO_USUARIO_ROL,
+                                   USUARIO,
+                                   CODIGO_USUARIO,
+                                   DESCRIPCION,
+                                   JSON_MENU
+                              FROM SIS.OSS_USUARIO_ROL
+                             WHERE :p_SearchText IS NULL
+                                OR UPPER(NVL(USUARIO, '')) LIKE '%' || UPPER(:p_SearchText) || '%'
+                                OR UPPER(NVL(DESCRIPCION, '')) LIKE '%' || UPPER(:p_SearchText) || '%'
+                             ORDER BY CODIGO_USUARIO_ROL DESC
+                           ) q
+                     WHERE ROWNUM <= :p_ToRow
+                   )
+             WHERE RN >= :p_FromRow
+             ORDER BY RN", cn)
+        {
+            BindByName = true
+        };
+        cmd.Parameters.Add("p_SearchText", OracleDbType.Varchar2).Value = search is null ? DBNull.Value : search;
+        cmd.Parameters.Add("p_ToRow", OracleDbType.Int32).Value = toRow;
+        cmd.Parameters.Add("p_FromRow", OracleDbType.Int32).Value = fromRow;
+
+        var list = new List<OssUsuarioRolResponse>();
+        using (var reader = await cmd.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                list.Add(OssUsuarioRolDb.MapUsuarioRol(reader));
+            }
+        }
+
+        return new ResultDto<List<OssUsuarioRolResponse>>(list)
+        {
+            Data = list,
+            CantidadRegistros = totalRecords,
+            Page = pageNumber,
+            TotalPage = totalRecords == 0 ? 0 : (int)Math.Ceiling(totalRecords / (double)pageSize),
+            IsValid = true,
+            Message = "success"
+        };
     }
 }
 

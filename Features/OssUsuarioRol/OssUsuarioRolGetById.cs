@@ -49,6 +49,11 @@ public class GetOssUsuarioRolByIdHandler(ConnectionDB _connectionDB)
             string dbMessage = OssUsuarioRolDb.GetMessage(pMessage);
             bool isSuccess = OssUsuarioRolDb.IsSuccessMessage(dbMessage) && resultData is not null;
 
+            if (!isSuccess && dbMessage.Contains("TTC", StringComparison.OrdinalIgnoreCase))
+            {
+                return await ExecuteInlineAsync(cn, query.CodigoUsuarioRol);
+            }
+
             return new ResultDto<OssUsuarioRolResponse>(resultData!)
             {
                 IsValid = isSuccess,
@@ -57,12 +62,49 @@ public class GetOssUsuarioRolByIdHandler(ConnectionDB _connectionDB)
         }
         catch (Exception ex)
         {
+            if (ex.Message.Contains("TTC", StringComparison.OrdinalIgnoreCase))
+            {
+                return await ExecuteInlineAsync(cn, query.CodigoUsuarioRol);
+            }
+
             return new ResultDto<OssUsuarioRolResponse>(null!)
             {
                 IsValid = false,
                 Message = $"Error técnico: {ex.Message}"
             };
         }
+    }
+
+    private static async Task<ResultDto<OssUsuarioRolResponse>> ExecuteInlineAsync(OracleConnection cn, int codigoUsuarioRol)
+    {
+        using var cmd = new OracleCommand($@"
+            SELECT CODIGO_USUARIO_ROL,
+                   USUARIO,
+                   CODIGO_USUARIO,
+                   DESCRIPCION,
+                   {OssUsuarioRolDb.JsonMenuSelectList()}
+              FROM SIS.OSS_USUARIO_ROL
+             WHERE CODIGO_USUARIO_ROL = :p_CODIGO_USUARIO_ROL", cn)
+        {
+            BindByName = true
+        };
+        cmd.Parameters.Add("p_CODIGO_USUARIO_ROL", OracleDbType.Int32).Value = codigoUsuarioRol;
+
+        OssUsuarioRolResponse? resultData = null;
+        using (var reader = await cmd.ExecuteReaderAsync())
+        {
+            if (await reader.ReadAsync())
+            {
+                resultData = OssUsuarioRolDb.MapUsuarioRol(reader);
+            }
+        }
+
+        return new ResultDto<OssUsuarioRolResponse>(resultData!)
+        {
+            Data = resultData,
+            IsValid = resultData is not null,
+            Message = resultData is null ? "Registro no encontrado" : "success"
+        };
     }
 }
 

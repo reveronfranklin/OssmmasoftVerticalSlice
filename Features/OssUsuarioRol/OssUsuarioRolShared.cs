@@ -60,6 +60,10 @@ internal static class OssUsuarioRolDb
     public static OssUsuarioRolResponse MapUsuarioRol(IDataReader reader)
     {
         var jsonMenuText = GetValueAsString(reader, "JSON_MENU");
+        if (string.IsNullOrWhiteSpace(jsonMenuText))
+        {
+            jsonMenuText = GetChunkedJsonMenu(reader);
+        }
 
         return new OssUsuarioRolResponse(
             reader.SafeGetInt32("CODIGO_USUARIO_ROL"),
@@ -68,6 +72,19 @@ internal static class OssUsuarioRolDb
             reader.SafeGetString("DESCRIPCION"),
             ParseJsonMenu(jsonMenuText)
         );
+    }
+
+    public static string JsonMenuSelectList(string columnName = "JSON_MENU")
+    {
+        return $@"
+               DBMS_LOB.SUBSTR({columnName}, 4000, 1) JSON_MENU_01,
+               DBMS_LOB.SUBSTR({columnName}, 4000, 4001) JSON_MENU_02,
+               DBMS_LOB.SUBSTR({columnName}, 4000, 8001) JSON_MENU_03,
+               DBMS_LOB.SUBSTR({columnName}, 4000, 12001) JSON_MENU_04,
+               DBMS_LOB.SUBSTR({columnName}, 4000, 16001) JSON_MENU_05,
+               DBMS_LOB.SUBSTR({columnName}, 4000, 20001) JSON_MENU_06,
+               DBMS_LOB.SUBSTR({columnName}, 4000, 24001) JSON_MENU_07,
+               DBMS_LOB.SUBSTR({columnName}, 4000, 28001) JSON_MENU_08";
     }
 
     private static JsonElement ParseJsonMenu(string jsonMenuText)
@@ -89,7 +106,12 @@ internal static class OssUsuarioRolDb
 
     private static string GetValueAsString(IDataReader reader, string columnName)
     {
-        int ordinal = reader.GetOrdinal(columnName);
+        int ordinal = TryGetOrdinal(reader, columnName);
+        if (ordinal < 0)
+        {
+            return string.Empty;
+        }
+
         if (reader.IsDBNull(ordinal))
         {
             return string.Empty;
@@ -112,5 +134,33 @@ internal static class OssUsuarioRolDb
         }
 
         return value.ToString() ?? string.Empty;
+    }
+
+    private static string GetChunkedJsonMenu(IDataReader reader)
+    {
+        var chunks = new List<string>();
+        for (var i = 1; i <= 8; i++)
+        {
+            var chunk = GetValueAsString(reader, $"JSON_MENU_{i:00}");
+            if (!string.IsNullOrEmpty(chunk))
+            {
+                chunks.Add(chunk);
+            }
+        }
+
+        return string.Concat(chunks);
+    }
+
+    private static int TryGetOrdinal(IDataReader reader, string columnName)
+    {
+        for (var i = 0; i < reader.FieldCount; i++)
+        {
+            if (string.Equals(reader.GetName(i), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 }
