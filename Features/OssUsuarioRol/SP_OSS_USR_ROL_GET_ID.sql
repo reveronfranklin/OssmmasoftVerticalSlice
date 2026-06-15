@@ -9,7 +9,7 @@ BEGIN
                USUARIO,
                CODIGO_USUARIO,
                DESCRIPCION,
-               JSON_MENU
+               DBMS_LOB.SUBSTR(JSON_MENU, 4000, 1) JSON_MENU
           FROM SIS.OSS_USUARIO_ROL
          WHERE CODIGO_USUARIO_ROL = p_CODIGO_USUARIO_ROL;
 

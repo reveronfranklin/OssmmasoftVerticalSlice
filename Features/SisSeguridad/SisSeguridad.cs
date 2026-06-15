@@ -1288,7 +1288,7 @@ public class SisSeguridadHandler(ConnectionDB connectionDB, IConfiguration confi
     private static async Task<string> ReadLegacyJsonMenuAsync(OracleConnection cn, int codigoUsuario)
     {
         using var cmd = new OracleCommand(@"
-            SELECT JSON_MENU
+            SELECT DBMS_LOB.SUBSTR(JSON_MENU, 4000, 1) JSON_MENU
               FROM SIS.OSS_USUARIO_ROL
              WHERE CODIGO_USUARIO = :p_CODIGO_USUARIO
              ORDER BY CODIGO_USUARIO_ROL", cn)
@@ -1642,7 +1642,7 @@ public class SisSeguridadHandler(ConnectionDB connectionDB, IConfiguration confi
                    NVL(u.LOGIN, r.USUARIO) LOGIN,
                    NVL(u.IS_SUPERUSER, 0) IS_SUPERUSER,
                    NVL(r.DESCRIPCION, '') DESCRIPCION,
-                   r.JSON_MENU
+                   DBMS_LOB.SUBSTR(r.JSON_MENU, 4000, 1) JSON_MENU
               FROM SIS.OSS_USUARIO_ROL r
               LEFT JOIN SIS.SIS_USUARIOS u ON u.CODIGO_USUARIO = r.CODIGO_USUARIO
              WHERE (:p_CODIGO_USUARIO IS NULL OR r.CODIGO_USUARIO = :p_CODIGO_USUARIO)
@@ -1736,7 +1736,7 @@ public class SisSeguridadHandler(ConnectionDB connectionDB, IConfiguration confi
     {
         using var cmd = new OracleCommand(@"
             SELECT NVL(r.DESCRIPCION, '') DESCRIPCION,
-                   r.JSON_MENU
+                   DBMS_LOB.SUBSTR(r.JSON_MENU, 4000, 1) JSON_MENU
               FROM SIS.OSS_USUARIO_ROL r
               LEFT JOIN SIS.SIS_USUARIOS u ON u.CODIGO_USUARIO = r.CODIGO_USUARIO
              WHERE r.CODIGO_USUARIO = :p_CODIGO_USUARIO
@@ -2207,13 +2207,23 @@ public class SisSeguridadHandler(ConnectionDB connectionDB, IConfiguration confi
             return string.Empty;
         }
 
-        if (reader is OracleDataReader oracleReader)
+        var value = reader.GetValue(ordinal);
+        if (value is OracleString oracleString)
         {
-            using OracleClob clob = oracleReader.GetOracleClob(ordinal);
-            return clob.IsNull ? string.Empty : clob.Value;
+            return oracleString.IsNull ? string.Empty : oracleString.Value;
         }
 
-        return reader.GetValue(ordinal).ToString() ?? string.Empty;
+        if (value is string stringValue)
+        {
+            return stringValue;
+        }
+
+        if (value is OracleClob oracleClob)
+        {
+            return oracleClob.IsNull ? string.Empty : oracleClob.Value;
+        }
+
+        return value.ToString() ?? string.Empty;
     }
 
     private static JsonElement ParseJson(string json)

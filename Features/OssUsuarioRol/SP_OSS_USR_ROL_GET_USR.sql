@@ -9,7 +9,7 @@ BEGIN
                USUARIO,
                CODIGO_USUARIO,
                DESCRIPCION,
-               JSON_MENU
+               DBMS_LOB.SUBSTR(JSON_MENU, 4000, 1) JSON_MENU
           FROM SIS.OSS_USUARIO_ROL
          WHERE UPPER(TRIM(USUARIO)) = UPPER(TRIM(p_USUARIO))
          ORDER BY CODIGO_USUARIO_ROL DESC;

@@ -95,12 +95,22 @@ internal static class OssUsuarioRolDb
             return string.Empty;
         }
 
-        if (reader is OracleDataReader oracleReader)
+        var value = reader.GetValue(ordinal);
+        if (value is OracleString oracleString)
         {
-            using OracleClob clob = oracleReader.GetOracleClob(ordinal);
-            return clob.IsNull ? string.Empty : clob.Value;
+            return oracleString.IsNull ? string.Empty : oracleString.Value;
         }
 
-        return reader.GetValue(ordinal).ToString() ?? string.Empty;
+        if (value is string stringValue)
+        {
+            return stringValue;
+        }
+
+        if (value is OracleClob oracleClob)
+        {
+            return oracleClob.IsNull ? string.Empty : oracleClob.Value;
+        }
+
+        return value.ToString() ?? string.Empty;
     }
 }

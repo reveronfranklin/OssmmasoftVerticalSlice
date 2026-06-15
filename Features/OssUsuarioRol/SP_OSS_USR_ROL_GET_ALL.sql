@@ -43,7 +43,7 @@ BEGIN
                USUARIO,
                CODIGO_USUARIO,
                DESCRIPCION,
-               JSON_MENU
+               DBMS_LOB.SUBSTR(JSON_MENU, 4000, 1) JSON_MENU
           FROM (
                 SELECT CODIGO_USUARIO_ROL,
                        USUARIO,
