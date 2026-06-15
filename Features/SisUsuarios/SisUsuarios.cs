@@ -473,11 +473,24 @@ public class SisUsuariosController(ConnectionDB connectionDB, IConfiguration con
             reader.SafeGetString("EMAIL"),
             SupportDb.SafeGetFlag(reader, "RECIBE_EMAIL"),
             SupportDb.SafeGetFlag(reader, "ES_ANALISTA_SOPORTE"),
-            SupportDb.SafeGetFlag(reader, "ES_ANALISTA_CNT"),
-            SupportDb.SafeGetFlag(reader, "ES_ADMIN_CNT"),
+            SafeGetOptionalFlag(reader, "ES_ANALISTA_CNT"),
+            SafeGetOptionalFlag(reader, "ES_ADMIN_CNT"),
             SupportDb.SafeGetFlag(reader, "IS_SUPERUSER"),
             reader.SafeGetInt32("CODIGO_EMPRESA")
         );
+    }
+
+    private static bool SafeGetOptionalFlag(IDataReader reader, string columnName)
+    {
+        for (var i = 0; i < reader.FieldCount; i++)
+        {
+            if (string.Equals(reader.GetName(i), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return !reader.IsDBNull(i) && SupportDb.ToInt32(reader.GetValue(i)) == 1;
+            }
+        }
+
+        return false;
     }
 
     private sealed record SupportPermissionTargetUser(string Usuario, string Login, bool EsAnalistaSoporte, bool EsAnalistaCnt, bool EsAdminCnt, bool IsSuperuser);
