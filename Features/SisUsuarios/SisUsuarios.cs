@@ -24,7 +24,7 @@ public record SisUsuarioApplyCntPermissionsCommand(int CodigoUsuario, int Usuari
 public record SisUsuarioApplyCntPermissionsResponse(int CodigoUsuario, string Perfil, int CodigoUsuarioRol, bool Created);
 
 [ApiController]
-[Authorize]
+//[Authorize]
 [Route("api/SisUsuarios")]
 public class SisUsuariosController(ConnectionDB connectionDB, IConfiguration config) : ControllerBase
 {
@@ -44,7 +44,7 @@ public class SisUsuariosController(ConnectionDB connectionDB, IConfiguration con
         {
             return Ok(new ResultDto<List<SisUsuarioResponse>>(null!) { IsValid = false, Message = errorMessage });
         }
-
+        //Prueba de actualoizacion
         int pageSize = value.PageSize <= 0 ? 10 : value.PageSize;
         int pageNumber = value.PageNumber <= 0 ? 1 : value.PageNumber;
         using var cn = connectionDB.GetSisConnection();
