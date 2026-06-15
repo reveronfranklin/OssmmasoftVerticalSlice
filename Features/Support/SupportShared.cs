@@ -406,11 +406,14 @@ internal static class SupportSecurity
     {
         if (await IsSuperUserAsync(connection, usuarioId, empresa))
         {
+            var allPermissions = await GetAllActivePermissionsAsync(connection);
             return new SupportPermissionsResponse(
                 usuarioId,
                 "SOPORTE_ADMIN",
-                AllSupportPermissions.OrderBy(x => x).ToList());
+                allPermissions.Count > 0 ? allPermissions : AllSupportPermissions.OrderBy(x => x).ToList());
         }
+
+        var permissions = await GetNormalizedPermissionsAsync(connection, usuarioId, empresa);
 
         using var cmd = new OracleCommand(@"
             SELECT DBMS_LOB.SUBSTR(r.JSON_MENU, 4000, 1) JSON_MENU
@@ -426,7 +429,6 @@ internal static class SupportSecurity
         cmd.Parameters.Add("p_USUARIO_ID", OracleDbType.Int32).Value = usuarioId;
         cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
 
-        var permissions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using (var reader = await cmd.ExecuteReaderAsync())
         {
             while (await reader.ReadAsync())
@@ -437,6 +439,99 @@ internal static class SupportSecurity
 
         var list = permissions.OrderBy(x => x).ToList();
         return new SupportPermissionsResponse(usuarioId, ResolvePerfil(list), list);
+    }
+
+    private static async Task<HashSet<string>> GetNormalizedPermissionsAsync(OracleConnection connection, int usuarioId, int empresa)
+    {
+        var permissions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        using (var cmd = new OracleCommand(@"
+            SELECT p.CLAVE
+              FROM SIS.OSS_USR_ROL ur
+              JOIN SIS.OSS_ROL_PERM rp ON rp.CODIGO_ROL = ur.CODIGO_ROL
+              JOIN SIS.OSS_PERM p ON p.CODIGO_PERM = rp.CODIGO_PERM
+             WHERE ur.CODIGO_USUARIO = :p_USUARIO_ID
+               AND ur.CODIGO_EMPRESA = :p_CODIGO_EMPRESA
+               AND NVL(ur.ACTIVO, 1) = 1
+               AND NVL(p.ACTIVO, 1) = 1", connection)
+        {
+            BindByName = true
+        })
+        {
+            cmd.Parameters.Add("p_USUARIO_ID", OracleDbType.Int32).Value = usuarioId;
+            cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var permission = reader.SafeGetString("CLAVE");
+                if (!string.IsNullOrWhiteSpace(permission))
+                {
+                    permissions.Add(permission);
+                }
+            }
+        }
+
+        using (var cmd = new OracleCommand(@"
+            SELECT p.CLAVE, up.TIPO
+              FROM SIS.OSS_USR_PERM up
+              JOIN SIS.OSS_PERM p ON p.CODIGO_PERM = up.CODIGO_PERM
+             WHERE up.CODIGO_USUARIO = :p_USUARIO_ID
+               AND up.CODIGO_EMPRESA = :p_CODIGO_EMPRESA
+               AND NVL(up.ACTIVO, 1) = 1
+               AND NVL(p.ACTIVO, 1) = 1", connection)
+        {
+            BindByName = true
+        })
+        {
+            cmd.Parameters.Add("p_USUARIO_ID", OracleDbType.Int32).Value = usuarioId;
+            cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var permission = reader.SafeGetString("CLAVE");
+                if (string.IsNullOrWhiteSpace(permission))
+                {
+                    continue;
+                }
+
+                if (string.Equals(reader.SafeGetString("TIPO"), "DENY", StringComparison.OrdinalIgnoreCase))
+                {
+                    permissions.Remove(permission);
+                }
+                else
+                {
+                    permissions.Add(permission);
+                }
+            }
+        }
+
+        return permissions;
+    }
+
+    private static async Task<List<string>> GetAllActivePermissionsAsync(OracleConnection connection)
+    {
+        using var cmd = new OracleCommand(@"
+            SELECT CLAVE
+              FROM SIS.OSS_PERM
+             WHERE NVL(ACTIVO, 1) = 1", connection)
+        {
+            BindByName = true
+        };
+
+        var permissions = new List<string>();
+        using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var permission = reader.SafeGetString("CLAVE");
+            if (!string.IsNullOrWhiteSpace(permission))
+            {
+                permissions.Add(permission);
+            }
+        }
+
+        return permissions.OrderBy(x => x).ToList();
     }
 
     private static async Task<bool> IsSuperUserAsync(OracleConnection connection, int usuarioId, int empresa)
