@@ -158,6 +158,10 @@ El frontend solo debe enviar parametros funcionales. No debe enviar tablas, filt
         "deduccion": 0,
         "status": "A",
         "descripcionStatus": "ACTIVO",
+        "activos": 1,
+        "permisos": 0,
+        "vacaciones": 0,
+        "reposos": 0,
         "codigoPersona": 1068,
         "fechaIngreso": "2018-12-12T00:00:00",
         "cargoCodigo": "10414",
@@ -260,6 +264,10 @@ Puede venir `null` cuando `p_codigo_periodo` no se envia, por ejemplo en una pre
 | `deduccion`            | number      | Monto de deduccion.                                           |
 | `status`               | string      | Codigo de estatus.                                            |
 | `descripcionStatus`    | string      | Descripcion del estatus.                                      |
+| `activos`              | number      | Indicador 1/0 cuando `status = A`.                            |
+| `permisos`             | number      | Indicador 1/0 cuando `status = P`.                            |
+| `vacaciones`           | number      | Indicador 1/0 cuando `status = V`.                            |
+| `reposos`              | number      | Indicador 1/0 cuando `status = R`.                            |
 | `codigoPersona`        | number      | Identificador interno de persona.                             |
 | `fechaIngreso`         | string/null | Fecha de ingreso del trabajador.                              |
 | `cargoCodigo`          | string      | Codigo del cargo.                                             |

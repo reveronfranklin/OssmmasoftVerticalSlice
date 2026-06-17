@@ -122,3 +122,37 @@ Crear una clase C# usando arquitectura vertical slice, tomando como guia la estr
 - Crear el handler que invoque el nuevo stored procedure.
 - Crear el endpoint siguiendo el patron del controlador existente.
 - Reutilizar los helpers existentes para validacion de `WHERE`, lectura segura del `IDataReader` y resultado `ResultDto`.
+
+## Agregar Columnas
+
+Activos:  
+function CF_ACTIVOSFormula return  
+Number is  
+begin  
+ IF :STATUS = 'A' THEN RETURN(1); END  
+IF; RETURN(0);  
+end;
+
+PERMISOS:  
+function CF_PERMISOSFormula return  
+Number is  
+begin  
+ IF :STATUS = 'P' THEN RETURN(1); END  
+IF; RETURN(0);  
+end;
+
+VACACIONES:  
+function CF_VACACIONESFormula  
+return Number is
+begin  
+ IF :STATUS = 'V' THEN RETURN(1);  
+END IF; RETURN(0);  
+end;
+
+REPOSOS:  
+function CF_REPOSOSFormula return  
+Number is  
+begin  
+ IF :STATUS = 'R' THEN RETURN(1); END  
+IF; RETURN(0);  
+end;
