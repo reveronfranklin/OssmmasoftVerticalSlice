@@ -267,6 +267,7 @@ BEGIN
   up_menu(7050, 7, 7000, 'Comparar Conteo', '/apps/Bm/BmConteoDetalleCompare', NULL, 50);
   up_menu(7060, 7, 7000, 'Historico Conteo', '/apps/Bm/BmConteoHistorico', NULL, 60);
   up_menu(7070, 7, 7000, 'Placas Cuarentena', '/apps/Bm/BmPlacasCuarentena', NULL, 70);
+  up_menu(7080, 7, 7000, 'Reporte BM1', '/apps/Bm/ReporteBM1', NULL, 80);
 
   -- Aplicaciones generales y rutas de plantilla
   up_menu(8000, 8, NULL, 'Aplicaciones', NULL, 'mdi:apps', 10);
@@ -292,7 +293,7 @@ BEGIN
   -- Permisos visibles por modulo. Las rutas tecnicas quedan catalogadas pero inactivas.
   add_mp_key(1000, 'sis.menu.ver'); add_mp_key(1150, 'sis.menu.ver'); add_mp_key(1160, 'sis.menu.ver'); add_mp_key(1170, 'sis.menu.ver');
   add_mp_key(1100, 'soporte.menu.ver'); add_mp_key(1180, 'soporte.menu.ver'); add_mp_key(1110, 'soporte.menu.ver'); add_mp_key(1120, 'soporte.menu.ver'); add_mp_key(1130, 'soporte.menu.ver'); add_mp_key(1140, 'soporte.menu.ver');
-  add_mp_key(7000, 'bm.menu.ver'); add_mp_key(7010, 'bm.menu.ver'); add_mp_key(7020, 'bm.menu.ver'); add_mp_key(7030, 'bm.menu.ver'); add_mp_key(7040, 'bm.menu.ver'); add_mp_key(7050, 'bm.menu.ver'); add_mp_key(7060, 'bm.menu.ver'); add_mp_key(7070, 'bm.menu.ver');
+  add_mp_key(7000, 'bm.menu.ver'); add_mp_key(7010, 'bm.menu.ver'); add_mp_key(7020, 'bm.menu.ver'); add_mp_key(7030, 'bm.menu.ver'); add_mp_key(7040, 'bm.menu.ver'); add_mp_key(7050, 'bm.menu.ver'); add_mp_key(7060, 'bm.menu.ver'); add_mp_key(7070, 'bm.menu.ver'); add_mp_key(7080, 'bm.menu.ver');
   add_mp_key(8000, 'apps.menu.ver'); add_mp_key(8010, 'apps.menu.ver'); add_mp_key(8020, 'apps.menu.ver'); add_mp_key(8030, 'apps.menu.ver'); add_mp_key(8040, 'apps.menu.ver'); add_mp_key(8050, 'apps.menu.ver'); add_mp_key(8060, 'apps.menu.ver'); add_mp_key(8070, 'apps.menu.ver'); add_mp_key(8080, 'apps.menu.ver');
 
   grant_active_mod_key('SIS_MENU', 1);

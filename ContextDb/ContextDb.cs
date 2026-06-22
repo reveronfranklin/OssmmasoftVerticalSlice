@@ -37,4 +37,9 @@ public class ConnectionDB(IConfiguration _config)
     {
         return new OracleConnection(_config.GetConnectionString("DefaultConnectionCNT"));
     }
+
+    public OracleConnection GetBmConnection()
+    {
+        return new OracleConnection(_config.GetConnectionString("DefaultConnectionBM"));
+    }
 }
