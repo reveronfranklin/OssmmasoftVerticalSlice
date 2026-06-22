@@ -188,6 +188,7 @@ public static class ReporteBm1PdfGenerator
     {
         var candidates = new[]
         {
+            Path.Combine(environment.ContentRootPath, "Assets", "Reports", fileName),
             Path.Combine(environment.ContentRootPath, "ReportAssets", fileName),
             Path.Combine(environment.ContentRootPath, "Assets", fileName),
             Path.Combine(environment.WebRootPath ?? string.Empty, "images", fileName)
