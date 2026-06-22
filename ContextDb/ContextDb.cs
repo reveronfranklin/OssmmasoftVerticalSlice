@@ -15,9 +15,13 @@ public class ConnectionDB(IConfiguration _config)
     {
         return new OracleConnection(_config.GetConnectionString("oracleConnection"));
     }
-     public OracleConnection GetPresupuestoConnection()
+    public OracleConnection GetPresupuestoConnection()
     {
         return new OracleConnection(_config.GetConnectionString("DefaultConnectionPRE"));
+    }
+    public OracleConnection GetAdmConnection()
+    {
+        return new OracleConnection(_config.GetConnectionString("DefaultConnectionADM"));
     }
       public OracleConnection GetRhConnection()
     {

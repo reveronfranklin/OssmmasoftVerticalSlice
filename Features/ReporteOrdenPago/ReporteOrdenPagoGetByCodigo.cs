@@ -61,7 +61,7 @@ public class ReporteOrdenPagoGetByCodigoHandler(ConnectionDB _connectionDB)
             return BuildInvalidResult("El parametro CodigoOrdenPago debe ser mayor que cero.");
         }
 
-        using var cn = _connectionDB.GetOracleConnection();
+        using var cn = _connectionDB.GetAdmConnection();
         try
         {
             await cn.OpenAsync();
