@@ -6,6 +6,15 @@
 - Ruta: `/api/ReportePersonal/GetAll`
 - Stored procedure: `RH.SP_REPORTE_PERSONAL_GET_ALL`
 
+## Endpoint PDF
+
+- Metodo: `POST`
+- Ruta: `/api/ReportePersonal/pdf`
+- Content-Type de respuesta exitosa: `application/pdf`
+- Nombre sugerido del archivo: `reporte-personal-{codigoTipoNomina}-{yyyyMMddHHmmss}.pdf`
+- Fuente de datos: reutiliza `RH.SP_REPORTE_PERSONAL_GET_ALL`
+- Estado: POC inicial para migracion directa desde `NextOssmasoft` hacia `OssmmasoftVerticalSlice`
+
 ## Request
 
 ```json
@@ -41,6 +50,28 @@
   "message": "Success",
   "cantidadRegistros": 1
 }
+```
+
+## Response PDF
+
+Cuando la consulta es valida, el endpoint devuelve el binario PDF directamente.
+
+Si ocurre un error controlado de configuracion, conexion o base de datos, devuelve el mismo `ResultDto` del endpoint `/api/ReportePersonal/GetAll`, con `isValid = false`.
+
+### Ejemplo frontend para PDF
+
+```ts
+const response = await axios.post('/api/ReportePersonal/pdf', {
+  codigoTipoNomina: 2,
+  status: 'A'
+}, {
+  responseType: 'blob',
+  headers: {
+    Accept: 'application/pdf'
+  }
+})
+
+const objectUrl = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }))
 ```
 
 ## Campos
