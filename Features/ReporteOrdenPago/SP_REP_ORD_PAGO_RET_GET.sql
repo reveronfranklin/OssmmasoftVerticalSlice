@@ -1,0 +1,37 @@
+CREATE OR REPLACE PROCEDURE ADM.SP_REP_ORD_PAGO_RET_GET (
+    p_CodigoOrdenPago IN NUMBER,
+    p_ResultSet       OUT SYS_REFCURSOR,
+    p_Message         OUT VARCHAR2,
+    p_TotalRecords    OUT NUMBER
+) AS
+BEGIN
+    SELECT COUNT(*)
+      INTO p_TotalRecords
+      FROM ADM.ADM_RETENCIONES_OP RET
+     WHERE RET.CODIGO_ORDEN_PAGO = p_CodigoOrdenPago;
+
+    OPEN p_ResultSet FOR
+        SELECT
+            NVL(DES.DESCRIPCION, '') DESCRIPCION,
+            NVL(RET.POR_RETENCION, 0) POR_RETENCION,
+            NVL(RET.MONTO_RETENCION, 0) MONTO_RETENCION
+          FROM ADM.ADM_RETENCIONES_OP RET
+          LEFT JOIN ADM.ADM_DESCRIPTIVAS DES
+            ON DES.DESCRIPCION_ID = RET.TIPO_RETENCION_ID
+         WHERE RET.CODIGO_ORDEN_PAGO = p_CodigoOrdenPago
+         ORDER BY DES.DESCRIPCION, RET.CODIGO_RETENCION_OP;
+
+    p_Message := 'Success';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SUBSTR(SQLERRM, 1, 4000);
+        p_TotalRecords := 0;
+        OPEN p_ResultSet FOR
+            SELECT
+                CAST(NULL AS VARCHAR2(4000)) DESCRIPCION,
+                CAST(NULL AS NUMBER) POR_RETENCION,
+                CAST(NULL AS NUMBER) MONTO_RETENCION
+              FROM DUAL
+             WHERE 1 = 0;
+END SP_REP_ORD_PAGO_RET_GET;
+/

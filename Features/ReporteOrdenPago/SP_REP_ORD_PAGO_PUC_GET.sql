@@ -1,0 +1,43 @@
+CREATE OR REPLACE PROCEDURE ADM.SP_REP_ORD_PAGO_PUC_GET (
+    p_CodigoOrdenPago IN NUMBER,
+    p_ResultSet       OUT SYS_REFCURSOR,
+    p_Message         OUT VARCHAR2,
+    p_TotalRecords    OUT NUMBER
+) AS
+BEGIN
+    SELECT COUNT(*)
+      INTO p_TotalRecords
+      FROM ADM.ADM_PUC_ORDEN_PAGO PUC
+     WHERE PUC.CODIGO_ORDEN_PAGO = p_CodigoOrdenPago;
+
+    OPEN p_ResultSet FOR
+        SELECT
+            NVL(SAL.ANO, 0) ANO,
+            NVL(SAL.DESCRIPCION_FINANCIADO, '') DESCRIPCION_FINANCIADO,
+            NVL(SAL.CODIGO_ICP_CONCAT, '') CODIGO_ICP_CONCAT,
+            NVL(SAL.CODIGO_PUC_CONCAT, '') CODIGO_PUC_CONCAT,
+            NVL(SAL.DENOMINACION_PUC, '') DENOMINACION_PUC,
+            NVL(PUC.MONTO, 0) MONTO
+          FROM ADM.ADM_PUC_ORDEN_PAGO PUC
+          LEFT JOIN PRE.PRE_V_SALDOS SAL
+            ON SAL.CODIGO_SALDO = PUC.CODIGO_SALDO
+         WHERE PUC.CODIGO_ORDEN_PAGO = p_CodigoOrdenPago
+         ORDER BY SAL.ANO, SAL.CODIGO_ICP_CONCAT, SAL.CODIGO_PUC_CONCAT;
+
+    p_Message := 'Success';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SUBSTR(SQLERRM, 1, 4000);
+        p_TotalRecords := 0;
+        OPEN p_ResultSet FOR
+            SELECT
+                CAST(NULL AS NUMBER) ANO,
+                CAST(NULL AS VARCHAR2(4000)) DESCRIPCION_FINANCIADO,
+                CAST(NULL AS VARCHAR2(4000)) CODIGO_ICP_CONCAT,
+                CAST(NULL AS VARCHAR2(4000)) CODIGO_PUC_CONCAT,
+                CAST(NULL AS VARCHAR2(4000)) DENOMINACION_PUC,
+                CAST(NULL AS NUMBER) MONTO
+              FROM DUAL
+             WHERE 1 = 0;
+END SP_REP_ORD_PAGO_PUC_GET;
+/
