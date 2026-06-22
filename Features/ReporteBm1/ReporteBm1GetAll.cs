@@ -351,6 +351,16 @@ public class ReporteBm1Controller(
             return Ok(result);
         }
 
+        if (result.Data.Count == 0)
+        {
+            return Ok(new ResultDto<string>(string.Empty)
+            {
+                IsValid = false,
+                Message = "No hay registros para generar el PDF con los filtros seleccionados."
+            });
+        }
+
+        Response.Headers.Append("X-Reporte-Bm1-Count", result.Data.Count.ToString(CultureInfo.InvariantCulture));
         var bytes = ReporteBm1PdfGenerator.Generate(result.Data, value, _environment);
         return ReporteBm1Db.BuildPdfFile(this, bytes);
     }
