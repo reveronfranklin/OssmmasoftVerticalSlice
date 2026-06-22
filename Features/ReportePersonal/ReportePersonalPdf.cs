@@ -18,7 +18,7 @@ public static class ReportePersonalPdfGenerator
     {
         QuestPDF.Settings.License = LicenseType.Evaluation;
 
-        var logoPath = Path.Combine(environment.ContentRootPath, "Assets", "Reports", "logoLeft.jpeg");
+        var logoBytes = TryReadReportAsset(environment, "logoLeft.jpeg");
         var generatedAt = DateTime.Now;
         var culture = CultureInfo.GetCultureInfo("es-VE");
 
@@ -42,21 +42,21 @@ public static class ReportePersonalPdfGenerator
 
                         header.Item().PaddingTop(8).Row(row =>
                         {
-                            row.RelativeItem(1).Height(48).Element(element =>
+                            row.ConstantItem(120).Height(54).Element(element =>
                             {
-                                if (File.Exists(logoPath))
+                                if (logoBytes is not null)
                                 {
-                                    element.AlignCenter().Image(logoPath).FitHeight();
+                                    element.AlignCenter().AlignMiddle().Image(logoBytes).FitArea();
                                 }
                                 else
                                 {
-                                    element.Text(string.Empty);
+                                    element.AlignCenter().AlignMiddle().Text("LOGO").Bold().FontSize(8);
                                 }
                             });
 
-                            row.RelativeItem(2).AlignCenter().PaddingTop(18).Text(ReportTitle).Bold().FontSize(10);
+                            row.RelativeItem().AlignCenter().PaddingTop(18).Text(ReportTitle).Bold().FontSize(10);
 
-                            row.RelativeItem(1).AlignRight().PaddingTop(18).DefaultTextStyle(style => style.Bold().FontSize(8)).Text(text =>
+                            row.ConstantItem(120).AlignRight().PaddingTop(18).DefaultTextStyle(style => style.Bold().FontSize(8)).Text(text =>
                             {
                                 text.Span("Pagina ");
                                 text.CurrentPageNumber();
@@ -100,6 +100,26 @@ public static class ReportePersonalPdfGenerator
         var status = string.IsNullOrWhiteSpace(query.Status) ? "Todos" : query.Status.Trim();
 
         return $"Tipo nomina: {tipoNomina} | Status: {status}";
+    }
+
+    private static byte[]? TryReadReportAsset(IWebHostEnvironment environment, string fileName)
+    {
+        var relativePath = Path.Combine("Assets", "Reports", fileName);
+        var candidatePaths = new[]
+        {
+            Path.Combine(environment.ContentRootPath, relativePath),
+            Path.Combine(AppContext.BaseDirectory, relativePath)
+        };
+
+        foreach (var path in candidatePaths)
+        {
+            if (File.Exists(path))
+            {
+                return File.ReadAllBytes(path);
+            }
+        }
+
+        return null;
     }
 
     private static void BuildDepartmentHeader(IContainer container, string department)

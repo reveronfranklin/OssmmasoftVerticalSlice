@@ -15,4 +15,8 @@
     <PackageReference Include="QuestPDF" Version="2026.6.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Assets/Reports/**/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
