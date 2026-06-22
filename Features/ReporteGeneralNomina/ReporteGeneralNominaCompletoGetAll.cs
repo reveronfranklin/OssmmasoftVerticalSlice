@@ -26,11 +26,6 @@ public class GetReporteGeneralNominaCompletoGetAllHandler(ConnectionDB _connecti
 {
     public async Task<ResultDto<GetReporteGeneralNominaCompletoGetAllResponse>> HandleAsync(ReporteGeneralNominaCompletoGetAllQuery value)
     {
-        if (!TryBuildReporteParameters(value, out var reporteParameters, out var parameterError))
-        {
-            return BuildInvalidResult(parameterError ?? "Parametros invalidos para el reporte.");
-        }
-
         var generalHandler = new GetReporteGeneralNominaGetAllHandler(_connectionDB);
         var detalleHandler = new GetReporteGeneralNominaDetalleGetAllHandler(_connectionDB);
         var firmaHandler = new GetReporteGeneralNominaFirmaGetAllHandler(_connectionDB);
@@ -53,12 +48,19 @@ public class GetReporteGeneralNominaCompletoGetAllHandler(ConnectionDB _connecti
             periodoRecords = periodoResult.CantidadRegistros;
         }
 
+        var effectiveValue = BuildEffectiveQuery(value, periodo);
+
+        if (!TryBuildReporteParameters(effectiveValue, out var reporteParameters, out var parameterError))
+        {
+            return BuildInvalidResult(parameterError ?? "Parametros invalidos para el reporte.");
+        }
+
         var generalResult = await generalHandler.HandleAsync(new ReporteGeneralNominaGetAllQuery(
             reporteParameters.FromTable1,
             reporteParameters.FromTable2,
-            value.p_tipo_nomina,
-            value.p_fecha_pago,
-            value.codigo_empresa,
+            effectiveValue.p_tipo_nomina,
+            effectiveValue.p_fecha_pago,
+            effectiveValue.codigo_empresa,
             reporteParameters.Where
         ));
 
@@ -70,9 +72,9 @@ public class GetReporteGeneralNominaCompletoGetAllHandler(ConnectionDB _connecti
         var detalleResult = await detalleHandler.HandleAsync(new ReporteGeneralNominaDetalleGetAllQuery(
             reporteParameters.FromTable1,
             reporteParameters.FromTable2,
-            value.p_tipo_nomina,
-            value.codigo_empresa,
-            value.p_fecha_pago,
+            effectiveValue.p_tipo_nomina,
+            effectiveValue.codigo_empresa,
+            effectiveValue.p_fecha_pago,
             reporteParameters.Where,
             reporteParameters.Cedula
         ));
@@ -103,6 +105,18 @@ public class GetReporteGeneralNominaCompletoGetAllHandler(ConnectionDB _connecti
             IsValid = true,
             Message = "Success"
         };
+    }
+
+    private static ReporteGeneralNominaCompletoGetAllQuery BuildEffectiveQuery(
+        ReporteGeneralNominaCompletoGetAllQuery value,
+        GetReporteGeneralNominaPeriodoGetByCodigoResponse? periodo)
+    {
+        if (periodo?.FechaNomina is null || value.p_tipo_generacion is not (2 or 3))
+        {
+            return value;
+        }
+
+        return value with { p_fecha_pago = periodo.FechaNomina.Value.Date };
     }
 
     private static ResultDto<GetReporteGeneralNominaCompletoGetAllResponse> BuildInvalidResult(string message)

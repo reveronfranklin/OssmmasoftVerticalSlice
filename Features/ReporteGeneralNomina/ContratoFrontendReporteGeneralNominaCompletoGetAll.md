@@ -36,6 +36,7 @@ Este endpoint genera el PDF directamente desde `OssmmasoftVerticalSlice` usando 
 - El PDF usa los assets en `Assets/Reports`, incluyendo `logoLeft.jpeg`.
 - El consumo frontend se realiza desde la lista de periodos `/apps/rh/periodos/`.
 - Los parametros se toman del periodo seleccionado en la grilla.
+- Para `p_tipo_generacion = 2` o `3`, si se envia `p_codigo_periodo`, el backend usa la `fechaNomina` real del periodo como fecha efectiva del reporte.
 
 ### Request PDF
 
@@ -54,7 +55,7 @@ Este endpoint genera el PDF directamente desde `OssmmasoftVerticalSlice` usando 
 | Campo PDF            | Origen en `IRhPeriodosResponseDto`        |
 | -------------------- | ------------------------------------------ |
 | `p_tipo_nomina`      | `codigoTipoNomina`                         |
-| `p_fecha_pago`       | `fechaNomina`, `fechaNominaObj` o fecha ISO derivada |
+| `p_fecha_pago`       | Fecha enviada por compatibilidad; backend la normaliza con `fechaNomina` del periodo |
 | `p_tipo_generacion`  | `3`, por flujo historico desde periodos    |
 | `p_codigo_periodo`   | `codigoPeriodo`                            |
 | `p_cedula`           | `null`                                     |
