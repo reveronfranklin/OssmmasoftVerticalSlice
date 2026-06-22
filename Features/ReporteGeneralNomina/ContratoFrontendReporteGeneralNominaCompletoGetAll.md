@@ -1,6 +1,6 @@
 # Contrato Frontend - Reporte General Nomina Completo
 
-## Endpoint
+## Endpoint JSON
 
 ```Base:
  http://ossmmasoft.com.ve:5142
@@ -19,6 +19,81 @@ Este endpoint devuelve en una sola llamada la informacion necesaria para pintar 
 - `firma`: firmantes activos del reporte.
 
 El frontend solo debe enviar parametros funcionales. No debe enviar tablas, filtros SQL ni condiciones internas.
+
+## Endpoint PDF
+
+```http
+POST /api/ReporteGeneralNomina/pdf
+Content-Type: application/json
+Accept: application/pdf
+```
+
+Este endpoint genera el PDF directamente desde `OssmmasoftVerticalSlice` usando la misma consulta completa del reporte.
+
+- Respuesta exitosa: `application/pdf`.
+- Nombre sugerido del archivo: `reporte-general-nomina-{p_tipo_nomina}-{p_codigo_periodo|sin-periodo}-{yyyyMMddHHmmss}.pdf`.
+- Si ocurre una validacion funcional o error controlado de datos, responde `200 OK` con el `ResultDto` JSON y `isValid = false`.
+- El PDF usa los assets en `Assets/Reports`, incluyendo `logoLeft.jpeg`.
+- El consumo frontend se realiza desde la lista de periodos `/apps/rh/periodos/`.
+- Los parametros se toman del periodo seleccionado en la grilla.
+
+### Request PDF
+
+```json
+{
+  "p_tipo_nomina": 21,
+  "p_fecha_pago": "2025-10-13",
+  "p_tipo_generacion": 3,
+  "p_codigo_periodo": 5959,
+  "p_cedula": null
+}
+```
+
+### Mapeo desde periodo seleccionado
+
+| Campo PDF            | Origen en `IRhPeriodosResponseDto`        |
+| -------------------- | ------------------------------------------ |
+| `p_tipo_nomina`      | `codigoTipoNomina`                         |
+| `p_fecha_pago`       | `fechaNomina`, `fechaNominaObj` o fecha ISO derivada |
+| `p_tipo_generacion`  | `3`, por flujo historico desde periodos    |
+| `p_codigo_periodo`   | `codigoPeriodo`                            |
+| `p_cedula`           | `null`                                     |
+| `codigo_empresa`     | No se envia; backend usa `settings:EmpresaConfig` |
+
+### Campos del request PDF
+
+| Campo               | Tipo        | Requerido   | Descripcion                                                                                 |
+| ------------------- | ----------- | ----------- | ------------------------------------------------------------------------------------------- |
+| `p_tipo_nomina`     | number      | Si          | Codigo del tipo de nomina. Debe ser mayor que cero.                                         |
+| `p_fecha_pago`      | string date | Si          | Fecha de pago o fecha de nomina en formato ISO `YYYY-MM-DD`.                                |
+| `p_tipo_generacion` | number      | Si          | Define el origen de datos: `1` prenomina temporal, `2` temporal por periodo, `3` historico. |
+| `p_codigo_periodo`  | number/null | Condicional | Obligatorio para `p_tipo_generacion = 2` y `p_tipo_generacion = 3`. Opcional para `1`.      |
+| `p_cedula`          | string/null | No          | Cedula para filtrar una sola persona. Enviar `null` para consultar todos.                   |
+| `codigo_empresa`    | number/null | No          | Override opcional. Si no se envia, el backend usa `settings:EmpresaConfig`.                  |
+
+### Ejemplo frontend PDF
+
+```ts
+const response = await ossmmasofApiVertical.post(
+  '/ReporteGeneralNomina/pdf',
+  {
+    p_tipo_nomina: 21,
+    p_fecha_pago: '2025-10-13',
+    p_tipo_generacion: 3,
+    p_codigo_periodo: 5959,
+    p_cedula: null
+  },
+  {
+    responseType: 'blob',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/pdf'
+    }
+  }
+)
+
+const url = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }))
+```
 
 ## Request
 
