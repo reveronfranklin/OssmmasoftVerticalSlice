@@ -1,0 +1,39 @@
+CREATE OR REPLACE PROCEDURE ADM.SP_REP_TIM_FIS_DOC_GET (
+    p_CodigoOrdenPago IN NUMBER,
+    p_ResultSet       OUT SYS_REFCURSOR,
+    p_Message         OUT VARCHAR2,
+    p_TotalRecords    OUT NUMBER
+) AS
+BEGIN
+    SELECT COUNT(*)
+      INTO p_TotalRecords
+      FROM ADM.ADM_DOCUMENTOS_OP DOC
+     WHERE DOC.CODIGO_ORDEN_PAGO = p_CodigoOrdenPago;
+
+    OPEN p_ResultSet FOR
+        SELECT
+            NVL(DOC.NUMERO_CONTROL_DOCUMENTO, '00-00000000') NUMERO_CONTROL_FACTURA,
+            NVL(DOC.NUMERO_DOCUMENTO, '') NUMERO_FACTURA,
+            NVL(DOC.MONTO_DOCUMENTO, 0) MONTO_DOCUMENTO,
+            NVL(DOC.MONTO_IMPUESTO_EXENTO, 0) MONTO_EXENTO,
+            NVL(DOC.MONTO_IMPUESTO, 0) MONTO_IVA
+          FROM ADM.ADM_DOCUMENTOS_OP DOC
+         WHERE DOC.CODIGO_ORDEN_PAGO = p_CodigoOrdenPago
+         ORDER BY DOC.CODIGO_DOCUMENTO_OP;
+
+    p_Message := 'Success';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SUBSTR(SQLERRM, 1, 4000);
+        p_TotalRecords := 0;
+        OPEN p_ResultSet FOR
+            SELECT
+                CAST(NULL AS VARCHAR2(100)) NUMERO_CONTROL_FACTURA,
+                CAST(NULL AS VARCHAR2(100)) NUMERO_FACTURA,
+                CAST(NULL AS NUMBER) MONTO_DOCUMENTO,
+                CAST(NULL AS NUMBER) MONTO_EXENTO,
+                CAST(NULL AS NUMBER) MONTO_IVA
+              FROM DUAL
+             WHERE 1 = 0;
+END SP_REP_TIM_FIS_DOC_GET;
+/
