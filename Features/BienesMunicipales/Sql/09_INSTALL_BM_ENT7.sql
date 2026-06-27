@@ -65,7 +65,12 @@ BEGIN
        AND (NVL(p_CodigoIcp, 0) = 0 OR D.CODIGO_ICP = p_CodigoIcp)
        AND (NVL(p_CodigoDirOrigen, 0) = 0 OR M.CODIGO_DIR_BIEN = p_CodigoDirOrigen)
        AND (NVL(p_CodigoArticulo, 0) = 0 OR B.CODIGO_ARTICULO = p_CodigoArticulo)
-       AND (TRIM(p_PlacasCsv) IS NULL OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(B.NUMERO_PLACA) || ',') > 0)
+       AND (
+            TRIM(p_PlacasCsv) IS NULL
+            OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(B.NUMERO_PLACA)) || ',') > 0
+            OR INSTR(',' || REPLACE(REPLACE(UPPER(p_PlacasCsv), '-', ''), ' ', '') || ',',
+                     ',' || REPLACE(REPLACE(UPPER(TRIM(B.NUMERO_PLACA)), '-', ''), ' ', '') || ',') > 0
+       )
        AND (TRIM(p_ResponsableText) IS NULL OR UPPER(BM.BM_PKG_UTIL.GET_ESPECIFICACION_RESP(B.CODIGO_BIEN)) LIKE '%' || UPPER(p_ResponsableText) || '%');
 
     OPEN p_ResultSet FOR
@@ -108,7 +113,12 @@ BEGIN
            AND (NVL(p_CodigoIcp, 0) = 0 OR D.CODIGO_ICP = p_CodigoIcp)
            AND (NVL(p_CodigoDirOrigen, 0) = 0 OR M.CODIGO_DIR_BIEN = p_CodigoDirOrigen)
            AND (NVL(p_CodigoArticulo, 0) = 0 OR B.CODIGO_ARTICULO = p_CodigoArticulo)
-           AND (TRIM(p_PlacasCsv) IS NULL OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(B.NUMERO_PLACA) || ',') > 0)
+           AND (
+                TRIM(p_PlacasCsv) IS NULL
+                OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(B.NUMERO_PLACA)) || ',') > 0
+                OR INSTR(',' || REPLACE(REPLACE(UPPER(p_PlacasCsv), '-', ''), ' ', '') || ',',
+                         ',' || REPLACE(REPLACE(UPPER(TRIM(B.NUMERO_PLACA)), '-', ''), ' ', '') || ',') > 0
+           )
            AND (TRIM(p_ResponsableText) IS NULL OR UPPER(BM.BM_PKG_UTIL.GET_ESPECIFICACION_RESP(B.CODIGO_BIEN)) LIKE '%' || UPPER(p_ResponsableText) || '%')
          ORDER BY D.CODIGO_ICP, B.NUMERO_PLACA;
 
@@ -117,7 +127,25 @@ EXCEPTION
     WHEN OTHERS THEN
         p_TotalRecords := 0;
         p_Message := 'Error tecnico: ' || SQLERRM;
-        OPEN p_ResultSet FOR SELECT NULL CODIGO_BIEN FROM DUAL WHERE 1 = 0;
+        OPEN p_ResultSet FOR
+            SELECT 0 CODIGO_PROC_MASIVO,
+                   0 CODIGO_PROC_MAS_DET,
+                   0 CODIGO_BIEN,
+                   NULL NUMERO_PLACA,
+                   NULL ARTICULO,
+                   0 CODIGO_DIR_ORIGEN,
+                   0 CODIGO_ICP_ORIGEN,
+                   NULL UNIDAD_ORIGEN,
+                   0 CODIGO_DIR_DESTINO,
+                   NULL UNIDAD_DESTINO,
+                   NULL ESTADO,
+                   NULL MENSAJE,
+                   0 CODIGO_MOV_BIEN,
+                   0 TOTAL_PROCESADOS,
+                   0 TOTAL_EXITOSOS,
+                   0 TOTAL_RECHAZADOS
+              FROM DUAL
+             WHERE 1 = 0;
 END;
 /
 
@@ -207,7 +235,12 @@ BEGIN
            AND (NVL(p_CodigoIcp, 0) = 0 OR D.CODIGO_ICP = p_CodigoIcp)
            AND (NVL(p_CodigoDirOrigen, 0) = 0 OR M.CODIGO_DIR_BIEN = p_CodigoDirOrigen)
            AND (NVL(p_CodigoArticulo, 0) = 0 OR B.CODIGO_ARTICULO = p_CodigoArticulo)
-           AND (TRIM(p_PlacasCsv) IS NULL OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(B.NUMERO_PLACA) || ',') > 0)
+           AND (
+                TRIM(p_PlacasCsv) IS NULL
+                OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(B.NUMERO_PLACA)) || ',') > 0
+                OR INSTR(',' || REPLACE(REPLACE(UPPER(p_PlacasCsv), '-', ''), ' ', '') || ',',
+                         ',' || REPLACE(REPLACE(UPPER(TRIM(B.NUMERO_PLACA)), '-', ''), ' ', '') || ',') > 0
+           )
            AND (TRIM(p_ResponsableText) IS NULL OR UPPER(BM.BM_PKG_UTIL.GET_ESPECIFICACION_RESP(B.CODIGO_BIEN)) LIKE '%' || UPPER(p_ResponsableText) || '%')
          ORDER BY D.CODIGO_ICP, B.NUMERO_PLACA
     ) LOOP
@@ -300,13 +333,14 @@ BEGIN
           LEFT JOIN BM.BM_ARTICULOS A
             ON A.CODIGO_ARTICULO = B.CODIGO_ARTICULO
           LEFT JOIN BM.BM_MOV_BIENES M0
-            ON M0.CODIGO_MOV_BIEN = (
-                SELECT MAX(X.CODIGO_MOV_BIEN)
-                  FROM BM.BM_MOV_BIENES X
-                 WHERE X.CODIGO_EMPRESA = B.CODIGO_EMPRESA
-                   AND X.CODIGO_BIEN = B.CODIGO_BIEN
-                   AND X.CODIGO_MOV_BIEN <> NVL(D.CODIGO_MOV_BIEN, 0)
-           )
+            ON M0.CODIGO_EMPRESA = B.CODIGO_EMPRESA
+           AND M0.CODIGO_BIEN = B.CODIGO_BIEN
+           AND M0.CODIGO_MOV_BIEN <> NVL(D.CODIGO_MOV_BIEN, 0)
+          LEFT JOIN BM.BM_MOV_BIENES M1
+            ON M1.CODIGO_EMPRESA = B.CODIGO_EMPRESA
+           AND M1.CODIGO_BIEN = B.CODIGO_BIEN
+           AND M1.CODIGO_MOV_BIEN <> NVL(D.CODIGO_MOV_BIEN, 0)
+           AND M1.CODIGO_MOV_BIEN > M0.CODIGO_MOV_BIEN
           LEFT JOIN BM.BM_DIR_BIEN D0
             ON D0.CODIGO_DIR_BIEN = M0.CODIGO_DIR_BIEN
           LEFT JOIN PRE.PRE_INDICE_CAT_PRG P0
@@ -316,12 +350,31 @@ BEGIN
           LEFT JOIN PRE.PRE_INDICE_CAT_PRG PD
             ON PD.CODIGO_ICP = DD.CODIGO_ICP
          WHERE H.CODIGO_PROC_MASIVO = v_CodigoProc
+           AND M1.CODIGO_MOV_BIEN IS NULL
          ORDER BY D.CODIGO_PROC_MAS_DET;
 EXCEPTION
     WHEN OTHERS THEN
         ROLLBACK;
         p_TotalRecords := 0;
         p_Message := 'Error tecnico: ' || SQLERRM;
-        OPEN p_ResultSet FOR SELECT NULL CODIGO_PROC_MASIVO FROM DUAL WHERE 1 = 0;
+        OPEN p_ResultSet FOR
+            SELECT 0 CODIGO_PROC_MASIVO,
+                   0 CODIGO_PROC_MAS_DET,
+                   0 CODIGO_BIEN,
+                   NULL NUMERO_PLACA,
+                   NULL ARTICULO,
+                   0 CODIGO_DIR_ORIGEN,
+                   0 CODIGO_ICP_ORIGEN,
+                   NULL UNIDAD_ORIGEN,
+                   0 CODIGO_DIR_DESTINO,
+                   NULL UNIDAD_DESTINO,
+                   NULL ESTADO,
+                   NULL MENSAJE,
+                   0 CODIGO_MOV_BIEN,
+                   0 TOTAL_PROCESADOS,
+                   0 TOTAL_EXITOSOS,
+                   0 TOTAL_RECHAZADOS
+              FROM DUAL
+             WHERE 1 = 0;
 END;
 /

@@ -54,7 +54,14 @@ public class BmProcesosMasivosController(ConnectionDB connectionDB, IConfigurati
 
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
-        return await BmDb.ExecuteListAsync(cmd, MapProcesoMasivo);
+        try
+        {
+            return await BmDb.ExecuteListAsync(cmd, MapProcesoMasivo);
+        }
+        catch (Exception ex)
+        {
+            return BmDb.InvalidList<BmProcesoMasivoResponse>($"Error tecnico: {ex.Message}");
+        }
     }
 
     private static string NormalizeCsv(string? values)
