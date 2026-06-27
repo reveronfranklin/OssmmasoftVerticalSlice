@@ -42,4 +42,9 @@ public class ConnectionDB(IConfiguration _config)
     {
         return new OracleConnection(_config.GetConnectionString("DefaultConnectionBM"));
     }
+
+    public OracleConnection GetBmcConnection()
+    {
+        return new OracleConnection(_config.GetConnectionString("DefaultConnectionBMC"));
+    }
 }

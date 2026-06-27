@@ -1,0 +1,169 @@
+@baseUrl = http://localhost:5143/api
+@numeroPlaca = BM-000001
+@codigoBien = 0
+@codigoIcp = 0
+@codigoBmConteo = 0
+
+### BM - ICP
+GET {{baseUrl}}/Bm1/GetListICP
+
+### BM - Placas
+GET {{baseUrl}}/Bm1/GetPlacas
+
+### BM - Fecha primer movimiento
+GET {{baseUrl}}/Bm1/GetFechaPrimerMovimiento
+
+### BM - BM1 por ICP
+POST {{baseUrl}}/Bm1/GetByListIcp
+Content-Type: application/json
+
+{
+  "fechaDesde": null,
+  "fechaHasta": null,
+  "codigosIcp": []
+}
+
+### BM - Ficha bienes
+POST {{baseUrl}}/BmBienes/GetAll
+Content-Type: application/json
+
+{
+  "searchText": "",
+  "page": 1,
+  "pageSize": 25
+}
+
+### BM - Bien por placa
+POST {{baseUrl}}/BmBienes/GetByNumeroPlaca
+Content-Type: application/json
+
+{
+  "numeroPlaca": "{{numeroPlaca}}"
+}
+
+### BM - Fotos por placa
+POST {{baseUrl}}/BmBienesFotos/GetByNumeroPlaca
+Content-Type: application/json
+
+{
+  "numeroPlaca": "{{numeroPlaca}}"
+}
+
+### BM - Catalogos titulos
+POST {{baseUrl}}/BmTitulos/GetAll
+Content-Type: application/json
+
+{
+  "searchText": "",
+  "page": 1,
+  "pageSize": 25
+}
+
+### BM - Descriptivas movimientos
+POST {{baseUrl}}/BmDescriptivas/GetByTitulo
+Content-Type: application/json
+
+{
+  "descripcionId": 0,
+  "tituloId": 4
+}
+
+### BM - Ubicaciones
+POST {{baseUrl}}/BmUbicaciones/GetAll
+Content-Type: application/json
+
+{
+  "searchText": "",
+  "page": 1,
+  "pageSize": 25
+}
+
+### BM - Movimientos por bien
+POST {{baseUrl}}/BmMovBienes/GetByBien
+Content-Type: application/json
+
+{
+  "codigoBien": {{codigoBien}}
+}
+
+### BM - Solicitudes de movimiento
+POST {{baseUrl}}/BmSolMovBienes/GetAll
+Content-Type: application/json
+
+{
+  "aprobado": -1,
+  "searchText": "",
+  "page": 1,
+  "pageSize": 25
+}
+
+### BM - Placas cuarentena
+GET {{baseUrl}}/BmPlacaCuarentena/GetAll
+
+### BM - Reporte placa datos
+POST {{baseUrl}}/BmReportes/Placa
+Content-Type: application/json
+
+{
+  "numeroPlaca": "{{numeroPlaca}}"
+}
+
+### BM - Reporte ubicacion datos
+POST {{baseUrl}}/BmReportes/Ubicacion
+Content-Type: application/json
+
+{
+  "codigoIcp": {{codigoIcp}}
+}
+
+### BMC - Conteos
+GET {{baseUrl}}/BmConteo/GetAll
+
+### BMC - Detalle conteo
+POST {{baseUrl}}/BmConteoDetalle/GetAllByConteo
+Content-Type: application/json
+
+{
+  "codigoBmConteo": {{codigoBmConteo}}
+}
+
+### BMC - Comparar conteo
+POST {{baseUrl}}/BmConteoDetalle/GetAllByConteoComparar
+Content-Type: application/json
+
+{
+  "codigoBmConteo": {{codigoBmConteo}}
+}
+
+### BMC - Historico conteo
+GET {{baseUrl}}/BmConteoHistorico/GetAll
+
+### BMC - Reporte diferencias conteo
+POST {{baseUrl}}/BmReportes/ConteoDiferencias
+Content-Type: application/json
+
+{
+  "codigoBmConteo": {{codigoBmConteo}}
+}
+
+### BMC - Reporte historico conteo
+POST {{baseUrl}}/BmReportes/ConteoHistorico
+Content-Type: application/json
+
+{
+  "fechaDesde": null,
+  "fechaHasta": null
+}
+
+### Reporte BM1 - ICP
+GET {{baseUrl}}/ReporteBm1/GetIcps
+
+### Reporte BM1 - Datos
+POST {{baseUrl}}/ReporteBm1/GetAll
+Content-Type: application/json
+
+{
+  "fechaDesde": null,
+  "fechaHasta": null,
+  "codigosIcp": []
+}
