@@ -56,6 +56,31 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config) : C
         )));
     }
 
+    [HttpPost("GetUbicacionesOrigen")]
+    public async Task<IActionResult> GetUbicacionesOrigen(BmOrigenUbicacionRequest request)
+    {
+        if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
+        {
+            return Ok(BmDb.InvalidList<BmUbicacionResponse>(error));
+        }
+
+        using var cn = connectionDB.GetBmConnection();
+        var openError = await BmDb.TryOpenAsync(cn, "BM");
+        if (openError is not null) return Ok(BmDb.InvalidList<BmUbicacionResponse>(openError));
+
+        using var cmd = BmDb.StoredProcedure("BM.SP_BM1_GET_UBI_ORI", cn);
+        cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
+        cmd.Parameters.Add("p_CodigoIcp", OracleDbType.Int32).Value = request.CodigoIcp;
+        cmd.Parameters.Add("p_CodigoArticulo", OracleDbType.Int32).Value = request.CodigoArticulo;
+        cmd.Parameters.Add("p_ResponsableText", OracleDbType.Varchar2).Value = BmDb.DbValue(request.ResponsableText);
+        cmd.Parameters.Add("p_SearchText", OracleDbType.Varchar2).Value = BmDb.DbValue(request.SearchText);
+        cmd.Parameters.Add("p_Page", OracleDbType.Int32).Value = request.Page <= 0 ? 1 : request.Page;
+        cmd.Parameters.Add("p_PageSize", OracleDbType.Int32).Value = request.PageSize <= 0 ? 25 : request.PageSize;
+        cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
+
+        return Ok(await BmDb.ExecuteListAsync(cmd, BmUbicacionesController.MapUbicacion, request.Page));
+    }
+
     [HttpGet("GetFechaPrimerMovimiento")]
     public async Task<IActionResult> GetFechaPrimerMovimiento()
     {
@@ -120,9 +145,19 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config) : C
         if (openError is not null) return Ok(BmDb.InvalidList<BmProductMobileResponse>(openError));
 
         using var cmd = BmDb.StoredProcedure("BM.SP_BM1_GET_PRODUCT_MOB", cn);
+        var searchText = string.IsNullOrWhiteSpace(request.SearchText) ? request.SearhText : request.SearchText;
+        var page = request.Page > 0 ? request.Page : request.PageNumber > 0 ? request.PageNumber : 1;
+        var pageSize = request.PageSize > 0 ? request.PageSize : 25;
+
         cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
         cmd.Parameters.Add("p_CodigoBmConteo", OracleDbType.Int32).Value = request.CodigoBmConteo;
         cmd.Parameters.Add("p_CodigoDirBien", OracleDbType.Int32).Value = request.CodigoDirBien;
+        cmd.Parameters.Add("p_CodigoIcp", OracleDbType.Int32).Value = request.CodigoIcp;
+        cmd.Parameters.Add("p_CodigoArticulo", OracleDbType.Int32).Value = request.CodigoArticulo;
+        cmd.Parameters.Add("p_ResponsableText", OracleDbType.Varchar2).Value = BmDb.DbValue(request.ResponsableText);
+        cmd.Parameters.Add("p_SearchText", OracleDbType.Varchar2).Value = BmDb.DbValue(searchText);
+        cmd.Parameters.Add("p_Page", OracleDbType.Int32).Value = page;
+        cmd.Parameters.Add("p_PageSize", OracleDbType.Int32).Value = pageSize;
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
         return Ok(await BmDb.ExecuteListAsync(cmd, reader => new BmProductMobileResponse(

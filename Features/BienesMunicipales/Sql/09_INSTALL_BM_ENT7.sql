@@ -48,79 +48,138 @@ CREATE OR REPLACE PROCEDURE BM.SP_BM_PROC_MAS_PRE (
 BEGIN
     SELECT COUNT(1)
       INTO p_TotalRecords
-      FROM BM.BM_BIENES B,
-           BM.BM_ARTICULOS A,
-           BM.BM_MOV_BIENES M,
-           BM.BM_DIR_BIEN D
-     WHERE A.CODIGO_ARTICULO = B.CODIGO_ARTICULO
-       AND M.CODIGO_MOV_BIEN = (
-            SELECT MAX(X.CODIGO_MOV_BIEN)
-              FROM BM.BM_MOV_BIENES X
-             WHERE X.CODIGO_EMPRESA = B.CODIGO_EMPRESA
-               AND X.CODIGO_BIEN = B.CODIGO_BIEN
-       )
-       AND D.CODIGO_DIR_BIEN = M.CODIGO_DIR_BIEN
-       AND B.CODIGO_EMPRESA = p_CodigoEmpresa
-       AND NVL(M.TIPO_MOVIMIENTO, 'A') NOT IN ('D', 'E')
-       AND (NVL(p_CodigoIcp, 0) = 0 OR D.CODIGO_ICP = p_CodigoIcp)
-       AND (NVL(p_CodigoDirOrigen, 0) = 0 OR M.CODIGO_DIR_BIEN = p_CodigoDirOrigen)
-       AND (NVL(p_CodigoArticulo, 0) = 0 OR B.CODIGO_ARTICULO = p_CodigoArticulo)
-       AND (
-            TRIM(p_PlacasCsv) IS NULL
-            OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(B.NUMERO_PLACA)) || ',') > 0
-            OR INSTR(',' || REPLACE(REPLACE(UPPER(p_PlacasCsv), '-', ''), ' ', '') || ',',
-                     ',' || REPLACE(REPLACE(UPPER(TRIM(B.NUMERO_PLACA)), '-', ''), ' ', '') || ',') > 0
-       )
-       AND (TRIM(p_ResponsableText) IS NULL OR UPPER(BM.BM_PKG_UTIL.GET_ESPECIFICACION_RESP(B.CODIGO_BIEN)) LIKE '%' || UPPER(p_ResponsableText) || '%');
+      FROM (
+            SELECT V.CODIGO_BIEN
+              FROM BM.BM_V_BM1 V
+              JOIN BM.BM_BIENES B
+                ON B.CODIGO_BIEN = V.CODIGO_BIEN
+               AND B.CODIGO_EMPRESA = V.CODIGO_EMPRESA
+             WHERE V.CODIGO_EMPRESA = p_CodigoEmpresa
+               AND (NVL(p_CodigoIcp, 0) = 0 OR V.CODIGO_ICP = p_CodigoIcp)
+               AND (NVL(p_CodigoDirOrigen, 0) = 0 OR V.CODIGO_DIR_BIEN = p_CodigoDirOrigen)
+               AND (NVL(p_CodigoArticulo, 0) = 0 OR B.CODIGO_ARTICULO = p_CodigoArticulo)
+               AND (
+                    TRIM(p_PlacasCsv) IS NULL
+                    OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(V.NUMERO_PLACA)) || ',') > 0
+                    OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(V.NRO_PLACA)) || ',') > 0
+                    OR INSTR(',' || REPLACE(REPLACE(UPPER(p_PlacasCsv), '-', ''), ' ', '') || ',',
+                             ',' || REPLACE(REPLACE(UPPER(TRIM(V.NUMERO_PLACA)), '-', ''), ' ', '') || ',') > 0
+                    OR INSTR(',' || REPLACE(REPLACE(UPPER(p_PlacasCsv), '-', ''), ' ', '') || ',',
+                             ',' || REPLACE(REPLACE(UPPER(TRIM(V.NRO_PLACA)), '-', ''), ' ', '') || ',') > 0
+               )
+               AND (TRIM(p_ResponsableText) IS NULL OR UPPER(NVL(V.RESPONSABLE_BIEN, '')) LIKE '%' || UPPER(p_ResponsableText) || '%')
+            UNION ALL
+            SELECT B.CODIGO_BIEN
+              FROM BM.BM_BIENES B
+              LEFT JOIN BM.BM_V_BM1 V
+                ON V.CODIGO_EMPRESA = B.CODIGO_EMPRESA
+               AND V.CODIGO_BIEN = B.CODIGO_BIEN
+             WHERE B.CODIGO_EMPRESA = p_CodigoEmpresa
+               AND TRIM(p_PlacasCsv) IS NOT NULL
+               AND (
+                    INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(B.NUMERO_PLACA)) || ',') > 0
+                    OR INSTR(',' || REPLACE(REPLACE(UPPER(p_PlacasCsv), '-', ''), ' ', '') || ',',
+                             ',' || REPLACE(REPLACE(UPPER(TRIM(B.NUMERO_PLACA)), '-', ''), ' ', '') || ',') > 0
+               )
+               AND NOT (
+                    V.CODIGO_BIEN IS NOT NULL
+                    AND (NVL(p_CodigoIcp, 0) = 0 OR V.CODIGO_ICP = p_CodigoIcp)
+                    AND (NVL(p_CodigoDirOrigen, 0) = 0 OR V.CODIGO_DIR_BIEN = p_CodigoDirOrigen)
+                    AND (NVL(p_CodigoArticulo, 0) = 0 OR B.CODIGO_ARTICULO = p_CodigoArticulo)
+                    AND (TRIM(p_ResponsableText) IS NULL OR UPPER(NVL(V.RESPONSABLE_BIEN, '')) LIKE '%' || UPPER(p_ResponsableText) || '%')
+               )
+           );
 
     OPEN p_ResultSet FOR
         SELECT 0 CODIGO_PROC_MASIVO,
                0 CODIGO_PROC_MAS_DET,
-               B.CODIGO_BIEN,
-               B.NUMERO_PLACA,
-               A.DENOMINACION ARTICULO,
-               M.CODIGO_DIR_BIEN CODIGO_DIR_ORIGEN,
-               D.CODIGO_ICP CODIGO_ICP_ORIGEN,
-               NVL(P.UNIDAD_EJECUTORA, P.DENOMINACION) UNIDAD_ORIGEN,
+               V.CODIGO_BIEN,
+               V.NUMERO_PLACA,
+               V.NRO_PLACA,
+               V.ARTICULO,
+               V.CODIGO_DIR_BIEN CODIGO_DIR_ORIGEN,
+               V.CODIGO_ICP CODIGO_ICP_ORIGEN,
+               V.UNIDAD_TRABAJO UNIDAD_ORIGEN,
                p_CodigoDirDestino CODIGO_DIR_DESTINO,
                NVL(PD.UNIDAD_EJECUTORA, PD.DENOMINACION) UNIDAD_DESTINO,
                'PREVIEW' ESTADO,
                'Bien seleccionado para cambio masivo.' MENSAJE,
+               V.CODIGO_MOV_BIEN,
+               p_TotalRecords TOTAL_PROCESADOS,
+               0 TOTAL_EXITOSOS,
+               0 TOTAL_RECHAZADOS
+          FROM BM.BM_V_BM1 V
+          JOIN BM.BM_BIENES B
+            ON B.CODIGO_BIEN = V.CODIGO_BIEN
+           AND B.CODIGO_EMPRESA = V.CODIGO_EMPRESA
+          LEFT JOIN BM.BM_DIR_BIEN DD
+            ON DD.CODIGO_DIR_BIEN = p_CodigoDirDestino
+          LEFT JOIN PRE.PRE_INDICE_CAT_PRG PD
+            ON PD.CODIGO_ICP = DD.CODIGO_ICP
+         WHERE V.CODIGO_EMPRESA = p_CodigoEmpresa
+           AND (NVL(p_CodigoIcp, 0) = 0 OR V.CODIGO_ICP = p_CodigoIcp)
+           AND (NVL(p_CodigoDirOrigen, 0) = 0 OR V.CODIGO_DIR_BIEN = p_CodigoDirOrigen)
+           AND (NVL(p_CodigoArticulo, 0) = 0 OR B.CODIGO_ARTICULO = p_CodigoArticulo)
+           AND (
+                TRIM(p_PlacasCsv) IS NULL
+                OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(V.NUMERO_PLACA)) || ',') > 0
+                OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(V.NRO_PLACA)) || ',') > 0
+                OR INSTR(',' || REPLACE(REPLACE(UPPER(p_PlacasCsv), '-', ''), ' ', '') || ',',
+                         ',' || REPLACE(REPLACE(UPPER(TRIM(V.NUMERO_PLACA)), '-', ''), ' ', '') || ',') > 0
+                OR INSTR(',' || REPLACE(REPLACE(UPPER(p_PlacasCsv), '-', ''), ' ', '') || ',',
+                         ',' || REPLACE(REPLACE(UPPER(TRIM(V.NRO_PLACA)), '-', ''), ' ', '') || ',') > 0
+           )
+           AND (TRIM(p_ResponsableText) IS NULL OR UPPER(NVL(V.RESPONSABLE_BIEN, '')) LIKE '%' || UPPER(p_ResponsableText) || '%')
+        UNION ALL
+        SELECT 0 CODIGO_PROC_MASIVO,
+               0 CODIGO_PROC_MAS_DET,
+               B.CODIGO_BIEN,
+               B.NUMERO_PLACA,
+               NVL(V.NRO_PLACA, B.NUMERO_PLACA) NRO_PLACA,
+               A.DENOMINACION ARTICULO,
+               NVL(V.CODIGO_DIR_BIEN, 0) CODIGO_DIR_ORIGEN,
+               NVL(V.CODIGO_ICP, 0) CODIGO_ICP_ORIGEN,
+               V.UNIDAD_TRABAJO UNIDAD_ORIGEN,
+               p_CodigoDirDestino CODIGO_DIR_DESTINO,
+               NVL(PD.UNIDAD_EJECUTORA, PD.DENOMINACION) UNIDAD_DESTINO,
+               'RECHAZADO' ESTADO,
+               CASE
+                   WHEN V.CODIGO_BIEN IS NULL THEN 'El bien no existe en BM_V_BM1 y no esta permitido para movimientos.'
+                   WHEN NVL(p_CodigoIcp, 0) <> 0 AND NVL(V.CODIGO_ICP, 0) <> p_CodigoIcp THEN 'El bien no pertenece al ICP origen seleccionado.'
+                   WHEN NVL(p_CodigoDirOrigen, 0) <> 0 AND NVL(V.CODIGO_DIR_BIEN, 0) <> p_CodigoDirOrigen THEN 'El bien no pertenece a la ubicacion origen seleccionada.'
+                   WHEN NVL(p_CodigoArticulo, 0) <> 0 AND NVL(B.CODIGO_ARTICULO, 0) <> p_CodigoArticulo THEN 'El bien no pertenece al articulo seleccionado.'
+                   WHEN TRIM(p_ResponsableText) IS NOT NULL AND UPPER(NVL(V.RESPONSABLE_BIEN, '')) NOT LIKE '%' || UPPER(p_ResponsableText) || '%' THEN 'El bien no coincide con el responsable indicado.'
+                   ELSE 'El bien no cumple los filtros seleccionados.'
+               END MENSAJE,
                0 CODIGO_MOV_BIEN,
                p_TotalRecords TOTAL_PROCESADOS,
                0 TOTAL_EXITOSOS,
                0 TOTAL_RECHAZADOS
-          FROM BM.BM_BIENES B,
-               BM.BM_ARTICULOS A,
-               BM.BM_MOV_BIENES M,
-               BM.BM_DIR_BIEN D,
-               PRE.PRE_INDICE_CAT_PRG P,
-               BM.BM_DIR_BIEN DD,
-               PRE.PRE_INDICE_CAT_PRG PD
-         WHERE A.CODIGO_ARTICULO = B.CODIGO_ARTICULO
-           AND M.CODIGO_MOV_BIEN = (
-                SELECT MAX(X.CODIGO_MOV_BIEN)
-                  FROM BM.BM_MOV_BIENES X
-                 WHERE X.CODIGO_EMPRESA = B.CODIGO_EMPRESA
-                   AND X.CODIGO_BIEN = B.CODIGO_BIEN
-           )
-           AND D.CODIGO_DIR_BIEN = M.CODIGO_DIR_BIEN
-           AND P.CODIGO_ICP(+) = D.CODIGO_ICP
-           AND DD.CODIGO_DIR_BIEN(+) = p_CodigoDirDestino
-           AND PD.CODIGO_ICP(+) = DD.CODIGO_ICP
-           AND B.CODIGO_EMPRESA = p_CodigoEmpresa
-           AND NVL(M.TIPO_MOVIMIENTO, 'A') NOT IN ('D', 'E')
-           AND (NVL(p_CodigoIcp, 0) = 0 OR D.CODIGO_ICP = p_CodigoIcp)
-           AND (NVL(p_CodigoDirOrigen, 0) = 0 OR M.CODIGO_DIR_BIEN = p_CodigoDirOrigen)
-           AND (NVL(p_CodigoArticulo, 0) = 0 OR B.CODIGO_ARTICULO = p_CodigoArticulo)
+          FROM BM.BM_BIENES B
+          JOIN BM.BM_ARTICULOS A
+            ON A.CODIGO_ARTICULO = B.CODIGO_ARTICULO
+          LEFT JOIN BM.BM_V_BM1 V
+            ON V.CODIGO_EMPRESA = B.CODIGO_EMPRESA
+           AND V.CODIGO_BIEN = B.CODIGO_BIEN
+          LEFT JOIN BM.BM_DIR_BIEN DD
+            ON DD.CODIGO_DIR_BIEN = p_CodigoDirDestino
+          LEFT JOIN PRE.PRE_INDICE_CAT_PRG PD
+            ON PD.CODIGO_ICP = DD.CODIGO_ICP
+         WHERE B.CODIGO_EMPRESA = p_CodigoEmpresa
+           AND TRIM(p_PlacasCsv) IS NOT NULL
            AND (
-                TRIM(p_PlacasCsv) IS NULL
-                OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(B.NUMERO_PLACA)) || ',') > 0
+                INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(B.NUMERO_PLACA)) || ',') > 0
                 OR INSTR(',' || REPLACE(REPLACE(UPPER(p_PlacasCsv), '-', ''), ' ', '') || ',',
                          ',' || REPLACE(REPLACE(UPPER(TRIM(B.NUMERO_PLACA)), '-', ''), ' ', '') || ',') > 0
            )
-           AND (TRIM(p_ResponsableText) IS NULL OR UPPER(BM.BM_PKG_UTIL.GET_ESPECIFICACION_RESP(B.CODIGO_BIEN)) LIKE '%' || UPPER(p_ResponsableText) || '%')
-         ORDER BY D.CODIGO_ICP, B.NUMERO_PLACA;
+           AND NOT (
+                V.CODIGO_BIEN IS NOT NULL
+                AND (NVL(p_CodigoIcp, 0) = 0 OR V.CODIGO_ICP = p_CodigoIcp)
+                AND (NVL(p_CodigoDirOrigen, 0) = 0 OR V.CODIGO_DIR_BIEN = p_CodigoDirOrigen)
+                AND (NVL(p_CodigoArticulo, 0) = 0 OR B.CODIGO_ARTICULO = p_CodigoArticulo)
+                AND (TRIM(p_ResponsableText) IS NULL OR UPPER(NVL(V.RESPONSABLE_BIEN, '')) LIKE '%' || UPPER(p_ResponsableText) || '%')
+           )
+         ORDER BY CODIGO_ICP_ORIGEN, NUMERO_PLACA;
 
     p_Message := 'success';
 EXCEPTION
@@ -132,6 +191,7 @@ EXCEPTION
                    0 CODIGO_PROC_MAS_DET,
                    0 CODIGO_BIEN,
                    NULL NUMERO_PLACA,
+                   NULL NRO_PLACA,
                    NULL ARTICULO,
                    0 CODIGO_DIR_ORIGEN,
                    0 CODIGO_ICP_ORIGEN,
@@ -210,56 +270,39 @@ BEGIN
     );
 
     FOR r IN (
-        SELECT B.CODIGO_BIEN,
-               B.NUMERO_PLACA,
-               A.DENOMINACION ARTICULO,
-               M.TIPO_MOVIMIENTO,
-               M.CODIGO_DIR_BIEN CODIGO_DIR_ORIGEN,
-               D.CODIGO_ICP CODIGO_ICP_ORIGEN,
-               NVL(P.UNIDAD_EJECUTORA, P.DENOMINACION) UNIDAD_ORIGEN
-          FROM BM.BM_BIENES B,
-               BM.BM_ARTICULOS A,
-               BM.BM_MOV_BIENES M,
-               BM.BM_DIR_BIEN D,
-               PRE.PRE_INDICE_CAT_PRG P
-         WHERE A.CODIGO_ARTICULO = B.CODIGO_ARTICULO
-           AND M.CODIGO_MOV_BIEN = (
-                SELECT MAX(X.CODIGO_MOV_BIEN)
-                  FROM BM.BM_MOV_BIENES X
-                 WHERE X.CODIGO_EMPRESA = B.CODIGO_EMPRESA
-                   AND X.CODIGO_BIEN = B.CODIGO_BIEN
-           )
-           AND D.CODIGO_DIR_BIEN = M.CODIGO_DIR_BIEN
-           AND P.CODIGO_ICP(+) = D.CODIGO_ICP
-           AND B.CODIGO_EMPRESA = p_CodigoEmpresa
-           AND (NVL(p_CodigoIcp, 0) = 0 OR D.CODIGO_ICP = p_CodigoIcp)
-           AND (NVL(p_CodigoDirOrigen, 0) = 0 OR M.CODIGO_DIR_BIEN = p_CodigoDirOrigen)
+        SELECT V.CODIGO_BIEN,
+               V.NUMERO_PLACA,
+               V.NRO_PLACA,
+               V.ARTICULO,
+               V.CODIGO_DIR_BIEN CODIGO_DIR_ORIGEN,
+               V.CODIGO_ICP CODIGO_ICP_ORIGEN,
+               V.UNIDAD_TRABAJO UNIDAD_ORIGEN
+          FROM BM.BM_V_BM1 V
+          JOIN BM.BM_BIENES B
+            ON B.CODIGO_BIEN = V.CODIGO_BIEN
+           AND B.CODIGO_EMPRESA = V.CODIGO_EMPRESA
+         WHERE V.CODIGO_EMPRESA = p_CodigoEmpresa
+           AND (NVL(p_CodigoIcp, 0) = 0 OR V.CODIGO_ICP = p_CodigoIcp)
+           AND (NVL(p_CodigoDirOrigen, 0) = 0 OR V.CODIGO_DIR_BIEN = p_CodigoDirOrigen)
            AND (NVL(p_CodigoArticulo, 0) = 0 OR B.CODIGO_ARTICULO = p_CodigoArticulo)
            AND (
                 TRIM(p_PlacasCsv) IS NULL
-                OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(B.NUMERO_PLACA)) || ',') > 0
+                OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(V.NUMERO_PLACA)) || ',') > 0
+                OR INSTR(',' || UPPER(p_PlacasCsv) || ',', ',' || UPPER(TRIM(V.NRO_PLACA)) || ',') > 0
                 OR INSTR(',' || REPLACE(REPLACE(UPPER(p_PlacasCsv), '-', ''), ' ', '') || ',',
-                         ',' || REPLACE(REPLACE(UPPER(TRIM(B.NUMERO_PLACA)), '-', ''), ' ', '') || ',') > 0
+                         ',' || REPLACE(REPLACE(UPPER(TRIM(V.NUMERO_PLACA)), '-', ''), ' ', '') || ',') > 0
+                OR INSTR(',' || REPLACE(REPLACE(UPPER(p_PlacasCsv), '-', ''), ' ', '') || ',',
+                         ',' || REPLACE(REPLACE(UPPER(TRIM(V.NRO_PLACA)), '-', ''), ' ', '') || ',') > 0
            )
-           AND (TRIM(p_ResponsableText) IS NULL OR UPPER(BM.BM_PKG_UTIL.GET_ESPECIFICACION_RESP(B.CODIGO_BIEN)) LIKE '%' || UPPER(p_ResponsableText) || '%')
-         ORDER BY D.CODIGO_ICP, B.NUMERO_PLACA
+           AND (TRIM(p_ResponsableText) IS NULL OR UPPER(NVL(V.RESPONSABLE_BIEN, '')) LIKE '%' || UPPER(p_ResponsableText) || '%')
+         ORDER BY V.CODIGO_ICP, V.NUMERO_PLACA
     ) LOOP
         v_Total := v_Total + 1;
         SELECT NVL(MAX(CODIGO_PROC_MAS_DET), 0) + 1
           INTO v_CodigoDet
           FROM BM.BM_PROC_MAS_DET;
 
-        IF NVL(r.TIPO_MOVIMIENTO, 'A') IN ('D', 'E') THEN
-            v_Rechazos := v_Rechazos + 1;
-            INSERT INTO BM.BM_PROC_MAS_DET (
-                CODIGO_PROC_MAS_DET, CODIGO_PROC_MASIVO, CODIGO_EMPRESA,
-                CODIGO_BIEN, NUMERO_PLACA, CODIGO_MOV_BIEN, ESTADO, MENSAJE, FECHA_INS
-            ) VALUES (
-                v_CodigoDet, v_CodigoProc, p_CodigoEmpresa,
-                r.CODIGO_BIEN, r.NUMERO_PLACA, NULL, 'RECHAZADO',
-                'El bien tiene movimiento final.', SYSDATE
-            );
-        ELSIF r.CODIGO_DIR_ORIGEN = p_CodigoDirDestino THEN
+        IF r.CODIGO_DIR_ORIGEN = p_CodigoDirDestino THEN
             v_Rechazos := v_Rechazos + 1;
             INSERT INTO BM.BM_PROC_MAS_DET (
                 CODIGO_PROC_MAS_DET, CODIGO_PROC_MASIVO, CODIGO_EMPRESA,
@@ -313,6 +356,7 @@ BEGIN
                D.CODIGO_PROC_MAS_DET,
                D.CODIGO_BIEN,
                D.NUMERO_PLACA,
+               NVL(B.NUMERO_PLACA, D.NUMERO_PLACA) NRO_PLACA,
                A.DENOMINACION ARTICULO,
                NVL(M0.CODIGO_DIR_BIEN, 0) CODIGO_DIR_ORIGEN,
                NVL(D0.CODIGO_ICP, 0) CODIGO_ICP_ORIGEN,
@@ -362,6 +406,7 @@ EXCEPTION
                    0 CODIGO_PROC_MAS_DET,
                    0 CODIGO_BIEN,
                    NULL NUMERO_PLACA,
+                   NULL NRO_PLACA,
                    NULL ARTICULO,
                    0 CODIGO_DIR_ORIGEN,
                    0 CODIGO_ICP_ORIGEN,

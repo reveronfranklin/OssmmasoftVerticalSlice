@@ -12,31 +12,19 @@ BEGIN
     SELECT COUNT(*)
       INTO p_TotalRecords
       FROM (
-            SELECT C.CODIGO_ICP
-              FROM BM.BM_BIENES A,
-                   BM.BM_MOV_BIENES B,
-                   BM.BM_DIR_BIEN C,
-                   PRE.PRE_INDICE_CAT_PRG D
-             WHERE A.CODIGO_EMPRESA = p_CodigoEmpresa
-               AND A.CODIGO_BIEN = B.CODIGO_BIEN
-               AND B.CODIGO_DIR_BIEN = C.CODIGO_DIR_BIEN
-               AND C.CODIGO_ICP = D.CODIGO_ICP
-             GROUP BY C.CODIGO_ICP
+            SELECT V.CODIGO_ICP
+              FROM BM.BM_V_BM1 V
+             WHERE V.CODIGO_EMPRESA = p_CodigoEmpresa
+             GROUP BY V.CODIGO_ICP
           );
 
     OPEN p_ResultSet FOR
-        SELECT C.CODIGO_ICP,
-               NVL(D.UNIDAD_EJECUTORA, D.DENOMINACION) UNIDAD_TRABAJO
-          FROM BM.BM_BIENES A,
-               BM.BM_MOV_BIENES B,
-               BM.BM_DIR_BIEN C,
-               PRE.PRE_INDICE_CAT_PRG D
-         WHERE A.CODIGO_EMPRESA = p_CodigoEmpresa
-           AND A.CODIGO_BIEN = B.CODIGO_BIEN
-           AND B.CODIGO_DIR_BIEN = C.CODIGO_DIR_BIEN
-           AND C.CODIGO_ICP = D.CODIGO_ICP
-         GROUP BY C.CODIGO_ICP, NVL(D.UNIDAD_EJECUTORA, D.DENOMINACION)
-         ORDER BY NVL(D.UNIDAD_EJECUTORA, D.DENOMINACION);
+        SELECT V.CODIGO_ICP,
+               V.UNIDAD_TRABAJO
+          FROM BM.BM_V_BM1 V
+         WHERE V.CODIGO_EMPRESA = p_CodigoEmpresa
+         GROUP BY V.CODIGO_ICP, V.UNIDAD_TRABAJO
+         ORDER BY V.UNIDAD_TRABAJO;
 
     p_Message := 'Success';
 EXCEPTION
@@ -49,6 +37,183 @@ EXCEPTION
               FROM DUAL
              WHERE 1 = 0;
 END SP_BM1_GET_LIST_ICP;
+/
+
+CREATE OR REPLACE PROCEDURE BM.SP_BM1_GET_UBI_ORI (
+    p_CodigoEmpresa IN NUMBER,
+    p_CodigoIcp IN NUMBER,
+    p_CodigoArticulo IN NUMBER,
+    p_ResponsableText IN VARCHAR2,
+    p_SearchText IN VARCHAR2,
+    p_Page IN NUMBER,
+    p_PageSize IN NUMBER,
+    p_ResultSet OUT SYS_REFCURSOR,
+    p_Message OUT VARCHAR2,
+    p_TotalRecords OUT NUMBER
+) AS
+    v_Page NUMBER := NVL(p_Page, 1);
+    v_PageSize NUMBER := NVL(p_PageSize, 25);
+    v_FromRow NUMBER;
+    v_ToRow NUMBER;
+BEGIN
+    v_FromRow := ((v_Page - 1) * v_PageSize) + 1;
+    v_ToRow := v_Page * v_PageSize;
+
+    SELECT COUNT(*)
+      INTO p_TotalRecords
+      FROM (
+            SELECT V.CODIGO_DIR_BIEN
+              FROM BM.BM_V_BM1 V
+             WHERE V.CODIGO_EMPRESA = p_CodigoEmpresa
+               AND (p_CodigoIcp = 0 OR V.CODIGO_ICP = p_CodigoIcp)
+               AND (
+                    p_CodigoArticulo = 0
+                    OR EXISTS (
+                        SELECT 1
+                          FROM BM.BM_BIENES B
+                         WHERE B.CODIGO_BIEN = V.CODIGO_BIEN
+                           AND B.CODIGO_EMPRESA = V.CODIGO_EMPRESA
+                           AND B.CODIGO_ARTICULO = p_CodigoArticulo
+                    )
+               )
+               AND (TRIM(p_ResponsableText) IS NULL OR UPPER(NVL(V.RESPONSABLE_BIEN, '')) LIKE '%' || UPPER(TRIM(p_ResponsableText)) || '%')
+               AND (
+                    TRIM(p_SearchText) IS NULL
+                    OR TO_CHAR(V.CODIGO_DIR_BIEN) LIKE '%' || TRIM(p_SearchText) || '%'
+                    OR TO_CHAR(V.CODIGO_ICP) LIKE '%' || TRIM(p_SearchText) || '%'
+                    OR UPPER(NVL(V.UNIDAD_TRABAJO, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                    OR UPPER(NVL(V.NUMERO_PLACA, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                    OR UPPER(NVL(V.NRO_PLACA, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+               )
+             GROUP BY V.CODIGO_DIR_BIEN, V.CODIGO_ICP, V.UNIDAD_TRABAJO
+          );
+
+    OPEN p_ResultSet FOR
+        SELECT CODIGO_DIR_BIEN,
+               CODIGO_ICP,
+               UNIDAD_EJECUTORA,
+               PAIS_ID,
+               ESTADO_ID,
+               MUNICIPIO_ID,
+               CIUDAD_ID,
+               PARROQUIA_ID,
+               SECTOR_ID,
+               URBANIZACION_ID,
+               MANZANA_ID,
+               PARCELA_ID,
+               VIALIDAD_ID,
+               VIALIDAD,
+               TIPO_VIVIENDA_ID,
+               VIVIENDA,
+               TIPO_NIVEL_ID,
+               NIVEL,
+               TIPO_UNIDAD_ID,
+               NUMERO_UNIDAD,
+               COMPLEMENTO_DIR,
+               TENENCIA_ID,
+               CODIGO_POSTAL,
+               FECHA_INI,
+               FECHA_FIN,
+               UNIDAD_TRABAJO_ID,
+               DIRECCION,
+               SEARCH_TEXT
+          FROM (
+                SELECT X.*, ROWNUM RN
+                  FROM (
+                        SELECT V.CODIGO_DIR_BIEN,
+                               V.CODIGO_ICP,
+                               V.UNIDAD_TRABAJO UNIDAD_EJECUTORA,
+                               0 PAIS_ID,
+                               0 ESTADO_ID,
+                               0 MUNICIPIO_ID,
+                               0 CIUDAD_ID,
+                               0 PARROQUIA_ID,
+                               0 SECTOR_ID,
+                               0 URBANIZACION_ID,
+                               0 MANZANA_ID,
+                               0 PARCELA_ID,
+                               0 VIALIDAD_ID,
+                               CAST(NULL AS VARCHAR2(200)) VIALIDAD,
+                               0 TIPO_VIVIENDA_ID,
+                               CAST(NULL AS VARCHAR2(200)) VIVIENDA,
+                               0 TIPO_NIVEL_ID,
+                               CAST(NULL AS VARCHAR2(200)) NIVEL,
+                               0 TIPO_UNIDAD_ID,
+                               CAST(NULL AS VARCHAR2(200)) NUMERO_UNIDAD,
+                               CAST(NULL AS VARCHAR2(4000)) COMPLEMENTO_DIR,
+                               0 TENENCIA_ID,
+                               0 CODIGO_POSTAL,
+                               CAST(NULL AS DATE) FECHA_INI,
+                               CAST(NULL AS DATE) FECHA_FIN,
+                               0 UNIDAD_TRABAJO_ID,
+                               V.UNIDAD_TRABAJO DIRECCION,
+                               '#' || TO_CHAR(V.CODIGO_DIR_BIEN) || ' ICP ' || TO_CHAR(V.CODIGO_ICP) || ' ' || V.UNIDAD_TRABAJO SEARCH_TEXT
+                          FROM BM.BM_V_BM1 V
+                         WHERE V.CODIGO_EMPRESA = p_CodigoEmpresa
+                           AND (p_CodigoIcp = 0 OR V.CODIGO_ICP = p_CodigoIcp)
+                           AND (
+                                p_CodigoArticulo = 0
+                                OR EXISTS (
+                                    SELECT 1
+                                      FROM BM.BM_BIENES B
+                                     WHERE B.CODIGO_BIEN = V.CODIGO_BIEN
+                                       AND B.CODIGO_EMPRESA = V.CODIGO_EMPRESA
+                                       AND B.CODIGO_ARTICULO = p_CodigoArticulo
+                                )
+                           )
+                           AND (TRIM(p_ResponsableText) IS NULL OR UPPER(NVL(V.RESPONSABLE_BIEN, '')) LIKE '%' || UPPER(TRIM(p_ResponsableText)) || '%')
+                           AND (
+                                TRIM(p_SearchText) IS NULL
+                                OR TO_CHAR(V.CODIGO_DIR_BIEN) LIKE '%' || TRIM(p_SearchText) || '%'
+                                OR TO_CHAR(V.CODIGO_ICP) LIKE '%' || TRIM(p_SearchText) || '%'
+                                OR UPPER(NVL(V.UNIDAD_TRABAJO, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                                OR UPPER(NVL(V.NUMERO_PLACA, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                                OR UPPER(NVL(V.NRO_PLACA, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                           )
+                         GROUP BY V.CODIGO_DIR_BIEN, V.CODIGO_ICP, V.UNIDAD_TRABAJO
+                         ORDER BY V.UNIDAD_TRABAJO, V.CODIGO_DIR_BIEN
+                       ) X
+                 WHERE ROWNUM <= v_ToRow
+               )
+         WHERE RN >= v_FromRow;
+
+    p_Message := 'Success';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_TotalRecords := 0;
+        p_Message := 'Error tecnico: ' || SQLERRM;
+        OPEN p_ResultSet FOR
+            SELECT CAST(NULL AS NUMBER) CODIGO_DIR_BIEN,
+                   CAST(NULL AS NUMBER) CODIGO_ICP,
+                   CAST(NULL AS VARCHAR2(200)) UNIDAD_EJECUTORA,
+                   CAST(NULL AS NUMBER) PAIS_ID,
+                   CAST(NULL AS NUMBER) ESTADO_ID,
+                   CAST(NULL AS NUMBER) MUNICIPIO_ID,
+                   CAST(NULL AS NUMBER) CIUDAD_ID,
+                   CAST(NULL AS NUMBER) PARROQUIA_ID,
+                   CAST(NULL AS NUMBER) SECTOR_ID,
+                   CAST(NULL AS NUMBER) URBANIZACION_ID,
+                   CAST(NULL AS NUMBER) MANZANA_ID,
+                   CAST(NULL AS NUMBER) PARCELA_ID,
+                   CAST(NULL AS NUMBER) VIALIDAD_ID,
+                   CAST(NULL AS VARCHAR2(200)) VIALIDAD,
+                   CAST(NULL AS NUMBER) TIPO_VIVIENDA_ID,
+                   CAST(NULL AS VARCHAR2(200)) VIVIENDA,
+                   CAST(NULL AS NUMBER) TIPO_NIVEL_ID,
+                   CAST(NULL AS VARCHAR2(200)) NIVEL,
+                   CAST(NULL AS NUMBER) TIPO_UNIDAD_ID,
+                   CAST(NULL AS VARCHAR2(200)) NUMERO_UNIDAD,
+                   CAST(NULL AS VARCHAR2(4000)) COMPLEMENTO_DIR,
+                   CAST(NULL AS NUMBER) TENENCIA_ID,
+                   CAST(NULL AS NUMBER) CODIGO_POSTAL,
+                   CAST(NULL AS DATE) FECHA_INI,
+                   CAST(NULL AS DATE) FECHA_FIN,
+                   CAST(NULL AS NUMBER) UNIDAD_TRABAJO_ID,
+                   CAST(NULL AS VARCHAR2(4000)) DIRECCION,
+                   CAST(NULL AS VARCHAR2(4000)) SEARCH_TEXT
+              FROM DUAL
+             WHERE 1 = 0;
+END SP_BM1_GET_UBI_ORI;
 /
 
 CREATE OR REPLACE PROCEDURE BM.SP_BM1_GET_PLACAS (
@@ -191,31 +356,102 @@ CREATE OR REPLACE PROCEDURE BM.SP_BM1_GET_PRODUCT_MOB (
     p_CodigoEmpresa IN NUMBER,
     p_CodigoBmConteo IN NUMBER,
     p_CodigoDirBien IN NUMBER,
+    p_CodigoIcp IN NUMBER,
+    p_CodigoArticulo IN NUMBER,
+    p_ResponsableText IN VARCHAR2,
+    p_SearchText IN VARCHAR2,
+    p_Page IN NUMBER,
+    p_PageSize IN NUMBER,
     p_ResultSet OUT SYS_REFCURSOR,
     p_Message OUT VARCHAR2,
     p_TotalRecords OUT NUMBER
 ) AS
+    v_Page NUMBER := NVL(p_Page, 1);
+    v_PageSize NUMBER := NVL(p_PageSize, 25);
+    v_FromRow NUMBER;
+    v_ToRow NUMBER;
 BEGIN
+    v_FromRow := ((v_Page - 1) * v_PageSize) + 1;
+    v_ToRow := v_Page * v_PageSize;
+
     SELECT COUNT(*)
       INTO p_TotalRecords
-      FROM BM.BM_V_BM1 V
+     FROM BM.BM_V_BM1 V
      WHERE V.CODIGO_EMPRESA = p_CodigoEmpresa
-       AND (p_CodigoDirBien = 0 OR V.CODIGO_DIR_BIEN = p_CodigoDirBien);
+       AND (p_CodigoDirBien = 0 OR V.CODIGO_DIR_BIEN = p_CodigoDirBien)
+       AND (p_CodigoIcp = 0 OR V.CODIGO_ICP = p_CodigoIcp)
+       AND (
+            p_CodigoArticulo = 0
+            OR EXISTS (
+                SELECT 1
+                 FROM BM.BM_BIENES B
+                 WHERE B.CODIGO_BIEN = V.CODIGO_BIEN
+                   AND B.CODIGO_EMPRESA = V.CODIGO_EMPRESA
+                   AND B.CODIGO_ARTICULO = p_CodigoArticulo
+            )
+       )
+       AND (TRIM(p_ResponsableText) IS NULL OR UPPER(NVL(V.RESPONSABLE_BIEN, '')) LIKE '%' || UPPER(TRIM(p_ResponsableText)) || '%')
+       AND (
+            TRIM(p_SearchText) IS NULL
+            OR TO_CHAR(V.CODIGO_BIEN) LIKE '%' || TRIM(p_SearchText) || '%'
+            OR UPPER(V.NUMERO_PLACA) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+            OR UPPER(V.NRO_PLACA) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+            OR UPPER(V.ARTICULO) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+            OR UPPER(NVL(V.RESPONSABLE_BIEN, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+            OR UPPER(NVL(V.UNIDAD_TRABAJO, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+       );
 
     OPEN p_ResultSet FOR
-        SELECT V.CODIGO_BIEN ID,
-               TO_CHAR(V.CODIGO_BIEN) || '-' || V.NRO_PLACA KEY,
-               V.ARTICULO,
-               V.ESPECIFICACION DESCRIPCION,
-               V.RESPONSABLE_BIEN RESPONSABLE,
-               V.NRO_PLACA,
-               V.CODIGO_ICP CODIGO_DEPARTAMENTO_RESP,
-               V.UNIDAD_TRABAJO DESCRIPCION_DEPARTAMENTO,
-               V.CODIGO_DIR_BIEN
-          FROM BM.BM_V_BM1 V
-         WHERE V.CODIGO_EMPRESA = p_CodigoEmpresa
-           AND (p_CodigoDirBien = 0 OR V.CODIGO_DIR_BIEN = p_CodigoDirBien)
-         ORDER BY V.UNIDAD_TRABAJO, V.ARTICULO, V.NRO_PLACA;
+        SELECT ID,
+               KEY,
+               ARTICULO,
+               DESCRIPCION,
+               RESPONSABLE,
+               NRO_PLACA,
+               CODIGO_DEPARTAMENTO_RESP,
+               DESCRIPCION_DEPARTAMENTO,
+               CODIGO_DIR_BIEN
+          FROM (
+                SELECT X.*, ROWNUM RN
+                  FROM (
+                        SELECT V.CODIGO_BIEN ID,
+                               TO_CHAR(V.CODIGO_BIEN) || '-' || V.NRO_PLACA KEY,
+                               V.ARTICULO,
+                               V.ESPECIFICACION DESCRIPCION,
+                               V.RESPONSABLE_BIEN RESPONSABLE,
+                               V.NRO_PLACA,
+                               V.CODIGO_ICP CODIGO_DEPARTAMENTO_RESP,
+                               V.UNIDAD_TRABAJO DESCRIPCION_DEPARTAMENTO,
+                               V.CODIGO_DIR_BIEN
+                         FROM BM.BM_V_BM1 V
+                         WHERE V.CODIGO_EMPRESA = p_CodigoEmpresa
+                           AND (p_CodigoDirBien = 0 OR V.CODIGO_DIR_BIEN = p_CodigoDirBien)
+                           AND (p_CodigoIcp = 0 OR V.CODIGO_ICP = p_CodigoIcp)
+                           AND (
+                                p_CodigoArticulo = 0
+                                OR EXISTS (
+                                    SELECT 1
+                                     FROM BM.BM_BIENES B
+                                     WHERE B.CODIGO_BIEN = V.CODIGO_BIEN
+                                       AND B.CODIGO_EMPRESA = V.CODIGO_EMPRESA
+                                       AND B.CODIGO_ARTICULO = p_CodigoArticulo
+                                )
+                           )
+                           AND (TRIM(p_ResponsableText) IS NULL OR UPPER(NVL(V.RESPONSABLE_BIEN, '')) LIKE '%' || UPPER(TRIM(p_ResponsableText)) || '%')
+                           AND (
+                                TRIM(p_SearchText) IS NULL
+                                OR TO_CHAR(V.CODIGO_BIEN) LIKE '%' || TRIM(p_SearchText) || '%'
+                                OR UPPER(V.NUMERO_PLACA) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                                OR UPPER(V.NRO_PLACA) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                                OR UPPER(V.ARTICULO) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                                OR UPPER(NVL(V.RESPONSABLE_BIEN, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                                OR UPPER(NVL(V.UNIDAD_TRABAJO, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                           )
+                         ORDER BY V.UNIDAD_TRABAJO, V.ARTICULO, V.NRO_PLACA
+                       ) X
+                 WHERE ROWNUM <= v_ToRow
+               )
+         WHERE RN >= v_FromRow;
 
     p_Message := 'Success';
 EXCEPTION

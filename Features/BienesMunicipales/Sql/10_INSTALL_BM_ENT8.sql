@@ -287,6 +287,7 @@ BEGIN
                D.CODIGO_PROC_MAS_DET,
                D.CODIGO_BIEN,
                D.NUMERO_PLACA,
+               NVL(B.NUMERO_PLACA, D.NUMERO_PLACA) NRO_PLACA,
                A.DENOMINACION ARTICULO,
                H.CODIGO_DIR_ORIGEN,
                H.CODIGO_ICP CODIGO_ICP_ORIGEN,

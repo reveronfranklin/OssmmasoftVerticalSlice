@@ -48,6 +48,7 @@ BEGIN
   grant_obj('EXECUTE', 'BM', 'SP_BM1_GET_FIRST_MOV', v_bm_user);
   grant_obj('EXECUTE', 'BM', 'SP_BM1_GET_BY_ICP', v_bm_user);
   grant_obj('EXECUTE', 'BM', 'SP_BM1_GET_PRODUCT_MOB', v_bm_user);
+  grant_obj('EXECUTE', 'BM', 'SP_BM1_GET_UBI_ORI', v_bm_user);
   grant_obj('EXECUTE', 'BM', 'SP_BM_DESC_GET_TIT', v_bm_user);
   grant_obj('EXECUTE', 'BM', 'SP_BM_PLACA_CUA_GET', v_bm_user);
   grant_obj('EXECUTE', 'BM', 'SP_BM_PLACA_CUA_INS', v_bm_user);

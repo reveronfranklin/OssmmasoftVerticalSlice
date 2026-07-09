@@ -542,6 +542,7 @@ public class BmReportesController(ConnectionDB connectionDB, IConfiguration conf
             reader.SafeGetInt32("CODIGO_PROC_MAS_DET"),
             reader.SafeGetInt32("CODIGO_BIEN"),
             reader.SafeGetString("NUMERO_PLACA"),
+            reader.SafeGetString("NRO_PLACA"),
             reader.SafeGetString("ARTICULO"),
             reader.SafeGetInt32("CODIGO_DIR_ORIGEN"),
             reader.SafeGetInt32("CODIGO_ICP_ORIGEN"),

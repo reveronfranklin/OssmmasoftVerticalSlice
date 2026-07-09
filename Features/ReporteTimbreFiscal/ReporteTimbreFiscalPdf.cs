@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Helpers;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -308,7 +309,20 @@ public class ReporteTimbreFiscalPdfController(ConnectionDB _connectionDB, IWebHo
             return BadRequest(result);
         }
 
-        var pdf = ReporteTimbreFiscalPdfGenerator.Generate(result.Data, _environment);
+        byte[] pdf;
+        try
+        {
+            pdf = ReporteTimbreFiscalPdfGenerator.Generate(result.Data, _environment);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new ResultDto<object?>(null)
+            {
+                IsValid = false,
+                Message = $"Error tecnico: {ex.Message}"
+            });
+        }
+
         var fileName = $"timbre-fiscal-{value.CodigoOrdenPago}.pdf";
 
         Response.Headers.ContentDisposition = $"inline; filename=\"{fileName}\"";

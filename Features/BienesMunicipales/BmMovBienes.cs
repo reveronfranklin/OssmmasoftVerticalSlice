@@ -64,6 +64,7 @@ public class BmMovBienesController(ConnectionDB connectionDB, IConfiguration con
             reader.SafeGetInt32("CODIGO_MOV_BIEN"),
             reader.SafeGetInt32("CODIGO_BIEN"),
             reader.SafeGetString("NUMERO_PLACA"),
+            reader.SafeGetString("NRO_PLACA"),
             reader.SafeGetString("ARTICULO"),
             reader.SafeGetString("TIPO_MOVIMIENTO"),
             reader.SafeGetString("TIPO_MOVIMIENTO_DESC"),

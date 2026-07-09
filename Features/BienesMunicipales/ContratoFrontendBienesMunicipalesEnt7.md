@@ -27,7 +27,31 @@ Request:
 }
 ```
 
-Los filtros de origen son opcionales. `codigoDirDestino` se usa para mostrar la unidad destino si existe.
+Los filtros de origen son opcionales y se aplican sobre los bienes vigentes de `BM.BM_V_BM1`.
+`codigoDirDestino` se usa para mostrar la unidad destino si existe.
+
+### Selectores de origen
+
+`GET /api/Bm1/GetListICP` devuelve ICP/unidades con bienes existentes en `BM.BM_V_BM1`.
+
+`POST /api/Bm1/GetUbicacionesOrigen` devuelve ubicaciones origen con bienes existentes en `BM.BM_V_BM1`.
+
+Request:
+
+```json
+{
+  "codigoIcp": 0,
+  "codigoArticulo": 0,
+  "responsableText": "",
+  "searchText": "auditoria",
+  "page": 1,
+  "pageSize": 25
+}
+```
+
+Response `data[]` usa el mismo formato de `BmUbicacionResponse`. Los campos de direccion no disponibles en `BM.BM_V_BM1` se devuelven en blanco o cero.
+
+Las placas del selector usan `POST /api/Bm1/GetProductMobil` y tambien se filtran desde `BM.BM_V_BM1`.
 
 Response `data[]`:
 

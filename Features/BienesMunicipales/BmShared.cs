@@ -36,7 +36,27 @@ public record Bm1Response(
     string NroPlaca
 );
 
-public record BmProductMobileRequest(int CodigoBmConteo, int CodigoDirBien);
+public record BmProductMobileRequest(
+    int CodigoBmConteo,
+    int CodigoDirBien,
+    int CodigoIcp,
+    int CodigoArticulo,
+    string? ResponsableText,
+    string? SearchText,
+    string? SearhText,
+    int Page,
+    int PageNumber,
+    int PageSize
+);
+
+public record BmOrigenUbicacionRequest(
+    int CodigoIcp,
+    int CodigoArticulo,
+    string? ResponsableText,
+    string? SearchText,
+    int Page,
+    int PageSize
+);
 
 public record BmProductMobileResponse(
     int Id,
@@ -396,6 +416,7 @@ public record BmMovimientoResponse(
     int CodigoMovBien,
     int CodigoBien,
     string NumeroPlaca,
+    string NroPlaca,
     string Articulo,
     string TipoMovimiento,
     string TipoMovimientoDescripcion,
@@ -471,6 +492,7 @@ public record BmProcesoMasivoResponse(
     int CodigoProcesoMasivoDet,
     int CodigoBien,
     string NumeroPlaca,
+    string NroPlaca,
     string Articulo,
     int CodigoDirOrigen,
     int CodigoIcpOrigen,
@@ -489,6 +511,7 @@ public record BmSolicitudMovimientoResponse(
     int CodigoSolMovBien,
     int CodigoBien,
     string NumeroPlaca,
+    string NroPlaca,
     string Articulo,
     string TipoMovimiento,
     string TipoMovimientoDescripcion,
