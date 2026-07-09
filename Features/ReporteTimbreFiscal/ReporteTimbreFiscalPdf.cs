@@ -104,25 +104,16 @@ public static class ReporteTimbreFiscalPdfGenerator
 
     private static void BuildSubHeader(IContainer container, ReporteTimbreFiscalHeaderResponse header)
     {
-        container.Table(table =>
+        container.Column(column =>
         {
-            table.ColumnsDefinition(columns =>
-            {
-                columns.RelativeColumn();
-            });
-
-            InfoCell(table, "AGENTE DE RETENCION:", header.NombreAgenteRetencion);
-            SpacerCell(table);
-            InfoCell(table, "NUMERO DE RIF DEL AGENTE DE RETENCION:", FormatRif(header.RifAgenteRetencion));
-            SpacerCell(table);
-            InfoCell(table, "NOMBRE/RAZON SOCIAL DEL CONTRIBUYENTE:", header.NombreContribuyente);
-            SpacerCell(table);
-            InfoCell(table, "NUMERO DE RIF DEL CONTRIBUYENTE:", FormatRif(header.RifContribuyente));
-            SpacerCell(table);
-            InfoCell(
-                table,
+            InfoBlock(column, "AGENTE DE RETENCION:", LimitText(header.NombreAgenteRetencion, 160));
+            InfoBlock(column, "NUMERO DE RIF DEL AGENTE DE RETENCION:", FormatRif(header.RifAgenteRetencion));
+            InfoBlock(column, "NOMBRE/RAZON SOCIAL DEL CONTRIBUYENTE:", LimitText(header.NombreContribuyente, 180));
+            InfoBlock(column, "NUMERO DE RIF DEL CONTRIBUYENTE:", FormatRif(header.RifContribuyente));
+            InfoBlock(
+                column,
                 "CONCEPTO DE LA ORDEN DE PAGO (AGREGAR TODA INFORMACION NECESARIA EN RELACION A LA FACTURA Y ORDEN DE PAGO):",
-                LimitText(header.Motivo, 1200),
+                LimitText(header.Motivo, 520),
                 minHeight: 64);
         });
     }
@@ -144,8 +135,8 @@ public static class ReporteTimbreFiscalPdfGenerator
 
             foreach (var item in documentos)
             {
-                BodyCell(table, item.NumeroControlFactura);
-                BodyCell(table, item.NumeroFactura);
+                BodyCell(table, LimitText(item.NumeroControlFactura, 60));
+                BodyCell(table, LimitText(item.NumeroFactura, 60));
                 BodyCell(table, FormatAmount(item.MontoDocumento, culture), alignRight: true);
             }
 
@@ -232,6 +223,17 @@ public static class ReporteTimbreFiscalPdfGenerator
             column.Item().Text(label).Bold().FontSize(7);
             column.Item().Text(value ?? string.Empty).FontSize(8);
         });
+    }
+
+    private static void InfoBlock(ColumnDescriptor column, string label, string value, float minHeight = 28)
+    {
+        column.Item().Border(1).MinHeight(minHeight).Padding(5).Column(content =>
+        {
+            content.Item().Text(label).Bold().FontSize(7);
+            content.Item().Text(value ?? string.Empty).FontSize(8);
+        });
+
+        column.Item().Height(6);
     }
 
     private static void SpacerCell(TableDescriptor table)
