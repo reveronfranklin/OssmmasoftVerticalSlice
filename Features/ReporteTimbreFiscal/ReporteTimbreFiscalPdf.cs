@@ -36,12 +36,12 @@ public static class ReporteTimbreFiscalPdfGenerator
                 page.Header().Column(column =>
                 {
                     column.Item().Element(element => BuildHeader(element, header, logoLeftBytes, logoRightBytes));
-                    column.Item().PaddingTop(10).Element(element => BuildSubHeader(element, header));
                 });
 
                 page.Content().PaddingTop(8).Column(column =>
                 {
-                    column.Item().Element(element => BuildDocuments(element, data.Documentos, culture));
+                    column.Item().Element(element => BuildSubHeader(element, header));
+                    column.Item().PaddingTop(8).Element(element => BuildDocuments(element, data.Documentos, culture));
                     column.Item().PaddingTop(8).Element(element => BuildTotals(
                         element,
                         totalGrossAmount,
@@ -119,7 +119,11 @@ public static class ReporteTimbreFiscalPdfGenerator
             SpacerCell(table);
             InfoCell(table, "NUMERO DE RIF DEL CONTRIBUYENTE:", FormatRif(header.RifContribuyente));
             SpacerCell(table);
-            InfoCell(table, "CONCEPTO DE LA ORDEN DE PAGO (AGREGAR TODA INFORMACION NECESARIA EN RELACION A LA FACTURA Y ORDEN DE PAGO):", header.Motivo, minHeight: 64);
+            InfoCell(
+                table,
+                "CONCEPTO DE LA ORDEN DE PAGO (AGREGAR TODA INFORMACION NECESARIA EN RELACION A LA FACTURA Y ORDEN DE PAGO):",
+                LimitText(header.Motivo, 1200),
+                minHeight: 64);
         });
     }
 
@@ -211,7 +215,7 @@ public static class ReporteTimbreFiscalPdfGenerator
         table.Cell().Border(1).Padding(4).AlignCenter().Text(text =>
         {
             text.Span($"{label}:\n").Bold();
-            text.Span(value);
+            text.Span(value ?? string.Empty);
         });
     }
 
@@ -226,7 +230,7 @@ public static class ReporteTimbreFiscalPdfGenerator
         table.Cell().Border(1).MinHeight(minHeight).Padding(5).Column(column =>
         {
             column.Item().Text(label).Bold().FontSize(7);
-            column.Item().Text(value).FontSize(8);
+            column.Item().Text(value ?? string.Empty).FontSize(8);
         });
     }
 
@@ -248,7 +252,20 @@ public static class ReporteTimbreFiscalPdfGenerator
             cell = cell.AlignRight();
         }
 
-        cell.Text(text).FontSize(7);
+        cell.Text(text ?? string.Empty).FontSize(7);
+    }
+
+    private static string LimitText(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var normalized = value.Trim();
+        return normalized.Length <= maxLength
+            ? normalized
+            : $"{normalized[..maxLength]}...";
     }
 
     private static decimal CalculateTaxableIncome(decimal taxBase, decimal totalGrossAmount, decimal totalTaxExempt, decimal totalAmountVat)
