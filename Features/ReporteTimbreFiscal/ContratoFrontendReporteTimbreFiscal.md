@@ -1,5 +1,9 @@
 # Contrato Frontend - ReporteTimbreFiscal
 
+El nombre y el RIF del agente se toman de la orden de pago. Si alguno no fue
+guardado en la orden, el backend lo completa con la empresa definida en
+`settings:EmpresaConfig`; el frontend no debe enviar el codigo de empresa.
+
 ## Objetivo
 
 Migrar el reporte `tax-stamp-voucher` del ReportServer al backend vertical slice y mostrar el PDF en preview desde `/apps/adm/ordenPago/`.

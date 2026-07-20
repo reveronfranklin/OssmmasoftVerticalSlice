@@ -34,7 +34,7 @@ public record ReporteTimbreFiscalDocumentoResponse(
     decimal MontoIva
 );
 
-public class ReporteTimbreFiscalGetByCodigoHandler(ConnectionDB _connectionDB)
+public class ReporteTimbreFiscalGetByCodigoHandler(ConnectionDB _connectionDB, IConfiguration _configuration)
 {
     public async Task<ResultDto<ReporteTimbreFiscalResponse>> HandleAsync(ReporteTimbreFiscalGetByCodigoQuery query)
     {
@@ -70,6 +70,8 @@ public class ReporteTimbreFiscalGetByCodigoHandler(ConnectionDB _connectionDB)
             return BuildInvalidResult("No se encontro la orden de pago solicitada.");
         }
 
+        header = await CompleteAgentDataAsync(header);
+
         var documentosResult = await ExecuteListAsync(
             cn,
             "ADM.SP_REP_TIM_FIS_DOC_GET",
@@ -93,6 +95,59 @@ public class ReporteTimbreFiscalGetByCodigoHandler(ConnectionDB _connectionDB)
             IsValid = true,
             Message = "Success"
         };
+    }
+
+    private async Task<ReporteTimbreFiscalHeaderResponse> CompleteAgentDataAsync(
+        ReporteTimbreFiscalHeaderResponse header)
+    {
+        if (!string.IsNullOrWhiteSpace(header.NombreAgenteRetencion)
+            && !string.IsNullOrWhiteSpace(header.RifAgenteRetencion))
+        {
+            return header;
+        }
+
+        if (!int.TryParse(_configuration["settings:EmpresaConfig"], out var codigoEmpresa))
+        {
+            return header;
+        }
+
+        using var cn = _connectionDB.GetSisConnection();
+        try
+        {
+            await cn.OpenAsync();
+            using var cmd = new OracleCommand("SIS.SP_REP_AGT_RET_GET", cn)
+            {
+                CommandType = CommandType.StoredProcedure,
+                BindByName = true
+            };
+
+            cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = codigoEmpresa;
+            cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            if (!await reader.ReadAsync())
+            {
+                return header;
+            }
+
+            var nombreEmpresa = reader.SafeGetString("NOMBRE_AGENTE_RETENCION");
+            var rifEmpresa = reader.SafeGetString("RIF_AGENTE_RETENCION");
+
+            return header with
+            {
+                NombreAgenteRetencion = string.IsNullOrWhiteSpace(header.NombreAgenteRetencion)
+                    ? nombreEmpresa
+                    : header.NombreAgenteRetencion,
+                RifAgenteRetencion = string.IsNullOrWhiteSpace(header.RifAgenteRetencion)
+                    ? rifEmpresa
+                    : header.RifAgenteRetencion
+            };
+        }
+        catch
+        {
+            // Los datos propios de la orden siguen siendo validos si SIS no esta disponible.
+            return header;
+        }
     }
 
     private static async Task<ResultDto<List<T>>> ExecuteListAsync<T>(
@@ -203,13 +258,15 @@ internal static class ReporteTimbreFiscalDb
 
 [ApiController]
 [Route("api/ReporteTimbreFiscal")]
-public class ReporteTimbreFiscalGetByCodigoController(ConnectionDB _connectionDB) : ControllerBase
+public class ReporteTimbreFiscalGetByCodigoController(
+    ConnectionDB _connectionDB,
+    IConfiguration _configuration) : ControllerBase
 {
     [HttpPost]
     [Route("GetByCodigo")]
     public async Task<IActionResult> GetByCodigo(ReporteTimbreFiscalGetByCodigoQuery value)
     {
-        var handler = new ReporteTimbreFiscalGetByCodigoHandler(_connectionDB);
+        var handler = new ReporteTimbreFiscalGetByCodigoHandler(_connectionDB, _configuration);
         var result = await handler.HandleAsync(value);
         return Ok(result);
     }

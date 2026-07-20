@@ -314,13 +314,16 @@ public static class ReporteTimbreFiscalPdfGenerator
 
 [ApiController]
 [Route("api/ReporteTimbreFiscal")]
-public class ReporteTimbreFiscalPdfController(ConnectionDB _connectionDB, IWebHostEnvironment _environment) : ControllerBase
+public class ReporteTimbreFiscalPdfController(
+    ConnectionDB _connectionDB,
+    IWebHostEnvironment _environment,
+    IConfiguration _configuration) : ControllerBase
 {
     [HttpPost]
     [Route("pdf")]
     public async Task<IActionResult> Pdf(ReporteTimbreFiscalPdfQuery value)
     {
-        var handler = new ReporteTimbreFiscalGetByCodigoHandler(_connectionDB);
+        var handler = new ReporteTimbreFiscalGetByCodigoHandler(_connectionDB, _configuration);
         var result = await handler.HandleAsync(new ReporteTimbreFiscalGetByCodigoQuery(value.CodigoOrdenPago));
 
         if (!result.IsValid || result.Data is null)
