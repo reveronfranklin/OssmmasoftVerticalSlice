@@ -1,5 +1,8 @@
 # Contrato Frontend - ReporteOrdenPago
 
+Antes de consultar los datos, el reporte recalcula `ADM_ORDEN_PAGO.MONTO_LETRAS`
+con la suma vigente de las partidas PUC de la orden.
+
 Fecha: 2026-06-22.
 
 ## Endpoint PDF

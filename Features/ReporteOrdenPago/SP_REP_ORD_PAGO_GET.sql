@@ -4,7 +4,15 @@ CREATE OR REPLACE PROCEDURE ADM.SP_REP_ORD_PAGO_GET (
     p_Message         OUT VARCHAR2,
     p_TotalRecords    OUT NUMBER
 ) AS
+    v_MontoTotal NUMBER := 0;
 BEGIN
+    SELECT NVL(SUM(PUC.MONTO), 0)
+      INTO v_MontoTotal
+      FROM ADM.ADM_PUC_ORDEN_PAGO PUC
+     WHERE PUC.CODIGO_ORDEN_PAGO = p_CodigoOrdenPago;
+
+    ADM.ADM_P_MONTO_LETRAS_OP(p_CodigoOrdenPago, v_MontoTotal);
+
     SELECT COUNT(*)
       INTO p_TotalRecords
       FROM ADM.ADM_ORDEN_PAGO OP
