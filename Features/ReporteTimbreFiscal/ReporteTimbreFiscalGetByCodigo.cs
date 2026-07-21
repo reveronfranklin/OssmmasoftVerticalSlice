@@ -70,6 +70,11 @@ public class ReporteTimbreFiscalGetByCodigoHandler(ConnectionDB _connectionDB, I
             return BuildInvalidResult("No se encontro la orden de pago solicitada.");
         }
 
+        if (header.BaseImponible <= 0 && header.MontoRetencion <= 0)
+        {
+            return BuildInvalidResult("La orden de pago no tiene informacion de retencion de timbre fiscal.");
+        }
+
         header = await CompleteAgentDataAsync(header);
 
         var documentosResult = await ExecuteListAsync(

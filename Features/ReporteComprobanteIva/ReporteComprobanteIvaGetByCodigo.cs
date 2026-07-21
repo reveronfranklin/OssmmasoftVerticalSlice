@@ -90,9 +90,15 @@ public class ReporteComprobanteIvaGetByCodigoHandler(ConnectionDB _connectionDB)
             return BuildInvalidResult(documentosResult.Message);
         }
 
+        var documentos = documentosResult.Data ?? new List<ReporteComprobanteIvaDocumentoResponse>();
+        if (!documentos.Any(documento => documento.IvaRetenido > 0))
+        {
+            return BuildInvalidResult("La orden de pago no tiene informacion de retencion de IVA.");
+        }
+
         var response = new ReporteComprobanteIvaResponse(
             header,
-            documentosResult.Data ?? new List<ReporteComprobanteIvaDocumentoResponse>()
+            documentos
         );
 
         return new ResultDto<ReporteComprobanteIvaResponse>(response)
