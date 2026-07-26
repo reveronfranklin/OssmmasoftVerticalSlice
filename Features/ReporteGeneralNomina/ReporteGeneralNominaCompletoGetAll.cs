@@ -4,7 +4,7 @@ using OssmmasoftVerticalSlice.Helpers;
 
 namespace OssmmasoftVerticalSlice.Features.ReporteGeneralNomina;
 
-// Request
+// Request Reporte General
 public record ReporteGeneralNominaCompletoGetAllQuery(
     int p_tipo_nomina,
     int codigo_empresa,
