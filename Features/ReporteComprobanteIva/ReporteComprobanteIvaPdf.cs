@@ -63,7 +63,6 @@ public static class ReporteComprobanteIvaPdfGenerator
                         element.Text("LOGO").Bold();
                     }
                 });
-                column.Item().Text("CONCEJO MUNICIPAL DEL MUNICIPIO CHACAO").Bold().FontSize(6.5f);
             });
 
             row.RelativeItem().AlignCenter().AlignMiddle().Text("COMPROBANTE DE RETENCION IVA").Bold().FontSize(13);
@@ -83,7 +82,7 @@ public static class ReporteComprobanteIvaPdfGenerator
                 columns.RelativeColumn();
             });
 
-            EmptyCell(table, colSpan: 2);
+            TextCell(table, "CONCEJO MUNICIPAL DEL MUNICIPIO CHACAO", colSpan: 2);
             InfoCell(table, "No Comprobante", header.NumeroComprobante);
             InfoCell(table, "FECHA", FormatDate(header.Fecha));
             InfoCell(table, "Nombre o Razon Social del Agente de Retencion", header.NombreAgenteRetencion, colSpan: 2);
@@ -188,6 +187,12 @@ public static class ReporteComprobanteIvaPdfGenerator
     {
         var tableCell = colSpan > 1 ? table.Cell().ColumnSpan(colSpan) : table.Cell();
         tableCell.Border(1).Padding(3).Text(string.Empty);
+    }
+
+    private static void TextCell(TableDescriptor table, string value, uint colSpan = 1)
+    {
+        var tableCell = colSpan > 1 ? table.Cell().ColumnSpan(colSpan) : table.Cell();
+        tableCell.Border(1).Padding(3).AlignMiddle().Text(value).Bold().FontSize(6.5f);
     }
 
     private static void TableHeader(TableDescriptor table, string text)
