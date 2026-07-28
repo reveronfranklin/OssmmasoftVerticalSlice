@@ -1,6 +1,6 @@
 # Contrato Frontend - ReporteComprobanteIva
 
-Fecha: 2026-06-22.
+Fecha: 2026-07-28.
 
 ## Endpoint PDF
 
@@ -14,9 +14,14 @@ Genera el comprobante de retencion IVA directamente desde `OssmmasoftVerticalSli
 
 ```json
 {
-  "codigoOrdenPago": 123
+  "codigoOrdenPago": 123,
+  "usuario": "jperez"
 }
 ```
+
+`usuario` corresponde a `user.username` del usuario conectado, obtenido
+mediante `useAuth()`. Si llega vacio o nulo, el PDF muestra
+`Usuario: No identificado`.
 
 ### Response Exitoso
 
@@ -34,7 +39,12 @@ Pantalla:
 La opcion `UrlServices.GETREPORTBYCOMPROBANTE` debe mostrarse en el preview existente, consumiendo:
 
 ```ts
-ossmmasofApiVertical.post('/ReporteComprobanteIva/pdf', { codigoOrdenPago }, { responseType: 'blob' })
+ossmmasofApiVertical.post(
+  '/ReporteComprobanteIva/pdf',
+  { codigoOrdenPago, usuario: user?.username ?? '' },
+  { responseType: 'blob' }
+)
 ```
 
-ISLR y Timbre Fiscal permanecen temporalmente por `AdmOrdenPago/Report`.
+El PDF muestra el usuario enviado y la fecha/hora de impresion en el lado
+izquierdo del footer de todas las paginas.

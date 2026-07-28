@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Helpers;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -7,11 +8,14 @@ using System.Globalization;
 
 namespace OssmmasoftVerticalSlice.Features.ReporteComprobanteIva;
 
-public record ReporteComprobanteIvaPdfQuery(int CodigoOrdenPago);
+public record ReporteComprobanteIvaPdfQuery(int CodigoOrdenPago, string? Usuario);
 
 public static class ReporteComprobanteIvaPdfGenerator
 {
-    public static byte[] Generate(ReporteComprobanteIvaResponse data, IWebHostEnvironment environment)
+    public static byte[] Generate(
+        ReporteComprobanteIvaResponse data,
+        IWebHostEnvironment environment,
+        ReportPrintContext printContext)
     {
         QuestPDF.Settings.License = LicenseType.Evaluation;
 
@@ -38,13 +42,8 @@ public static class ReporteComprobanteIvaPdfGenerator
                 page.Footer().Column(column =>
                 {
                     column.Item().Element(BuildFirmantes);
-                    column.Item().PaddingTop(4).AlignRight().Text(text =>
-                    {
-                        text.Span("Pagina ");
-                        text.CurrentPageNumber();
-                        text.Span(" de ");
-                        text.TotalPages();
-                    });
+                    column.Item().PaddingTop(4).Element(element =>
+                        ReportPdfFooter.Build(element, printContext, 6.4f));
                 });
             });
         }).GeneratePdf();
@@ -289,7 +288,8 @@ public class ReporteComprobanteIvaPdfController(ConnectionDB _connectionDB, IWeb
             return BadRequest(result);
         }
 
-        var pdf = ReporteComprobanteIvaPdfGenerator.Generate(result.Data, _environment);
+        var printContext = ReportPrintContext.Create(value.Usuario);
+        var pdf = ReporteComprobanteIvaPdfGenerator.Generate(result.Data, _environment, printContext);
         var fileName = $"comprobante-iva-{value.CodigoOrdenPago}.pdf";
 
         Response.Headers.ContentDisposition = $"inline; filename=\"{fileName}\"";

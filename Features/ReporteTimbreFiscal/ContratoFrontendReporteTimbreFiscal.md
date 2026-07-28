@@ -30,11 +30,17 @@ Migrar el reporte `tax-stamp-voucher` del ReportServer al backend vertical slice
 
 ```json
 {
-  "codigoOrdenPago": 149
+  "codigoOrdenPago": 149,
+  "usuario": "jperez"
 }
 ```
 
 La respuesta es `application/pdf` con `Content-Disposition: inline`.
+
+`usuario` corresponde a `user.username` del usuario conectado, obtenido
+mediante `useAuth()`. Si llega vacio o nulo, el PDF muestra
+`Usuario: No identificado`. El usuario y la fecha/hora de impresion se
+presentan en el lado izquierdo del footer de todas las paginas.
 
 ## Respuesta de datos
 
@@ -73,4 +79,5 @@ La respuesta es `application/pdf` con `Content-Disposition: inline`.
 - El frontend debe consumir `/ReporteTimbreFiscal/pdf` mediante `ossmmasofApiVertical`.
 - La respuesta debe convertirse a `Blob` y mostrarse en `ReportViewAsync`.
 - No descargar automaticamente ni abrir en una pestana externa.
-- El payload se toma de la orden seleccionada: `{ codigoOrdenPago }`.
+- El payload combina la orden seleccionada con el usuario conectado:
+  `{ codigoOrdenPago, usuario: user?.username ?? '' }`.

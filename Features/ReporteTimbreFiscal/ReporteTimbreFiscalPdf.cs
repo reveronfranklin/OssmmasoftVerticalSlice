@@ -8,11 +8,14 @@ using System.Globalization;
 
 namespace OssmmasoftVerticalSlice.Features.ReporteTimbreFiscal;
 
-public record ReporteTimbreFiscalPdfQuery(int CodigoOrdenPago);
+public record ReporteTimbreFiscalPdfQuery(int CodigoOrdenPago, string? Usuario);
 
 public static class ReporteTimbreFiscalPdfGenerator
 {
-    public static byte[] Generate(ReporteTimbreFiscalResponse data, IWebHostEnvironment environment)
+    public static byte[] Generate(
+        ReporteTimbreFiscalResponse data,
+        IWebHostEnvironment environment,
+        ReportPrintContext printContext)
     {
         QuestPDF.Settings.License = LicenseType.Evaluation;
 
@@ -56,13 +59,8 @@ public static class ReporteTimbreFiscalPdfGenerator
                     }
                 });
 
-                page.Footer().AlignRight().Text(text =>
-                {
-                    text.Span("Pagina ");
-                    text.CurrentPageNumber();
-                    text.Span(" de ");
-                    text.TotalPages();
-                });
+                page.Footer().Element(element =>
+                    ReportPdfFooter.Build(element, printContext, 8));
             });
         }).GeneratePdf();
     }
@@ -334,7 +332,8 @@ public class ReporteTimbreFiscalPdfController(
         byte[] pdf;
         try
         {
-            pdf = ReporteTimbreFiscalPdfGenerator.Generate(result.Data, _environment);
+            var printContext = ReportPrintContext.Create(value.Usuario);
+            pdf = ReporteTimbreFiscalPdfGenerator.Generate(result.Data, _environment, printContext);
         }
         catch (Exception ex)
         {

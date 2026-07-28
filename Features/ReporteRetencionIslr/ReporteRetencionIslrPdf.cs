@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Helpers;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -7,11 +8,14 @@ using System.Globalization;
 
 namespace OssmmasoftVerticalSlice.Features.ReporteRetencionIslr;
 
-public record ReporteRetencionIslrPdfQuery(int CodigoOrdenPago);
+public record ReporteRetencionIslrPdfQuery(int CodigoOrdenPago, string? Usuario);
 
 public static class ReporteRetencionIslrPdfGenerator
 {
-    public static byte[] Generate(ReporteRetencionIslrResponse data, IWebHostEnvironment environment)
+    public static byte[] Generate(
+        ReporteRetencionIslrResponse data,
+        IWebHostEnvironment environment,
+        ReportPrintContext printContext)
     {
         QuestPDF.Settings.License = LicenseType.Evaluation;
 
@@ -38,13 +42,8 @@ public static class ReporteRetencionIslrPdfGenerator
                 page.Footer().Column(column =>
                 {
                     column.Item().Element(BuildFirmantes);
-                    column.Item().PaddingTop(4).AlignRight().Text(text =>
-                    {
-                        text.Span("Pagina ");
-                        text.CurrentPageNumber();
-                        text.Span(" de ");
-                        text.TotalPages();
-                    });
+                    column.Item().PaddingTop(4).Element(element =>
+                        ReportPdfFooter.Build(element, printContext, 7));
                 });
             });
         }).GeneratePdf();
@@ -253,7 +252,8 @@ public class ReporteRetencionIslrPdfController(ConnectionDB _connectionDB, IWebH
             return BadRequest(result);
         }
 
-        var pdf = ReporteRetencionIslrPdfGenerator.Generate(result.Data, _environment);
+        var printContext = ReportPrintContext.Create(value.Usuario);
+        var pdf = ReporteRetencionIslrPdfGenerator.Generate(result.Data, _environment, printContext);
         var fileName = $"retencion-islr-{value.CodigoOrdenPago}.pdf";
 
         Response.Headers.ContentDisposition = $"inline; filename=\"{fileName}\"";

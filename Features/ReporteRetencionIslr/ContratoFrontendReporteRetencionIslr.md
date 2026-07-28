@@ -1,6 +1,6 @@
 # Contrato Frontend - ReporteRetencionIslr
 
-Fecha: 2026-06-22.
+Fecha: 2026-07-28.
 
 ## Endpoint PDF
 
@@ -14,9 +14,14 @@ Genera el comprobante de retencion ISLR directamente desde `OssmmasoftVerticalSl
 
 ```json
 {
-  "codigoOrdenPago": 123
+  "codigoOrdenPago": 123,
+  "usuario": "jperez"
 }
 ```
+
+`usuario` corresponde a `user.username` del usuario conectado, obtenido
+mediante `useAuth()`. Si llega vacio o nulo, el PDF muestra
+`Usuario: No identificado`.
 
 ### Response Exitoso
 
@@ -34,7 +39,12 @@ Pantalla:
 La opcion `UrlServices.GETREPORTBYRETENCIONES` debe mostrarse en el preview existente, consumiendo:
 
 ```ts
-ossmmasofApiVertical.post('/ReporteRetencionIslr/pdf', { codigoOrdenPago }, { responseType: 'blob' })
+ossmmasofApiVertical.post(
+  '/ReporteRetencionIslr/pdf',
+  { codigoOrdenPago, usuario: user?.username ?? '' },
+  { responseType: 'blob' }
+)
 ```
 
-Timbre Fiscal permanece temporalmente por `AdmOrdenPago/Report`.
+El PDF muestra el usuario enviado y la fecha/hora de impresion en el lado
+izquierdo del footer de todas las paginas.
