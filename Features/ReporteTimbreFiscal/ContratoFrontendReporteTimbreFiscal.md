@@ -37,10 +37,11 @@ Migrar el reporte `tax-stamp-voucher` del ReportServer al backend vertical slice
 
 La respuesta es `application/pdf` con `Content-Disposition: inline`.
 
-`usuario` corresponde a `user.username` del usuario conectado, obtenido
-mediante `useAuth()`. Si llega vacio o nulo, el PDF muestra
-`Usuario: No identificado`. El usuario y la fecha/hora de impresion se
-presentan en el lado izquierdo del footer de todas las paginas.
+`usuario` corresponde al usuario conectado. El visor lo obtiene mediante
+`useAuth()` y el interceptor de `ossmmasofApiVertical` garantiza su inclusion
+desde `localStorage.userData` para este endpoint. Si llega vacio o nulo, el
+backend responde HTTP `400` y no genera el PDF. El usuario y la fecha/hora de
+impresion se presentan en el lado izquierdo del footer de todas las paginas.
 
 ## Respuesta de datos
 

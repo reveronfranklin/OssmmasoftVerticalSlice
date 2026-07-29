@@ -321,6 +321,15 @@ public class ReporteTimbreFiscalPdfController(
     [Route("pdf")]
     public async Task<IActionResult> Pdf(ReporteTimbreFiscalPdfQuery value)
     {
+        if (string.IsNullOrWhiteSpace(value.Usuario))
+        {
+            return BadRequest(new ResultDto<object?>(null)
+            {
+                IsValid = false,
+                Message = "El usuario conectado es requerido para generar el timbre fiscal."
+            });
+        }
+
         var handler = new ReporteTimbreFiscalGetByCodigoHandler(_connectionDB, _configuration);
         var result = await handler.HandleAsync(new ReporteTimbreFiscalGetByCodigoQuery(value.CodigoOrdenPago));
 

@@ -280,6 +280,15 @@ public class ReporteComprobanteIvaPdfController(ConnectionDB _connectionDB, IWeb
     [Route("pdf")]
     public async Task<IActionResult> Pdf(ReporteComprobanteIvaPdfQuery value)
     {
+        if (string.IsNullOrWhiteSpace(value.Usuario))
+        {
+            return BadRequest(new ResultDto<object?>(null)
+            {
+                IsValid = false,
+                Message = "El usuario conectado es requerido para generar el comprobante IVA."
+            });
+        }
+
         var handler = new ReporteComprobanteIvaGetByCodigoHandler(_connectionDB);
         var result = await handler.HandleAsync(new ReporteComprobanteIvaGetByCodigoQuery(value.CodigoOrdenPago));
 

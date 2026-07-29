@@ -6,19 +6,14 @@ namespace OssmmasoftVerticalSlice.Helpers;
 
 public sealed record ReportPrintContext(string Usuario, DateTimeOffset FechaHoraImpresion)
 {
-    private const string DefaultUsuario = "No identificado";
     private const string ReportTimeZoneId = "America/Caracas";
 
-    public static ReportPrintContext Create(string? usuario)
+    public static ReportPrintContext Create(string usuario)
     {
-        var normalizedUsuario = string.IsNullOrWhiteSpace(usuario)
-            ? DefaultUsuario
-            : usuario.Trim();
-
         var reportTimeZone = TimeZoneInfo.FindSystemTimeZoneById(ReportTimeZoneId);
         var fechaHoraImpresion = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, reportTimeZone);
 
-        return new ReportPrintContext(normalizedUsuario, fechaHoraImpresion);
+        return new ReportPrintContext(usuario.Trim(), fechaHoraImpresion);
     }
 }
 

@@ -19,9 +19,10 @@ Genera el comprobante de retencion IVA directamente desde `OssmmasoftVerticalSli
 }
 ```
 
-`usuario` corresponde a `user.username` del usuario conectado, obtenido
-mediante `useAuth()`. Si llega vacio o nulo, el PDF muestra
-`Usuario: No identificado`.
+`usuario` corresponde al usuario conectado. El visor lo obtiene mediante
+`useAuth()` y el interceptor de `ossmmasofApiVertical` garantiza su inclusion
+desde `localStorage.userData` para este endpoint. Si llega vacio o nulo, el
+backend responde HTTP `400` y no genera el PDF.
 
 ### Response Exitoso
 

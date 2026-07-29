@@ -244,6 +244,15 @@ public class ReporteRetencionIslrPdfController(ConnectionDB _connectionDB, IWebH
     [Route("pdf")]
     public async Task<IActionResult> Pdf(ReporteRetencionIslrPdfQuery value)
     {
+        if (string.IsNullOrWhiteSpace(value.Usuario))
+        {
+            return BadRequest(new ResultDto<object?>(null)
+            {
+                IsValid = false,
+                Message = "El usuario conectado es requerido para generar el comprobante ISLR."
+            });
+        }
+
         var handler = new ReporteRetencionIslrGetByCodigoHandler(_connectionDB);
         var result = await handler.HandleAsync(new ReporteRetencionIslrGetByCodigoQuery(value.CodigoOrdenPago));
 
