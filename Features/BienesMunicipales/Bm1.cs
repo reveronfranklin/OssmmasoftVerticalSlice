@@ -9,7 +9,7 @@ namespace OssmmasoftVerticalSlice.Features.BienesMunicipales;
 
 [ApiController]
 [Route("api/Bm1")]
-public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config) : ControllerBase
+public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config, IWebHostEnvironment environment) : ControllerBase
 {
     [HttpGet("GetListICP")]
     public async Task<IActionResult> GetListIcp()
@@ -113,23 +113,60 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config) : C
     [HttpPost("GetByListIcp")]
     public async Task<IActionResult> GetByListIcp(Bm1FilterRequest request)
     {
+        return Ok(await ReadByListIcpAsync(request));
+    }
+
+    [HttpPost("PlacasPdf")]
+    public async Task<IActionResult> PlacasPdf(Bm1FilterRequest request)
+    {
+        var result = await ReadByListIcpAsync(request);
+
+        if (!result.IsValid || result.Data is null)
+        {
+            return Ok(result);
+        }
+
+        if (result.Data.Count == 0)
+        {
+            return Ok(new ResultDto<string>(string.Empty)
+            {
+                IsValid = false,
+                Message = "No hay bienes para generar placas con los filtros seleccionados."
+            });
+        }
+
+        Response.Headers.Append("X-Bm1-Placas-Count", result.Data.Count.ToString(CultureInfo.InvariantCulture));
+        var bytes = Bm1PlacasPdfGenerator.Generate(result.Data, environment);
+        var fileName = $"placas-bm1-{DateTime.Now:yyyyMMddHHmmss}.pdf";
+        Response.Headers.ContentDisposition = $"inline; filename=\"{fileName}\"";
+
+        return File(bytes, "application/pdf", enableRangeProcessing: true);
+    }
+
+    /// <summary>
+    /// Unico punto donde se ejecuta BM.SP_BM1_GET_BY_ICP. El grid y el PDF de placas comparten esta
+    /// lectura para que el filtro resuelto sea siempre el mismo (requerimiento 18).
+    /// </summary>
+    private async Task<ResultDto<List<Bm1Response>>> ReadByListIcpAsync(Bm1FilterRequest request)
+    {
         if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
         {
-            return Ok(BmDb.InvalidList<Bm1Response>(error));
+            return BmDb.InvalidList<Bm1Response>(error);
         }
 
         using var cn = connectionDB.GetBmConnection();
         var openError = await BmDb.TryOpenAsync(cn, "BM");
-        if (openError is not null) return Ok(BmDb.InvalidList<Bm1Response>(openError));
+        if (openError is not null) return BmDb.InvalidList<Bm1Response>(openError);
 
         using var cmd = BmDb.StoredProcedure("BM.SP_BM1_GET_BY_ICP", cn);
         cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
         cmd.Parameters.Add("p_FechaDesde", OracleDbType.Date).Value = BmDb.DbValue(request.FechaDesde);
         cmd.Parameters.Add("p_FechaHasta", OracleDbType.Date).Value = BmDb.DbValue(request.FechaHasta);
         cmd.Parameters.Add("p_CodigosIcp", OracleDbType.Varchar2).Value = BmDb.DbValue(BmDb.ToIcpCsv(request.ListIcpSeleccionado));
+        cmd.Parameters.Add("p_SearchText", OracleDbType.Varchar2).Value = BmDb.DbValue(request.SearchValue);
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
-        return Ok(await BmDb.ExecuteListAsync(cmd, MapBm1));
+        return await BmDb.ExecuteListAsync(cmd, MapBm1);
     }
 
     [HttpPost("GetProductMobil")]
@@ -197,7 +234,8 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config) : C
             fecha,
             fecha?.Year ?? 0,
             fecha?.Month ?? 0,
-            reader.SafeGetString("NRO_PLACA")
+            reader.SafeGetString("NRO_PLACA"),
+            reader.SafeGetString("PLACA_BARRA")
         );
     }
 }

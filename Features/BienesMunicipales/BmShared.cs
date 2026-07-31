@@ -11,7 +11,12 @@ public record BmIcpResponse(int CodigoIcp, string UnidadTrabajo);
 
 public record BmPlacaResponse(string NumeroPlaca, string Articulo, string SearchText);
 
-public record Bm1FilterRequest(List<BmIcpResponse>? ListIcpSeleccionado, DateTime? FechaDesde, DateTime? FechaHasta);
+public record Bm1FilterRequest(
+    List<BmIcpResponse>? ListIcpSeleccionado,
+    DateTime? FechaDesde,
+    DateTime? FechaHasta,
+    string? SearchValue = null
+);
 
 public record Bm1Response(
     string UnidadTrabajo,
@@ -33,7 +38,8 @@ public record Bm1Response(
     DateTime? FechaMovimiento,
     int Year,
     int Month,
-    string NroPlaca
+    string NroPlaca,
+    string PlacaBarra
 );
 
 public record BmProductMobileRequest(

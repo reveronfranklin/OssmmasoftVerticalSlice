@@ -273,11 +273,14 @@ EXCEPTION
 END SP_BM1_GET_FIRST_MOV;
 /
 
+-- p_SearchText, la exclusion de placas en cuarentena y la columna PLACA_BARRA provienen del
+-- requerimiento 18. El predicado del COUNT y el del cursor deben mantenerse identicos.
 CREATE OR REPLACE PROCEDURE BM.SP_BM1_GET_BY_ICP (
     p_CodigoEmpresa IN NUMBER,
     p_FechaDesde IN DATE,
     p_FechaHasta IN DATE,
     p_CodigosIcp IN VARCHAR2,
+    p_SearchText IN VARCHAR2 DEFAULT NULL,
     p_ResultSet OUT SYS_REFCURSOR,
     p_Message OUT VARCHAR2,
     p_TotalRecords OUT NUMBER
@@ -292,6 +295,21 @@ BEGIN
        AND (
              p_CodigosIcp IS NULL
              OR INSTR(',' || p_CodigosIcp || ',', ',' || TO_CHAR(V.CODIGO_ICP) || ',') > 0
+           )
+       AND (
+             TRIM(p_SearchText) IS NULL
+             OR TO_CHAR(V.CODIGO_BIEN) LIKE '%' || TRIM(p_SearchText) || '%'
+             OR UPPER(V.NUMERO_PLACA) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+             OR UPPER(V.NRO_PLACA) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+             OR UPPER(V.ARTICULO) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+             OR UPPER(NVL(V.RESPONSABLE_BIEN, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+             OR UPPER(NVL(V.UNIDAD_TRABAJO, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+           )
+       AND NOT EXISTS (
+             SELECT NULL
+               FROM BM.BM_PLACAS_CUARENTENA Q
+              WHERE Q.CODIGO_EMPRESA = V.CODIGO_EMPRESA
+                AND Q.NUMERO_PLACA = V.NRO_PLACA
            );
 
     OPEN p_ResultSet FOR
@@ -312,7 +330,9 @@ BEGIN
                V.CODIGO_BIEN,
                V.CODIGO_MOV_BIEN,
                V.FECHA_MOVIMIENTO,
-               V.NRO_PLACA
+               V.NRO_PLACA,
+               V.CODIGO_GRUPO || '-' || V.CODIGO_NIVEL1 || '-' || V.CODIGO_NIVEL2 || '-' ||
+                   V.NUMERO_PLACA PLACA_BARRA
           FROM BM.BM_V_BM1 V
          WHERE V.CODIGO_EMPRESA = p_CodigoEmpresa
            AND (p_FechaDesde IS NULL OR TRUNC(V.FECHA_MOVIMIENTO) >= TRUNC(p_FechaDesde))
@@ -320,6 +340,21 @@ BEGIN
            AND (
                  p_CodigosIcp IS NULL
                  OR INSTR(',' || p_CodigosIcp || ',', ',' || TO_CHAR(V.CODIGO_ICP) || ',') > 0
+               )
+           AND (
+                 TRIM(p_SearchText) IS NULL
+                 OR TO_CHAR(V.CODIGO_BIEN) LIKE '%' || TRIM(p_SearchText) || '%'
+                 OR UPPER(V.NUMERO_PLACA) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                 OR UPPER(V.NRO_PLACA) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                 OR UPPER(V.ARTICULO) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                 OR UPPER(NVL(V.RESPONSABLE_BIEN, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+                 OR UPPER(NVL(V.UNIDAD_TRABAJO, '')) LIKE '%' || UPPER(TRIM(p_SearchText)) || '%'
+               )
+           AND NOT EXISTS (
+                 SELECT NULL
+                   FROM BM.BM_PLACAS_CUARENTENA Q
+                  WHERE Q.CODIGO_EMPRESA = V.CODIGO_EMPRESA
+                    AND Q.NUMERO_PLACA = V.NRO_PLACA
                )
          ORDER BY V.UNIDAD_TRABAJO, V.ARTICULO, V.NUMERO_PLACA;
 
@@ -346,7 +381,8 @@ EXCEPTION
                    CAST(NULL AS NUMBER) CODIGO_BIEN,
                    CAST(NULL AS NUMBER) CODIGO_MOV_BIEN,
                    CAST(NULL AS DATE) FECHA_MOVIMIENTO,
-                   CAST(NULL AS VARCHAR2(20)) NRO_PLACA
+                   CAST(NULL AS VARCHAR2(20)) NRO_PLACA,
+                   CAST(NULL AS VARCHAR2(4000)) PLACA_BARRA
               FROM DUAL
              WHERE 1 = 0;
 END SP_BM1_GET_BY_ICP;

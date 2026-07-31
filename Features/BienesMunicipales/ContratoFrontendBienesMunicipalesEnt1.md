@@ -64,9 +64,17 @@ Request:
       "codigoIcp": 1001,
       "unidadTrabajo": "DIRECCION DE ADMINISTRACION"
     }
-  ]
+  ],
+  "searchValue": "00213"
 }
 ```
+
+`searchValue` es opcional. Vacio o ausente no filtra; con valor se compara sin distinguir mayusculas
+contra `codigoBien`, `numeroPlaca`, `nroPlaca`, `articulo`, `responsableBien` y `unidadTrabajo`. El
+filtro se resuelve en `BM.SP_BM1_GET_BY_ICP`, de modo que `cantidadRegistros` corresponde siempre al
+conjunto filtrado.
+
+Los bienes con placa registrada en `BM.BM_PLACAS_CUARENTENA` quedan excluidos del resultado.
 
 Item:
 
@@ -91,9 +99,33 @@ Item:
   "fechaMovimiento": "2026-06-25T00:00:00",
   "year": 2026,
   "month": 6,
-  "nroPlaca": "BM-00000001"
+  "nroPlaca": "BM-00000001",
+  "placaBarra": "1-01-01-00001"
 }
 ```
+
+`placaBarra` es el valor que se imprime como codigo de barras en la etiqueta, compuesto en el
+procedimiento como `codigoGrupo-codigoNivel1-codigoNivel2-numeroPlaca`. Reproduce el formato del
+sistema anterior para que los lectores reconozcan las etiquetas ya impresas.
+
+### `POST api/Bm1/PlacasPdf`
+
+Genera el PDF de etiquetas de placas. Recibe el **mismo** cuerpo que `GetByListIcp` y resuelve el
+filtro con la misma lectura, de modo que el conjunto de etiquetas coincide siempre con el del grid.
+
+Request: identico a `POST api/Bm1/GetByListIcp`.
+
+Respuestas:
+
+| Caso | Respuesta |
+|---|---|
+| Hay bienes | `application/pdf` con `Content-Disposition: inline` y cabecera `X-Bm1-Placas-Count` con la cantidad de etiquetas |
+| Error de configuracion o de base de datos | `ResultDto` con `isValid: false` y el mensaje correspondiente |
+| El filtro no devuelve bienes | `ResultDto` con `isValid: false` y `message: "No hay bienes para generar placas con los filtros seleccionados."` |
+
+El PDF trae una etiqueta por pagina, sin paginas en blanco: la cantidad de paginas es igual a
+`X-Bm1-Placas-Count`. El nombre de archivo incluye la marca de tiempo, por lo que no hay archivo
+compartido entre usuarios.
 
 ### `POST api/Bm1/GetProductMobil`
 

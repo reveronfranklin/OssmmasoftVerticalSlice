@@ -20,7 +20,44 @@ Content-Type: application/json
 {
   "fechaDesde": null,
   "fechaHasta": null,
-  "codigosIcp": []
+  "listIcpSeleccionado": []
+}
+
+### BM - BM1 por ICP con busqueda de texto
+# cantidadRegistros debe bajar respecto a la peticion sin searchValue.
+POST {{baseUrl}}/Bm1/GetByListIcp
+Content-Type: application/json
+
+{
+  "fechaDesde": null,
+  "fechaHasta": null,
+  "listIcpSeleccionado": [{ "codigoIcp": {{codigoIcp}}, "unidadTrabajo": "" }],
+  "searchValue": "00213"
+}
+
+### BM - BM1 placas PDF (mismo cuerpo que GetByListIcp)
+# Con datos: application/pdf y cabecera X-Bm1-Placas-Count.
+# La cantidad de esa cabecera debe coincidir con cantidadRegistros de GetByListIcp con el mismo cuerpo.
+POST {{baseUrl}}/Bm1/PlacasPdf
+Content-Type: application/json
+
+{
+  "fechaDesde": null,
+  "fechaHasta": null,
+  "listIcpSeleccionado": [{ "codigoIcp": {{codigoIcp}}, "unidadTrabajo": "" }],
+  "searchValue": ""
+}
+
+### BM - BM1 placas PDF sin resultados
+# Debe responder ResultDto con isValid=false y el mensaje de negocio, no un PDF vacio.
+POST {{baseUrl}}/Bm1/PlacasPdf
+Content-Type: application/json
+
+{
+  "fechaDesde": "1900-01-01",
+  "fechaHasta": "1900-01-02",
+  "listIcpSeleccionado": [{ "codigoIcp": {{codigoIcp}}, "unidadTrabajo": "" }],
+  "searchValue": ""
 }
 
 ### BM - Ficha bienes
