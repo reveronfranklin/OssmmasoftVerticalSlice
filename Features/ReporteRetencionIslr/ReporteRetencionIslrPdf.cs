@@ -41,7 +41,7 @@ public static class ReporteRetencionIslrPdfGenerator
 
                 page.Footer().Column(column =>
                 {
-                    column.Item().Element(BuildFirmantes);
+                    column.Item().Element(element => ReportPdfFirmantes.Build(element, 7));
                     column.Item().PaddingTop(4).Element(element =>
                         ReportPdfFooter.Build(element, printContext, 7));
                 });
@@ -149,25 +149,6 @@ public static class ReporteRetencionIslrPdfGenerator
             TotalCell(table, string.Empty);
             TotalCell(table, FormatAmount(totalRetenido, culture), alignRight: true);
             TotalCell(table, string.Empty);
-        });
-    }
-
-    private static void BuildFirmantes(IContainer container)
-    {
-        container.PaddingTop(20).Row(row =>
-        {
-            row.RelativeItem().Element(element => FirmanteLine(element, "BENEFICIARIO"));
-            row.ConstantItem(60);
-            row.RelativeItem().Element(element => FirmanteLine(element, "DIRECTOR(A) DE ADMINISTRACIÓN"));
-        });
-    }
-
-    private static void FirmanteLine(IContainer container, string label)
-    {
-        container.Column(column =>
-        {
-            column.Item().PaddingHorizontal(12).LineHorizontal(0.8f);
-            column.Item().PaddingTop(2).AlignCenter().Text(label).Bold().FontSize(7);
         });
     }
 

@@ -59,8 +59,12 @@ public static class ReporteTimbreFiscalPdfGenerator
                     }
                 });
 
-                page.Footer().Element(element =>
-                    ReportPdfFooter.Build(element, printContext, 8));
+                page.Footer().Column(column =>
+                {
+                    column.Item().Element(element => ReportPdfFirmantes.Build(element, 7));
+                    column.Item().PaddingTop(4).Element(element =>
+                        ReportPdfFooter.Build(element, printContext, 8));
+                });
             });
         }).GeneratePdf();
     }
@@ -171,21 +175,18 @@ public static class ReporteTimbreFiscalPdfGenerator
             TotalRow(table, "MONTO NETO GRAVABLE", FormatAmount(totalNetTaxableIncome, culture));
 
             table.Cell().ColumnSpan(4).BorderLeft(1).BorderRight(1).Height(16);
-            TotalRow(table, "IMPUESTO (1x1000) A RETENER:", FormatAmount(withholdingAmount, culture), isLast: true);
+            TotalRow(table, "IMPUESTO (1x1000) A RETENER:", FormatAmount(withholdingAmount, culture));
+
+            table.Cell().ColumnSpan(4).BorderLeft(1).BorderRight(1).BorderBottom(1).Height(8);
         });
     }
 
-    private static void TotalRow(TableDescriptor table, string label, string value, bool isLast = false)
+    private static void TotalRow(TableDescriptor table, string label, string value)
     {
         table.Cell().BorderLeft(1).Padding(2).Text(string.Empty);
         table.Cell().Padding(3).Text(label).Bold().FontSize(7.2f);
         table.Cell().Border(1).Padding(3).AlignRight().Text(value).FontSize(7.2f);
-        var lastCell = table.Cell().BorderRight(1).Padding(2);
-        if (isLast)
-        {
-            lastCell = lastCell.BorderBottom(1);
-        }
-        lastCell.Text(string.Empty);
+        table.Cell().BorderRight(1).Padding(2).Text(string.Empty);
     }
 
     private static void AddLogo(IContainer container, byte[]? logoBytes, string fallback)

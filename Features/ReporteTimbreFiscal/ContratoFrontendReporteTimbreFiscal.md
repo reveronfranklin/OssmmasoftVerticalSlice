@@ -43,6 +43,12 @@ desde `localStorage.userData` para este endpoint. Si llega vacio o nulo, el
 backend responde HTTP `400` y no genera el PDF. El usuario y la fecha/hora de
 impresion se presentan en el lado izquierdo del footer de todas las paginas.
 
+El PDF incluye ademas, sobre la fila de auditoria y en todas las paginas, las
+lineas de firma `BENEFICIARIO` y `DIRECTOR(A) DE ADMINISTRACION`, iguales a las
+del Comprobante de Retencion IVA y del Comprobante de Retencion ISLR. Son
+espacios para firma manuscrita: no se cargan nombres ni cedulas desde la base y
+no requieren ningun campo adicional en el request.
+
 ## Respuesta de datos
 
 ```json
