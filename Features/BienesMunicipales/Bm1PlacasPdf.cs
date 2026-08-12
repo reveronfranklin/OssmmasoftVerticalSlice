@@ -1,6 +1,9 @@
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
+using System.Data;
 using System.Globalization;
 
 namespace OssmmasoftVerticalSlice.Features.BienesMunicipales;
@@ -15,23 +18,22 @@ public static class Bm1PlacasPdfGenerator
     private const float PageWidthPoints = 170f;
     private const float PageHeightPoints = 85f;
     private const float BarcodeWidthPoints = 105f;
-    private const float BarcodeHeightPoints = 16f;
+
+    // El sistema anterior reservaba 16 puntos para el bloque completo del simbolo: las barras mas el
+    // numero de placa legible debajo (Barcode128.SetBaseline(10)). Aqui se reparte ese mismo alto
+    // entre las barras y la linea de texto, para no crecer la etiqueta.
+    private const float BarcodeHeightPoints = 11f;
+    private const float BarcodeTextFontSize = 5f;
 
     private static readonly string[] ArticulosEnMinuscula =
         ["El", "La", "Los", "Las", "Un", "Una", "Unos", "Unas", "Y", "De", "Del", "E", "Al"];
 
-    public static byte[] Generate(IReadOnlyCollection<Bm1Response> items, IWebHostEnvironment environment)
+    public static byte[] Generate(IReadOnlyCollection<Bm1Response> items, Bm1PlacasImagenes imagenes)
     {
         QuestPDF.Settings.License = LicenseType.Evaluation;
 
-        // El sistema anterior tomaba estas dos imagenes de OSS_CONFIG, claves ESCUDO_CHACAO (el escudo
-        // del municipio, a la izquierda) y LOGO_CHACAO (el logotipo institucional, a la derecha). Aqui
-        // se leen de los assets de reportes del vertical slice. No se usa logoLeft.jpeg como respaldo
-        // del escudo: es el logotipo, no el escudo, y ponerlo en la izquierda repetiria la misma imagen
-        // en los dos extremos de la etiqueta. Si falta alguna, su recuadro queda vacio y la etiqueta se
-        // emite igual.
-        var escudoBytes = TryReadReportAsset(environment, "escudoChacao.png", "escudoChacao.jpeg");
-        var logoBytes = TryReadReportAsset(environment, "logoChacao.jpeg", "logoChacao.png");
+        var escudoBytes = imagenes.Escudo;
+        var logoBytes = imagenes.Logo;
 
         // Se comparte una sola instancia de Image por asset en vez de pasar el byte[] en cada etiqueta.
         // A diferencia del resto de reportes, aqui cada placa es una Page independiente, asi que pasar
@@ -100,18 +102,27 @@ public static class Bm1PlacasPdfGenerator
     /// Dibuja el simbolo Code 128 como SVG: las coordenadas van en modulos enteros y el escalado a
     /// puntos lo hace el renderizador, de modo que la etiqueta queda descrita por un solo elemento
     /// en vez de un centenar de cajas de layout.
+    /// Debajo de las barras va el numero de placa en claro, igual que en el sistema anterior: si el
+    /// lector falla o la etiqueta se raya, el bien se sigue identificando a simple vista.
     /// Si el valor no es codificable, imprime el texto de la placa para que la etiqueta siga siendo
     /// identificable en vez de salir en blanco.
     /// </summary>
     private static void BuildBarcode(IContainer container, string value)
     {
-        if (!Bm1Code128.CanEncode(value))
+        var texto = value ?? string.Empty;
+
+        if (!Bm1Code128.CanEncode(texto))
         {
-            container.Text(value ?? string.Empty).Bold().FontSize(7);
+            container.Text(texto).Bold().FontSize(7);
             return;
         }
 
-        container.Width(BarcodeWidthPoints).Height(BarcodeHeightPoints).Svg(BuildBarcodeSvg(value));
+        container.Width(BarcodeWidthPoints).Column(column =>
+        {
+            column.Item().Height(BarcodeHeightPoints).Svg(BuildBarcodeSvg(texto));
+
+            column.Item().AlignCenter().Text(texto).FontSize(BarcodeTextFontSize);
+        });
     }
 
     private static string BuildBarcodeSvg(string value)
@@ -173,7 +184,7 @@ public static class Bm1PlacasPdfGenerator
     /// Devuelve el primero de los nombres indicados que exista entre los directorios de assets de
     /// reportes, o null si no hay ninguno. Mismo orden de busqueda que ReporteBm1Pdf.
     /// </summary>
-    private static byte[]? TryReadReportAsset(IWebHostEnvironment environment, params string[] fileNames)
+    internal static byte[]? TryReadReportAsset(IWebHostEnvironment environment, params string[] fileNames)
     {
         foreach (var fileName in fileNames)
         {
@@ -204,5 +215,111 @@ public static class Bm1PlacasPdfGenerator
         }
 
         return null;
+    }
+}
+
+/// <summary>
+/// Las dos imagenes de la etiqueta, ya en memoria. Cualquiera puede venir en null: en ese caso su
+/// recuadro queda vacio y la etiqueta se emite igual.
+/// </summary>
+public record Bm1PlacasImagenes(byte[]? Escudo, byte[]? Logo);
+
+/// <summary>
+/// Resuelve las dos imagenes de la etiqueta igual que el sistema anterior: la clave de
+/// <c>SIS.OSS_CONFIG</c> guarda el nombre del archivo y este se lee de la carpeta
+/// <c>settings:BmFiles</c> del servidor.
+/// </summary>
+/// <remarks>
+/// Si la carpeta no esta montada o la clave no existe -por ejemplo en una maquina de desarrollo sin
+/// acceso al recurso compartido de Windows-, se cae a los assets versionados de
+/// <c>Assets/Reports</c>. Son equivalentes pero no identicos: el logotipo versionado es la version a
+/// color y el del servidor es la monocroma, asi que una etiqueta a color indica que la carpeta no se
+/// esta alcanzando. Nunca se propaga el fallo: una placa sin logotipo se sigue pudiendo imprimir y
+/// leer.
+/// </remarks>
+public static class Bm1PlacasImagenesLoader
+{
+    private const string ClaveEscudo = "ESCUDO_CHACAO";
+    private const string ClaveLogo = "LOGO_CHACAO";
+
+    public static async Task<Bm1PlacasImagenes> LoadAsync(
+        ConnectionDB connectionDB,
+        IConfiguration config,
+        IWebHostEnvironment environment)
+    {
+        var carpeta = BmDb.GetBmFilesPath(config);
+        var separador = config["settings:SeparatorPatch"];
+
+        var escudo =
+            await TryReadFromConfigAsync(connectionDB, carpeta, separador, ClaveEscudo)
+            ?? Bm1PlacasPdfGenerator.TryReadReportAsset(environment, "escudoChacao.png", "escudoChacao.jpeg");
+
+        // No se usa logoLeft.jpeg como respaldo del escudo: es el logotipo, no el escudo, y ponerlo a
+        // la izquierda repetiria la misma imagen en los dos extremos de la etiqueta.
+        var logo =
+            await TryReadFromConfigAsync(connectionDB, carpeta, separador, ClaveLogo)
+            ?? Bm1PlacasPdfGenerator.TryReadReportAsset(environment, "logoChacao.jpeg", "logoChacao.png");
+
+        return new Bm1PlacasImagenes(escudo, logo);
+    }
+
+    private static async Task<byte[]?> TryReadFromConfigAsync(
+        ConnectionDB connectionDB,
+        string carpeta,
+        string? separador,
+        string clave)
+    {
+        try
+        {
+            var fileName = await ReadValorAsync(connectionDB, clave);
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return null;
+            }
+
+            // El sistema anterior concatenaba la carpeta y el valor tal cual, y el valor puede traer ya
+            // el separador de Windows. Se toma solo el nombre para no seguir rutas que vengan en la
+            // configuracion, y se combina con la ruta del servidor.
+            var soloNombre = Path.GetFileName(fileName.Replace('\\', '/').Trim());
+            if (string.IsNullOrWhiteSpace(soloNombre))
+            {
+                return null;
+            }
+
+            var path = string.IsNullOrEmpty(separador)
+                ? Path.Combine(carpeta, soloNombre)
+                : $"{carpeta.TrimEnd('\\', '/')}{separador}{soloNombre}";
+
+            return File.Exists(path) ? await File.ReadAllBytesAsync(path) : null;
+        }
+        catch
+        {
+            // Un fallo de BD o de disco no puede impedir que se impriman las placas.
+            return null;
+        }
+    }
+
+    private static async Task<string?> ReadValorAsync(ConnectionDB connectionDB, string clave)
+    {
+        using var cn = connectionDB.GetSisConnection();
+        var openError = await BmDb.TryOpenAsync(cn, "SIS");
+        if (openError is not null)
+        {
+            return null;
+        }
+
+        using var cmd = BmDb.StoredProcedure("SIS.SP_OSS_CONFIG_GET_VALOR", cn);
+        cmd.Parameters.Add("p_Clave", OracleDbType.Varchar2).Value = clave;
+        var pValor = cmd.Parameters.Add("p_Valor", OracleDbType.Varchar2, 100, null, ParameterDirection.Output);
+        var pMessage = cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
+
+        await cmd.ExecuteNonQueryAsync();
+
+        if (!BmDb.IsSuccessMessage(BmDb.GetMessage(pMessage)))
+        {
+            return null;
+        }
+
+        return pValor.Value == DBNull.Value ? null : pValor.Value?.ToString();
     }
 }

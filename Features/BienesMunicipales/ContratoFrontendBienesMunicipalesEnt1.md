@@ -127,6 +127,17 @@ El PDF trae una etiqueta por pagina, sin paginas en blanco: la cantidad de pagin
 `X-Bm1-Placas-Count`. El nombre de archivo incluye la marca de tiempo, por lo que no hay archivo
 compartido entre usuarios.
 
+Debajo del codigo de barras se imprime el numero de placa en claro, igual que en el sistema anterior,
+para poder identificar el bien a simple vista si el lector falla.
+
+Las dos imagenes de la etiqueta se resuelven igual que en el sistema anterior: las claves
+`ESCUDO_CHACAO` (izquierda) y `LOGO_CHACAO` (derecha) de `SIS.OSS_CONFIG` guardan el nombre del
+archivo, que se lee de la carpeta `settings:BmFiles`. Requiere `SIS.SP_OSS_CONFIG_GET_VALOR`
+(`Sql/11_SP_OSS_CONFIG_GET_VALOR.sql`). Si la carpeta no esta disponible se cae a los assets
+versionados de `Assets/Reports`, que son equivalentes pero no identicos -el logotipo versionado es la
+version a color-, y si tampoco estan, el recuadro queda vacio y la etiqueta se emite igual. Ni un
+fallo de base de datos ni uno de disco impiden generar el PDF.
+
 ### `POST api/Bm1/GetProductMobil`
 
 Request:

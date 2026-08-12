@@ -136,7 +136,8 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config, IWe
         }
 
         Response.Headers.Append("X-Bm1-Placas-Count", result.Data.Count.ToString(CultureInfo.InvariantCulture));
-        var bytes = Bm1PlacasPdfGenerator.Generate(result.Data, environment);
+        var imagenes = await Bm1PlacasImagenesLoader.LoadAsync(connectionDB, config, environment);
+        var bytes = Bm1PlacasPdfGenerator.Generate(result.Data, imagenes);
         var fileName = $"placas-bm1-{DateTime.Now:yyyyMMddHHmmss}.pdf";
         Response.Headers.ContentDisposition = $"inline; filename=\"{fileName}\"";
 
