@@ -33,6 +33,13 @@ public static class Bm1PlacasPdfGenerator
         var escudoBytes = TryReadReportAsset(environment, "escudoChacao.png", "escudoChacao.jpeg");
         var logoBytes = TryReadReportAsset(environment, "logoChacao.jpeg", "logoChacao.png");
 
+        // Se comparte una sola instancia de Image por asset en vez de pasar el byte[] en cada etiqueta.
+        // A diferencia del resto de reportes, aqui cada placa es una Page independiente, asi que pasar
+        // los bytes incrusta el escudo y el logotipo una vez por pagina: 55 placas pesaban 1,9 MB en vez
+        // de 100 KB, y el visor no lograba mostrar un PDF de ese tamano.
+        var escudo = escudoBytes is null ? null : Image.FromBinaryData(escudoBytes);
+        var logo = logoBytes is null ? null : Image.FromBinaryData(logoBytes);
+
         // Mismo orden que usaba CreateBardCodeMultiple en el sistema anterior.
         var placas = items.OrderBy(item => item.UnidadTrabajo, StringComparer.OrdinalIgnoreCase).ToList();
 
@@ -48,7 +55,7 @@ public static class Bm1PlacasPdfGenerator
 
                     page.Content().Column(column =>
                     {
-                        column.Item().Element(element => BuildHeader(element, placa, escudoBytes, logoBytes));
+                        column.Item().Element(element => BuildHeader(element, placa, escudo, logo));
 
                         column.Item().PaddingTop(2).AlignCenter().Text("Bienes Municipales").Bold().FontSize(8);
 
@@ -64,15 +71,15 @@ public static class Bm1PlacasPdfGenerator
         }).GeneratePdf();
     }
 
-    private static void BuildHeader(IContainer container, Bm1Response placa, byte[]? escudoBytes, byte[]? logoBytes)
+    private static void BuildHeader(IContainer container, Bm1Response placa, Image? escudo, Image? logo)
     {
         container.Height(30).Row(row =>
         {
             row.ConstantItem(35).Element(element =>
             {
-                if (escudoBytes is not null)
+                if (escudo is not null)
                 {
-                    element.AlignLeft().AlignMiddle().Image(escudoBytes).FitArea();
+                    element.AlignLeft().AlignMiddle().Image(escudo).FitArea();
                 }
             });
 
@@ -81,9 +88,9 @@ public static class Bm1PlacasPdfGenerator
 
             row.ConstantItem(58).Element(element =>
             {
-                if (logoBytes is not null)
+                if (logo is not null)
                 {
-                    element.AlignRight().AlignMiddle().Image(logoBytes).FitArea();
+                    element.AlignRight().AlignMiddle().Image(logo).FitArea();
                 }
             });
         });
