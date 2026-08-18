@@ -548,8 +548,10 @@ public class MfoReporteController(
         var parametros = new List<MfoRepParamResponse>();
         var columnas = new List<MfoRepColumnaResponse>();
 
-        using (var reader = await cmd.ExecuteReaderAsync())
+        try
         {
+            using var reader = await cmd.ExecuteReaderAsync();
+
             while (await reader.ReadAsync())
             {
                 reportes.Add(MapReporte(reader));
@@ -570,6 +572,10 @@ public class MfoReporteController(
                     columnas.Add(MapColumna(reader));
                 }
             }
+        }
+        catch (OracleException ex)
+        {
+            return MfoDb.Invalid<MfoReporteDetalle>($"Error de base de datos ({ex.Number}): {ex.Message}");
         }
 
         var message = MfoDb.GetMessage(pMessage);

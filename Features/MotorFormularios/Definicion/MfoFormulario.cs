@@ -78,8 +78,10 @@ public class MfoFormularioController(ConnectionDB connectionDB, IConfiguration c
         MfoFormularioResponse? formulario = null;
         var versiones = new List<MfoVersionResponse>();
 
-        using (var reader = await cmd.ExecuteReaderAsync())
+        try
         {
+            using var reader = await cmd.ExecuteReaderAsync();
+
             if (await reader.ReadAsync())
             {
                 formulario = MfoDb.MapFormulario(reader, false);
@@ -94,6 +96,10 @@ public class MfoFormularioController(ConnectionDB connectionDB, IConfiguration c
                     versiones.Add(MfoDb.MapVersion(reader));
                 }
             }
+        }
+        catch (OracleException ex)
+        {
+            return Ok(MfoDb.Invalid<MfoFormularioDetalle>($"Error de base de datos ({ex.Number}): {ex.Message}"));
         }
 
         var message = MfoDb.GetMessage(pMessage);

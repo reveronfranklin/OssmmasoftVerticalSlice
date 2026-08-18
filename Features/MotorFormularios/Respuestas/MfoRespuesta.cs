@@ -308,8 +308,10 @@ public class MfoRespuestaController(
         MfoRespuestaResponse? sobre = null;
         var valores = new List<MfoValorResponse>();
 
-        using (var reader = await cmd.ExecuteReaderAsync())
+        try
         {
+            using var reader = await cmd.ExecuteReaderAsync();
+
             if (await reader.ReadAsync())
             {
                 sobre = new MfoRespuestaResponse(
@@ -333,6 +335,10 @@ public class MfoRespuestaController(
                         reader.SafeGetString("VALOR_TEXTO"), reader.SafeGetString("ETIQUETA_VAL")));
                 }
             }
+        }
+        catch (OracleException ex)
+        {
+            return Ok(MfoDb.Invalid<MfoRespuestaDetalle>($"Error de base de datos ({ex.Number}): {ex.Message}"));
         }
 
         var message = MfoDb.GetMessage(pMessage);

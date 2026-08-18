@@ -287,12 +287,23 @@ public static class MfoDb
         var pMessage = cmd.Parameters["p_Message"];
         var pTotal = cmd.Parameters.Contains("p_TotalRecords") ? cmd.Parameters["p_TotalRecords"] : null;
 
-        using (var reader = await cmd.ExecuteReaderAsync())
+        try
         {
+            using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
             {
                 list.Add(map(reader));
             }
+        }
+        catch (OracleException ex)
+        {
+            // Un fallo del lado de Oracle -procedimiento inexistente, permisos
+            // faltantes, schema sin instalar- tiene que llegar como
+            // IsValid = false con el mensaje, igual que cualquier otro fallo
+            // esperado. Dejarlo propagar produce un 500 sin cuerpo, que es lo
+            // peor posible para diagnosticar: el usuario ve "Network Error" y
+            // nadie sabe si el problema es la base, los permisos o la red.
+            return InvalidList<T>($"Error de base de datos ({ex.Number}): {ex.Message}");
         }
 
         var message = GetMessage(pMessage);
@@ -318,7 +329,14 @@ public static class MfoDb
     /// </summary>
     public static async Task<ResultDto<int>> ExecuteScalarAsync(OracleCommand cmd, string? outParam = null)
     {
-        await cmd.ExecuteNonQueryAsync();
+        try
+        {
+            await cmd.ExecuteNonQueryAsync();
+        }
+        catch (OracleException ex)
+        {
+            return Invalid<int>($"Error de base de datos ({ex.Number}): {ex.Message}");
+        }
 
         var message = GetMessage(cmd.Parameters["p_Message"]);
         var isSuccess = IsSuccessMessage(message);
