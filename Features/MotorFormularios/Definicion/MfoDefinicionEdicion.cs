@@ -16,6 +16,12 @@ namespace OssmmasoftVerticalSlice.Features.MotorFormularios;
 /// Repetir la comprobacion aqui seria una segunda definicion de la misma regla,
 /// con el riesgo de que las dos se separen. Los procedimientos traducen el error
 /// del trigger a un mensaje de negocio.
+///
+/// Lo que si se comprueba aqui es el permiso <c>DISENAR</c>, y se comprueba en
+/// todas: editar la definicion de un formulario ajeno es mas grave que leer sus
+/// respuestas, porque cambia lo que van a capturar todos los demas. El ambito se
+/// resuelve con <see cref="MfoAmbitoDefinicion"/> a partir del id de la pieza
+/// que se toca, nunca de un formularioId enviado por el cliente.
 /// </summary>
 [ApiController]
 [Route("api/MfoDefinicion")]
@@ -30,6 +36,13 @@ public class MfoDefinicionController(ConnectionDB connectionDB) : ControllerBase
     [HttpPost("seccion/upsert")]
     public async Task<IActionResult> SeccionUpsert(MfoSeccionUpsertRequest request)
     {
+        // DISENAR sobre el formulario dueño. El ambito se resuelve en la base a
+        // partir del id que se esta tocando: aceptar un formularioId del cliente
+        // permitiria editar la definicion de otro formulario mandando el propio.
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Version, request.VersionId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
@@ -62,6 +75,13 @@ public class MfoDefinicionController(ConnectionDB connectionDB) : ControllerBase
     [HttpPost("seccion/delete")]
     public async Task<IActionResult> SeccionDelete(MfoIdRequest request)
     {
+        // DISENAR sobre el formulario dueño. El ambito se resuelve en la base a
+        // partir del id que se esta tocando: aceptar un formularioId del cliente
+        // permitiria editar la definicion de otro formulario mandando el propio.
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Seccion, request.Id, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
@@ -82,6 +102,13 @@ public class MfoDefinicionController(ConnectionDB connectionDB) : ControllerBase
     [HttpPost("campo/upsert")]
     public async Task<IActionResult> CampoUpsert(MfoCampoUpsertRequest request)
     {
+        // DISENAR sobre el formulario dueño. El ambito se resuelve en la base a
+        // partir del id que se esta tocando: aceptar un formularioId del cliente
+        // permitiria editar la definicion de otro formulario mandando el propio.
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Seccion, request.SeccionId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
@@ -113,6 +140,13 @@ public class MfoDefinicionController(ConnectionDB connectionDB) : ControllerBase
     [HttpPost("campo/delete")]
     public async Task<IActionResult> CampoDelete(MfoIdRequest request)
     {
+        // DISENAR sobre el formulario dueño. El ambito se resuelve en la base a
+        // partir del id que se esta tocando: aceptar un formularioId del cliente
+        // permitiria editar la definicion de otro formulario mandando el propio.
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Campo, request.Id, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
@@ -135,6 +169,13 @@ public class MfoDefinicionController(ConnectionDB connectionDB) : ControllerBase
     [HttpPost("campo/reorder")]
     public async Task<IActionResult> CampoReorder(MfoCampoReorderRequest request)
     {
+        // DISENAR sobre el formulario dueño. El ambito se resuelve en la base a
+        // partir del id que se esta tocando: aceptar un formularioId del cliente
+        // permitiria editar la definicion de otro formulario mandando el propio.
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Seccion, request.SeccionId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
@@ -158,6 +199,13 @@ public class MfoDefinicionController(ConnectionDB connectionDB) : ControllerBase
     [HttpPost("opcion/upsert")]
     public async Task<IActionResult> OpcionUpsert(MfoOpcionUpsertRequest request)
     {
+        // DISENAR sobre el formulario dueño. El ambito se resuelve en la base a
+        // partir del id que se esta tocando: aceptar un formularioId del cliente
+        // permitiria editar la definicion de otro formulario mandando el propio.
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Campo, request.CampoId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
@@ -181,6 +229,13 @@ public class MfoDefinicionController(ConnectionDB connectionDB) : ControllerBase
     [HttpPost("opcion/delete")]
     public async Task<IActionResult> OpcionDelete(MfoIdRequest request)
     {
+        // DISENAR sobre el formulario dueño. El ambito se resuelve en la base a
+        // partir del id que se esta tocando: aceptar un formularioId del cliente
+        // permitiria editar la definicion de otro formulario mandando el propio.
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Opcion, request.Id, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
@@ -200,6 +255,13 @@ public class MfoDefinicionController(ConnectionDB connectionDB) : ControllerBase
     [HttpPost("regla/upsert")]
     public async Task<IActionResult> ReglaUpsert(MfoReglaUpsertRequest request)
     {
+        // DISENAR sobre el formulario dueño. El ambito se resuelve en la base a
+        // partir del id que se esta tocando: aceptar un formularioId del cliente
+        // permitiria editar la definicion de otro formulario mandando el propio.
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Campo, request.CampoId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
@@ -223,6 +285,13 @@ public class MfoDefinicionController(ConnectionDB connectionDB) : ControllerBase
     [HttpPost("regla/delete")]
     public async Task<IActionResult> ReglaDelete(MfoIdRequest request)
     {
+        // DISENAR sobre el formulario dueño. El ambito se resuelve en la base a
+        // partir del id que se esta tocando: aceptar un formularioId del cliente
+        // permitiria editar la definicion de otro formulario mandando el propio.
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Regla, request.Id, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
@@ -247,6 +316,13 @@ public class MfoDefinicionController(ConnectionDB connectionDB) : ControllerBase
     [HttpPost("condicion/upsert")]
     public async Task<IActionResult> CondicionUpsert(MfoCondicionUpsertRequest request)
     {
+        // DISENAR sobre el formulario dueño. El ambito se resuelve en la base a
+        // partir del id que se esta tocando: aceptar un formularioId del cliente
+        // permitiria editar la definicion de otro formulario mandando el propio.
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Version, request.VersionId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
@@ -273,6 +349,13 @@ public class MfoDefinicionController(ConnectionDB connectionDB) : ControllerBase
     [HttpPost("condicion/delete")]
     public async Task<IActionResult> CondicionDelete(MfoIdRequest request)
     {
+        // DISENAR sobre el formulario dueño. El ambito se resuelve en la base a
+        // partir del id que se esta tocando: aceptar un formularioId del cliente
+        // permitiria editar la definicion de otro formulario mandando el propio.
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Condicion, request.Id, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));

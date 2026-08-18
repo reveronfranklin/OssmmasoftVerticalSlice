@@ -1,7 +1,8 @@
 # Contrato Frontend - Motor de Formularios (MFO)
 
-Requerimiento 16. Cubre la **Fase 4**: catalogo y definicion. Las respuestas
-(`api/MfoRespuesta`) son de la Fase 5 y no estan en este documento todavia.
+Requerimiento 16. Cubre el backend completo: catalogo y definicion (Fase 4),
+respuestas, adjuntos y autorizacion (Fase 5), y el modo parametros de reporte
+(Fase 9).
 
 Todas las rutas devuelven `ResultDto<T>`:
 
@@ -403,12 +404,235 @@ permitidas a esa lista.
 
 ---
 
-## Pendiente de la Fase 5
+## `api/MfoRespuesta`
 
-- `api/MfoRespuesta` completo (crear, guardar valores, enviar, consultar, buscar,
-  anular, exportar, adjuntos).
-- `api/MfoCatalogo/opciones`, que resuelve `catalogoClave` contra la lista blanca
-  del backend. Hasta que exista, un campo con `origenOpciones: "CATALOGO"` no
-  tiene de donde sacar sus opciones.
-- La aplicacion efectiva de `MFO_PERMISO` en cada slice. Hoy los endpoints de
-  definicion **no verifican permisos**.
+Formato de un valor, comun a guardar, enviar y ejecutar un reporte:
+
+```json
+{ "clave": "FECHA_DESDE", "fila": 0, "orden": 0, "valor": "2026-01-01", "etiqueta": null }
+```
+
+- `valor` es **siempre texto**, incluso para numeros y fechas. El backend
+  convierte segun el tipo del campo. Fechas en `yyyy-MM-dd`.
+- `fila` es 0 salvo en secciones repetibles (1, 2, 3...).
+- `orden` es 0 salvo en campos multivalor (1, 2, 3... por cada seleccion).
+- Booleanos viajan como `"S"` / `"N"`.
+
+### `POST api/MfoRespuesta/create`
+
+```json
+{ "alias": "SOL_MANT", "claveIdem": "uuid-del-cliente", "entidadRef": null, "claveRef": null }
+```
+
+Devuelve `{ "respuestaId": 12, "versionId": 3 }`. `claveIdem` da idempotencia:
+dos llamadas con la misma clave producen una sola respuesta.
+
+### `POST api/MfoRespuesta/saveValores`
+
+```json
+{ "respuestaId": 12, "valores": [ ... ] }
+```
+
+Solo validacion **estructural**: es el autoguardado del borrador y no exige los
+obligatorios.
+
+### `POST api/MfoRespuesta/submit`
+
+Mismo cuerpo que `saveValores`. Aplica ademas reglas, condiciones y `UNICO`.
+
+Cuando falla la validacion, `data` trae los errores ubicados:
+
+```json
+{
+  "data": [
+    { "clave": "JUSTIFICA", "fila": 0, "orden": 0, "codigo": "REQUERIDO", "mensaje": "Justifique la urgencia." }
+  ],
+  "isValid": false,
+  "message": "La respuesta tiene 1 error(es) de validacion."
+}
+```
+
+Cada error se pinta junto a su control usando `clave` + `fila` + `orden`. No es
+un toast.
+
+### `GET api/MfoRespuesta/getById?id=12`
+
+Devuelve el sobre y los valores. **No devuelve la definicion**: se pide con
+`api/MfoVersion/getFull?versionId=` usando el `versionId` del sobre, que es
+cacheable para siempre porque una version publicada es inmutable.
+
+### `POST api/MfoRespuesta/GetAll`
+
+Busqueda paginada. Filtros: `alias`, `estado`, `fechaDesde`, `fechaHasta`,
+`usuario`, `entidadRef`, `claveRef`, y `claveCampo` + `valorTexto` para buscar
+por el valor de un campo concreto.
+
+### `POST api/MfoRespuesta/anular` · `delete` · `export`
+
+`anular` exige `motivo`. `delete` solo borra borradores. `export` **exige
+`alias`** y devuelve formato largo (una fila por valor).
+
+---
+
+## `api/MfoAdjunto`
+
+### `POST api/MfoAdjunto/upload?valorId=99`
+
+`multipart/form-data` con el campo `archivo`. Limite 10 MB. Extensiones
+permitidas por lista blanca en el backend; ampliarla requiere despliegue.
+
+### `GET api/MfoAdjunto/download?adjuntoId=5`
+
+Devuelve el archivo. El MIME se resuelve por la extension real del archivo
+guardado, nunca por el que declaro el cliente. Verifica permiso `VER` sobre el
+formulario dueño.
+
+---
+
+## `api/MfoReporte`
+
+Modo parametros de reporte. El formulario alimenta los parametros de un reporte
+existente en vez de guardar una respuesta de negocio.
+
+### `GET api/MfoReporte/getByFormulario?alias=REP_BM1`
+
+Tambien admite `formularioId` y `soloActivos` (por defecto `true`). Devuelve las
+tres cosas de una vez:
+
+```json
+{
+  "data": {
+    "reportes": [
+      {
+        "reporteId": 1, "formularioId": 1, "alias": "REP_BM1", "clave": "BM1_PDF",
+        "nombre": "Reporte de Bienes Municipales (PDF)", "tipoEjec": "ENDPOINT",
+        "claveRegistro": "REPORTE_BM1_PDF", "orientacion": "HORIZONTAL",
+        "maxFilas": null, "timeoutSeg": 120, "orden": 10, "activo": true,
+        "modoUso": "PARAMETROS", "registraEjec": false,
+        "parametros": 4, "columnas": 0, "registrado": true
+      }
+    ],
+    "parametros": [
+      { "repParamId": 1, "reporteId": 1, "nombreParam": "FechaDesde", "origen": "CAMPO",
+        "claveCampo": "FECHA_DESDE", "tipoDato": "FECHA", "obligatorio": true, "orden": 10 }
+    ],
+    "columnas": []
+  },
+  "isValid": true
+}
+```
+
+`registrado` **no viene de la base**: dice si `claveRegistro` esta en la lista
+blanca del backend. Si es `false`, el reporte esta configurado pero no habilitado
+y ejecutarlo va a fallar. La pantalla debe avisarlo antes, no despues.
+
+### `POST api/MfoReporte/ejecutar`
+
+```json
+{ "reporteId": 1, "valores": [ { "clave": "FECHA_DESDE", "valor": "2026-01-01" } ] }
+```
+
+**Devuelve dos cosas distintas segun el desenlace**, igual que
+`api/ReporteBm1/pdf`:
+
+- **Exito**: el PDF, con `Content-Type: application/pdf` y
+  `Content-Disposition: inline`. Va al visor existente; **sin descarga forzada y
+  sin `window.open`**.
+- **Fallo esperado**: `ResultDto` JSON con `isValid: false`. Si el fallo es de
+  validacion, `data` trae los errores por campo en el mismo formato que
+  `submit`.
+
+El frontend distingue por `Content-Type` de la respuesta.
+
+Cabeceras que acompañan al PDF:
+
+| Cabecera | Contenido |
+| --- | --- |
+| `X-Mfo-Resultado` | `OK` o `TRUNCADO` |
+| `X-Mfo-Filas` | filas incluidas |
+| `X-Mfo-Mensaje` | aviso cuando hubo truncamiento |
+
+`TRUNCADO` **devuelve el PDF igual**: el usuario recibe lo que pidio pero tiene
+que saber que esta incompleto. Mostrar el aviso no es opcional.
+
+Mensajes propios que no son errores tecnicos:
+
+- sin datos: "El reporte no devolvio datos con esos parametros."
+- limite: "Se alcanzo el limite de N filas. Refine los parametros."
+- no registrado: "El reporte '...' no esta registrado en el backend."
+
+### `POST api/MfoReporte/ejecuciones`
+
+Bitacora paginada. Con `formularioId` exige permiso `VER` sobre el; **sin
+`formularioId` se acota al usuario en curso**.
+
+### `POST api/MfoReporte/ultimos`
+
+```json
+{ "reporteId": 1, "cantidad": 10 }
+```
+
+Ultimas ejecuciones **del usuario en curso** con su `paramsJson`, para recargar
+los filtros en el formulario. Es la capacidad que los dialogos de parametros
+codificados a mano no tienen.
+
+### `POST api/MfoReporte/upsert` · `delete` · `param/upsert` · `param/delete` · `columna/upsert`
+
+Configuracion. Todas exigen `DISENAR`. En `delete`, `data` vale `1` si el reporte
+se borro y `0` si solo se inactivo por tener ejecuciones en bitacora.
+
+En `param/upsert` el campo se indica por `claveCampo`, no por id, y se resuelve
+contra la version publicada. `origen` decide que fuente se usa y las otras dos se
+ignoran:
+
+| `origen` | Fuente | Lo controla |
+| --- | --- | --- |
+| `CAMPO` | valor del payload por `claveCampo` | el usuario |
+| `FIJO` | `valorFijo` de la configuracion | el diseñador |
+| `SISTEMA` | `claveSistema` ∈ `CODIGO_EMPRESA`, `USUARIO`, `FECHA_ACTUAL`, `IP_ORIGEN` | **solo el servidor** |
+
+Un valor enviado en el payload para un parametro `SISTEMA` se descarta sin
+mirarlo.
+
+---
+
+## Autorizacion
+
+`MFO_PERMISO` guarda, por formulario y rol, cuales de estas acciones se permiten:
+`DISENAR`, `LLENAR`, `VER`, `EXPORTAR`, `ANULAR`. El rol es el codigo de
+`SIS.OSS_USUARIO_ROL` y el usuario viaja en `X-Usuario`.
+
+| Endpoints | Accion exigida |
+| --- | --- |
+| `api/MfoFormulario` update/delete, `api/MfoVersion` (salvo `getFull`), todo `api/MfoDefinicion`, `api/MfoPermiso`, `api/MfoReporte` upsert/delete/param/columna | `DISENAR` |
+| `api/MfoRespuesta` create/saveValores/submit/delete, `api/MfoAdjunto/upload` | `LLENAR` |
+| `api/MfoRespuesta/getById`, `api/MfoAdjunto/download`, `api/MfoReporte/getByFormulario` | `VER` |
+| `api/MfoRespuesta/export`, `api/MfoReporte/ejecutar` | `EXPORTAR` |
+| `api/MfoRespuesta/anular` | `ANULAR` |
+
+Reglas de la politica:
+
+- **Un formulario sin permisos definidos esta abierto.** Es deliberado: el motor
+  se instala con formularios sin configurar y denegar por defecto los dejaria
+  inaccesibles sin pista de por que. En cuanto se define el primer permiso, ese
+  formulario queda cerrado a quien no lo tenga.
+- **Un fallo al comprobar el permiso deniega.** Lo contrario convertiria una
+  caida de SIS en una puerta abierta.
+- `api/MfoFormulario/GetAll`, `getById`, `create` y `api/MfoVersion/getFull` no
+  exigen permiso: son catalogo y metadatos, y `getFull` lo necesita el
+  renderizador para pintar el formulario a quien solo tiene `LLENAR`.
+
+---
+
+## Limites conocidos
+
+- **El permiso de reporte es por formulario, no por reporte.** Quien pueda
+  exportar un formulario puede ejecutar todos sus reportes. Distinguirlos
+  necesitaria una tabla de permisos propia.
+- **`TIMEOUT_SEG` acota lo que espera la peticion, no la consulta.** El comando
+  sigue corriendo en Oracle hasta terminar; el usuario deja de esperar.
+- **Habilitar un reporte nuevo requiere despliegue**: hay que registrarlo en
+  `MfoRegistroReportes.cs`. Lo que el motor elimina es el trabajo repetido de la
+  pantalla de parametros, no el despliegue del reporte.
+- **La limpieza de adjuntos huerfanos no esta implementada.**
+  `SP_MFO_RESP_DELETE` informa cuantos quedaron sin fila, pero nadie los borra.

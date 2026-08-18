@@ -14,8 +14,16 @@ namespace OssmmasoftVerticalSlice.Features.MotorFormularios;
 /// schema y una transaccion no cruza schemas en este repositorio-: la
 /// comparacion con la identidad del usuario la hace el backend.
 ///
-/// La aplicacion efectiva del permiso en cada slice es de la Fase 5, junto con
-/// el resto de la autorizacion. Aqui solo se administra el dato.
+/// La aplicacion efectiva del permiso vive en cada slice; aqui se administra el
+/// dato, y administrarlo exige <c>DISENAR</c> sobre el formulario.
+///
+/// **Trampa conocida al configurar el primer permiso.** Un formulario sin
+/// permisos esta abierto, asi que la primera asignacion la puede hacer
+/// cualquiera. Si esa primera asignacion no incluye <c>DISENAR</c> para un rol
+/// que el administrador tenga, el formulario queda cerrado a todos y solo se
+/// puede recuperar por SQL. Es la consecuencia inevitable de no tener un
+/// superusuario del motor, y se prefiere dejarla documentada antes que inventar
+/// una excepcion implicita que despues nadie recuerde que existe.
 /// </summary>
 [ApiController]
 [Route("api/MfoPermiso")]
@@ -32,6 +40,10 @@ public class MfoPermisoController(ConnectionDB connectionDB) : ControllerBase
     [HttpPost("set")]
     public async Task<IActionResult> Set(MfoPermisoSetRequest request)
     {
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Formulario, request.FormularioId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
@@ -57,6 +69,10 @@ public class MfoPermisoController(ConnectionDB connectionDB) : ControllerBase
     [HttpGet("GetAll")]
     public async Task<IActionResult> GetAll([FromQuery] int formularioId, [FromQuery] string? roles)
     {
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Formulario, formularioId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.InvalidList<MfoPermisoResponse>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.InvalidList<MfoPermisoResponse>(openError));

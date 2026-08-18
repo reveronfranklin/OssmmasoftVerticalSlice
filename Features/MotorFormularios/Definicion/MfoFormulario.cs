@@ -143,6 +143,10 @@ public class MfoFormularioController(ConnectionDB connectionDB, IConfiguration c
     [HttpPost("update")]
     public async Task<IActionResult> Update(MfoFormularioUpdateRequest request)
     {
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Formulario, request.FormularioId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null)
@@ -173,6 +177,10 @@ public class MfoFormularioController(ConnectionDB connectionDB, IConfiguration c
     [HttpPost("delete")]
     public async Task<IActionResult> Delete(MfoFormularioEstadoRequest request)
     {
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Formulario, request.FormularioId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null)

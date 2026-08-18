@@ -21,6 +21,10 @@ public class MfoVersionController(
     [HttpPost("create")]
     public async Task<IActionResult> Create(MfoVersionCreateRequest request)
     {
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Formulario, request.FormularioId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
@@ -44,6 +48,10 @@ public class MfoVersionController(
     [HttpPost("clone")]
     public async Task<IActionResult> Clone(MfoVersionCloneRequest request)
     {
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Version, request.VersionOrigenId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<MfoCloneResultado>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<MfoCloneResultado>(openError));
@@ -78,6 +86,10 @@ public class MfoVersionController(
     [HttpPost("validar")]
     public async Task<IActionResult> Validar(MfoVersionIdRequest request)
     {
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Version, request.VersionId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.InvalidList<MfoHallazgoResponse>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.InvalidList<MfoHallazgoResponse>(openError));
@@ -102,6 +114,10 @@ public class MfoVersionController(
     [HttpPost("publicar")]
     public async Task<IActionResult> Publicar(MfoVersionIdRequest request)
     {
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Version, request.VersionId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
@@ -127,6 +143,10 @@ public class MfoVersionController(
     [HttpPost("archivar")]
     public async Task<IActionResult> Archivar(MfoVersionIdRequest request)
     {
+        var permiso = await MfoAmbitoDefinicion.PuedeDisenarAsync(
+            connectionDB, MfoAmbitoDefinicion.Pieza.Version, request.VersionId, Usuario);
+        if (!permiso.Permitido) return Ok(MfoDb.Invalid<int>(permiso.Mensaje));
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null) return Ok(MfoDb.Invalid<int>(openError));
