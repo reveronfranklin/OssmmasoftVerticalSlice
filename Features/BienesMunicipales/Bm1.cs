@@ -145,29 +145,14 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config, IWe
     }
 
     /// <summary>
-    /// Unico punto donde se ejecuta BM.SP_BM1_GET_BY_ICP. El grid y el PDF de placas comparten esta
-    /// lectura para que el filtro resuelto sea siempre el mismo (requerimiento 18).
+    /// Delega en <see cref="Bm1PlacasLector"/>, que es el unico punto donde se
+    /// ejecuta BM.SP_BM1_GET_BY_ICP. El grid, el PDF de placas y el motor de
+    /// formularios comparten esa lectura para que el filtro resuelto sea siempre
+    /// el mismo (requerimiento 18).
     /// </summary>
-    private async Task<ResultDto<List<Bm1Response>>> ReadByListIcpAsync(Bm1FilterRequest request)
+    private Task<ResultDto<List<Bm1Response>>> ReadByListIcpAsync(Bm1FilterRequest request)
     {
-        if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
-        {
-            return BmDb.InvalidList<Bm1Response>(error);
-        }
-
-        using var cn = connectionDB.GetBmConnection();
-        var openError = await BmDb.TryOpenAsync(cn, "BM");
-        if (openError is not null) return BmDb.InvalidList<Bm1Response>(openError);
-
-        using var cmd = BmDb.StoredProcedure("BM.SP_BM1_GET_BY_ICP", cn);
-        cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
-        cmd.Parameters.Add("p_FechaDesde", OracleDbType.Date).Value = BmDb.DbValue(request.FechaDesde);
-        cmd.Parameters.Add("p_FechaHasta", OracleDbType.Date).Value = BmDb.DbValue(request.FechaHasta);
-        cmd.Parameters.Add("p_CodigosIcp", OracleDbType.Varchar2).Value = BmDb.DbValue(BmDb.ToIcpCsv(request.ListIcpSeleccionado));
-        cmd.Parameters.Add("p_SearchText", OracleDbType.Varchar2).Value = BmDb.DbValue(request.SearchValue);
-        cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
-
-        return await BmDb.ExecuteListAsync(cmd, MapBm1);
+        return Bm1PlacasLector.LeerAsync(connectionDB, config, request);
     }
 
     [HttpPost("GetProductMobil")]
@@ -210,6 +195,41 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config, IWe
             reader.SafeGetInt32("CODIGO_DIR_BIEN"),
             new List<string>()
         )));
+    }
+}
+
+/// <summary>
+/// Lectura compartida de bienes por lista de ICP.
+///
+/// **Es el unico punto del sistema que ejecuta BM.SP_BM1_GET_BY_ICP.** Lo
+/// consumen el grid de BM1, el PDF de placas y el modo reporte del Motor de
+/// Formularios. Tenerlo en un solo sitio es lo que garantiza que los tres
+/// resuelvan el filtro igual; duplicar la lectura fue justamente el problema que
+/// resolvio el requerimiento 18.
+/// </summary>
+public static class Bm1PlacasLector
+{
+    public static async Task<ResultDto<List<Bm1Response>>> LeerAsync(
+        ConnectionDB conexiones, IConfiguration config, Bm1FilterRequest request)
+    {
+        if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
+        {
+            return BmDb.InvalidList<Bm1Response>(error);
+        }
+
+        using var cn = conexiones.GetBmConnection();
+        var openError = await BmDb.TryOpenAsync(cn, "BM");
+        if (openError is not null) return BmDb.InvalidList<Bm1Response>(openError);
+
+        using var cmd = BmDb.StoredProcedure("BM.SP_BM1_GET_BY_ICP", cn);
+        cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
+        cmd.Parameters.Add("p_FechaDesde", OracleDbType.Date).Value = BmDb.DbValue(request.FechaDesde);
+        cmd.Parameters.Add("p_FechaHasta", OracleDbType.Date).Value = BmDb.DbValue(request.FechaHasta);
+        cmd.Parameters.Add("p_CodigosIcp", OracleDbType.Varchar2).Value = BmDb.DbValue(BmDb.ToIcpCsv(request.ListIcpSeleccionado));
+        cmd.Parameters.Add("p_SearchText", OracleDbType.Varchar2).Value = BmDb.DbValue(request.SearchValue);
+        cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
+
+        return await BmDb.ExecuteListAsync(cmd, MapBm1);
     }
 
     private static Bm1Response MapBm1(IDataReader reader)

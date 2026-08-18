@@ -1,4 +1,5 @@
 using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.BienesMunicipales;
 using OssmmasoftVerticalSlice.Features.ReporteBm1;
 
 namespace OssmmasoftVerticalSlice.Features.MotorFormularios;
@@ -76,7 +77,13 @@ public static class MfoRegistroReportes
             // Decision 8 de la Fase 0: el primer caso va por ENDPOINT contra un
             // reporte que ya existe, para validar el mapeo de parametros de punta
             // a punta antes de construir el generador tabular generico.
-            ["REPORTE_BM1_PDF"] = EjecutarReporteBm1Pdf
+            ["REPORTE_BM1_PDF"] = EjecutarReporteBm1Pdf,
+
+            // Placas de bienes. Comparte los parametros de REPORTE_BM1_PDF -las
+            // mismas fechas y las mismas unidades- y por eso cuelga del mismo
+            // formulario: MFO_REPORTE admite N reportes por formulario
+            // precisamente para este caso.
+            ["REPORTE_BM1_PLACAS_PDF"] = EjecutarReporteBm1PlacasPdf
         };
 
     public static bool EstaRegistrado(string? clave)
@@ -165,6 +172,67 @@ public static class MfoRegistroReportes
         return new MfoResultadoEjecucion(
             bytes,
             $"ReporteBm1_{DateTime.Now:yyyyMMdd_HHmmss}.pdf",
+            items.Count,
+            resultado,
+            mensaje);
+    }
+
+    /// <summary>
+    /// Placas de bienes en PDF. Reusa la lectura y el generador que ya existen en
+    /// <c>Features/BienesMunicipales/Bm1</c>, igual que el reporte anterior: el
+    /// modo reporte sustituye la pantalla de parametros, no reimplementa el
+    /// reporte.
+    ///
+    /// El filtro de este reporte espera los ICP como objetos, no como numeros
+    /// sueltos, y solo usa el codigo. Se construyen aqui con la descripcion
+    /// vacia porque la lectura no la mira: rellenarla exigiria una consulta al
+    /// catalogo que no cambia el resultado.
+    /// </summary>
+    private static async Task<MfoResultadoEjecucion> EjecutarReporteBm1PlacasPdf(MfoContextoEjecucion contexto)
+    {
+        var desde = contexto.Param("FechaDesde")?.Fecha;
+        var hasta = contexto.Param("FechaHasta")?.Fecha;
+        var icps = contexto.Param("CodigosIcp")?.Enteros ?? [];
+        var busqueda = contexto.Param("SearchValue")?.Texto;
+
+        var filtro = new Bm1FilterRequest(
+            icps.Select(codigo => new BmIcpResponse(codigo, string.Empty)).ToList(),
+            desde,
+            hasta,
+            busqueda);
+
+        var datos = await Bm1PlacasLector.LeerAsync(contexto.Conexiones, contexto.Config, filtro);
+
+        if (!datos.IsValid || datos.Data is null)
+        {
+            return MfoResultadoEjecucion.Error(datos.Message);
+        }
+
+        if (datos.Data.Count == 0)
+        {
+            return MfoResultadoEjecucion.Vacio(
+                "No hay bienes para generar placas con esos parametros.");
+        }
+
+        var items = datos.Data;
+        var resultado = "OK";
+        var mensaje = string.Empty;
+
+        if (contexto.Reporte.MaxFilas is int max && max > 0 && items.Count > max)
+        {
+            items = items.Take(max).ToList();
+            resultado = "TRUNCADO";
+            mensaje = $"Se alcanzo el limite de {max} placas. Refine los parametros.";
+        }
+
+        var imagenes = await Bm1PlacasImagenesLoader.LoadAsync(
+            contexto.Conexiones, contexto.Config, contexto.Ambiente);
+
+        var bytes = Bm1PlacasPdfGenerator.Generate(items, imagenes);
+
+        return new MfoResultadoEjecucion(
+            bytes,
+            $"PlacasBm1_{DateTime.Now:yyyyMMdd_HHmmss}.pdf",
             items.Count,
             resultado,
             mensaje);
