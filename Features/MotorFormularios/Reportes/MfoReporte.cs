@@ -85,6 +85,32 @@ public class MfoReporteController(
         return Ok(detalle);
     }
 
+    /// <summary>
+    /// Claves de reporte habilitadas en el backend.
+    ///
+    /// El diseñador las ofrece en una lista y no como texto libre, por la misma
+    /// razon que los catalogos: una clave escrita a mano no resolveria nunca, y
+    /// el usuario no tendria forma de saber por que. Que la lista sea corta y
+    /// venga del codigo es la parte visible de la restriccion, no un descuido:
+    /// habilitar un reporte nuevo requiere despliegue.
+    ///
+    /// No expone nada sensible -son constantes del codigo- y por eso no exige
+    /// permiso, igual que api/MfoCatalogo/catalogos.
+    /// </summary>
+    [HttpGet("registrados")]
+    public IActionResult Registrados()
+    {
+        var claves = MfoRegistroReportes.ClavesRegistradas().ToList();
+
+        return Ok(new ResultDto<List<string>>(claves)
+        {
+            Data = claves,
+            IsValid = true,
+            Message = string.Empty,
+            CantidadRegistros = claves.Count
+        });
+    }
+
     // ------------------------------------------------------------------------
     // Ejecucion
     // ------------------------------------------------------------------------
