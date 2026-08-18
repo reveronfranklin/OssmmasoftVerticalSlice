@@ -10,7 +10,7 @@
 -- entidad de negocio de otro modulo (ENTIDAD_REF / CLAVE_REF) es eventual, no
 -- transaccional.
 -- =============================================================================
-
+--Prueba Update
 CREATE USER MFO IDENTIFIED BY MFO
     DEFAULT TABLESPACE SAMI_DATA01
     TEMPORARY TABLESPACE TEMP;
