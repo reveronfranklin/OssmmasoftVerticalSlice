@@ -11,6 +11,13 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 // Registrar nuestra clase de conexión
 builder.Services.AddScoped<ConnectionDB>();
+
+// Motor de Formularios (requerimiento 16). Singleton y no Scoped a proposito:
+// la cache de definiciones tiene que sobrevivir entre peticiones, que es todo su
+// proposito. Es segura porque una version publicada es inmutable -lo garantizan
+// los triggers de la base- y porque usa ConcurrentDictionary.
+builder.Services.AddSingleton<OssmmasoftVerticalSlice.Features.MotorFormularios.MfoDefinicionCache>();
+
 builder.Services.AddScoped<SupportDashboardSummaryHandler>();
 builder.Services.AddScoped<GetSupportPermissionsHandler>();
 builder.Services.AddScoped<GetSupportNotificationsByUserHandler>();

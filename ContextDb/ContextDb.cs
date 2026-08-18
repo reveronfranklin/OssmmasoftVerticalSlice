@@ -47,4 +47,12 @@ public class ConnectionDB(IConfiguration _config)
     {
         return new OracleConnection(_config.GetConnectionString("DefaultConnectionBMC"));
     }
+
+    // Motor de Formularios (requerimiento 16). Schema propio: decision 1 de la
+    // Fase 0. El motor no consulta tablas de otros schemas, asi que esta conexion
+    // no necesita permisos cruzados.
+    public OracleConnection GetMfoConnection()
+    {
+        return new OracleConnection(_config.GetConnectionString("DefaultConnectionMFO"));
+    }
 }
