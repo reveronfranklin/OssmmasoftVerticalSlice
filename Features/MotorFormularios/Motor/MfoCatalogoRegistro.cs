@@ -29,7 +29,11 @@ public static class MfoCatalogoRegistro
         {
             // Unidades de trabajo (ICP) de Bienes Municipales. Es el catalogo del
             // campo CODIGOS_ICP del formulario de referencia REP_BM1.
-            ["BM_ICP"] = ResolverBmIcp
+            ["BM_ICP"] = ResolverBmIcp,
+
+            // Unidades/dependencias de bienes. Es el catalogo del campo UNIDAD
+            // del formulario REP_BM1_ESP (requerimiento 27).
+            ["BM_DIR_BIEN"] = ResolverBmDirBien
         };
 
     public static bool EstaRegistrado(string? clave)
@@ -94,6 +98,51 @@ public static class MfoCatalogoRegistro
         {
             var codigo = reader.SafeGetInt32("CODIGO_ICP").ToString();
             lista.Add(new MfoCatalogoOpcionResponse(codigo, reader.SafeGetString("UNIDAD_TRABAJO")));
+        }
+
+        return lista;
+    }
+
+    /// <summary>
+    /// Unidades o dependencias de bienes (<c>BM_DIR_BIEN</c>), con el nombre que
+    /// les corresponde en el indice de categoria programatica.
+    ///
+    /// La consulta usa **solo columnas verificadas** en
+    /// <c>SP_REP_BM1_GET.sql</c>: <c>CODIGO_DIR_BIEN</c>, <c>CODIGO_ICP</c> y
+    /// <c>UNIDAD_EJECUTORA</c>/<c>DENOMINACION</c>. No se inventa ninguna otra,
+    /// porque una columna que no exista produce un ORA-00904 que el usuario
+    /// descubre en produccion.
+    ///
+    /// **No filtra por empresa**: ninguna de las dos tablas tiene una columna de
+    /// empresa confirmada, y el SP del reporte tampoco las filtra por ahi -lo
+    /// hace sobre BM_BIENES-. En una instalacion de una sola empresa, que es el
+    /// caso, no cambia el resultado. Si algun dia hay varias, este es el punto a
+    /// revisar.
+    /// </summary>
+    private static async Task<List<MfoCatalogoOpcionResponse>> ResolverBmDirBien(
+        ConnectionDB conexiones, int empresa)
+    {
+        using var cn = conexiones.GetBmConnection();
+        await cn.OpenAsync();
+
+        using var cmd = new OracleCommand(
+            @"SELECT DISTINCT C.CODIGO_DIR_BIEN,
+                     NVL(D.UNIDAD_EJECUTORA, D.DENOMINACION) AS UNIDAD
+                FROM BM.BM_DIR_BIEN C
+                JOIN PRE.PRE_INDICE_CAT_PRG D ON D.CODIGO_ICP = C.CODIGO_ICP
+               ORDER BY 2", cn)
+        {
+            BindByName = true
+        };
+
+        var lista = new List<MfoCatalogoOpcionResponse>();
+
+        using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            lista.Add(new MfoCatalogoOpcionResponse(
+                reader.SafeGetInt32("CODIGO_DIR_BIEN").ToString(),
+                reader.SafeGetString("UNIDAD")));
         }
 
         return lista;

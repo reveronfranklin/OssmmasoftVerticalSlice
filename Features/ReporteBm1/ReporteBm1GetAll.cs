@@ -365,6 +365,39 @@ public class ReporteBm1Controller(
         return ReporteBm1Db.BuildPdfFile(this, bytes);
     }
 
+    /// <summary>
+    /// Formulario oficial BM-1 (requerimiento 27). Todos los filtros son
+    /// opcionales, igual que en el reporte legado que sustituye.
+    /// </summary>
+    [HttpPost]
+    [Route("pdfEspecial")]
+    public async Task<IActionResult> PdfEspecial(ReporteBm1EspQuery value)
+    {
+        var handler = new ReporteBm1EspHandler(_connectionDB, _config);
+        var result = await handler.HandleAsync(value);
+
+        if (!result.IsValid || result.Data is null)
+        {
+            return Ok(result);
+        }
+
+        if (result.Data.Count == 0)
+        {
+            return Ok(new ResultDto<string>(string.Empty)
+            {
+                IsValid = false,
+                Message = "No hay bienes para generar el formulario BM-1 con los filtros seleccionados."
+            });
+        }
+
+        var entidad = await handler.ObtenerEntidadAsync();
+        var bytes = ReporteBm1EspPdfGenerator.Generate(result.Data, entidad, value);
+
+        Response.Headers.ContentDisposition = "inline; filename=\"bm1-especial.pdf\"";
+
+        return File(bytes, "application/pdf", enableRangeProcessing: true);
+    }
+
     [HttpPost]
     [Route("excel")]
     public async Task<IActionResult> Excel(ReporteBm1GetAllQuery value)

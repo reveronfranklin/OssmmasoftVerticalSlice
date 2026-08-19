@@ -83,7 +83,12 @@ public static class MfoRegistroReportes
             // mismas fechas y las mismas unidades- y por eso cuelga del mismo
             // formulario: MFO_REPORTE admite N reportes por formulario
             // precisamente para este caso.
-            ["REPORTE_BM1_PLACAS_PDF"] = EjecutarReporteBm1PlacasPdf
+            ["REPORTE_BM1_PLACAS_PDF"] = EjecutarReporteBm1PlacasPdf,
+
+            // Formulario oficial BM-1 (requerimiento 27). Comparte el query de
+            // negocio con REPORTE_BM1_PDF pero expone filtros propios, asi que
+            // cuelga de su propio formulario de parametros.
+            ["REPORTE_BM1_ESP_PDF"] = EjecutarReporteBm1EspPdf
         };
 
     public static bool EstaRegistrado(string? clave)
@@ -234,6 +239,77 @@ public static class MfoRegistroReportes
             bytes,
             $"PlacasBm1_{DateTime.Now:yyyyMMdd_HHmmss}.pdf",
             items.Count,
+            resultado,
+            mensaje);
+    }
+
+    /// <summary>
+    /// Formulario oficial BM-1. Requerimiento 27.
+    ///
+    /// Todos los filtros son opcionales: sin ninguno imprime el inventario
+    /// completo de la empresa, que es el comportamiento del reporte legado que
+    /// sustituye. Por eso lleva MAX_FILAS: pedirlo sin filtros en una empresa
+    /// grande produce un documento de cientos de paginas.
+    /// </summary>
+    private static async Task<MfoResultadoEjecucion> EjecutarReporteBm1EspPdf(MfoContextoEjecucion contexto)
+    {
+        var query = new ReporteBm1EspQuery(
+            CodigoDirBien: (int?)contexto.Param("CodigoDirBien")?.Numero,
+            PlacaDesde: contexto.Param("PlacaDesde")?.Texto,
+            PlacaHasta: contexto.Param("PlacaHasta")?.Texto,
+            CodigoArticulo: (int?)contexto.Param("CodigoArticulo")?.Numero,
+            FechaDesde: contexto.Param("FechaDesde")?.Fecha,
+            FechaHasta: contexto.Param("FechaHasta")?.Fecha,
+            Responsable: contexto.Param("Responsable")?.Texto);
+
+        var handler = new ReporteBm1EspHandler(contexto.Conexiones, contexto.Config);
+        var datos = await handler.HandleAsync(query);
+
+        if (!datos.IsValid || datos.Data is null)
+        {
+            return MfoResultadoEjecucion.Error(datos.Message);
+        }
+
+        if (datos.Data.Count == 0)
+        {
+            return MfoResultadoEjecucion.Vacio(
+                "No hay bienes para generar el formulario BM-1 con esos parametros.");
+        }
+
+        var unidades = datos.Data;
+        var filas = unidades.Sum(u => u.Items.Count);
+        var resultado = "OK";
+        var mensaje = string.Empty;
+
+        // El corte se aplica por unidad completa, no por fila: partir una unidad
+        // a la mitad dejaria un subtotal que no cuadra con lo impreso, y un
+        // formulario legal con un total mal es peor que uno truncado.
+        if (contexto.Reporte.MaxFilas is int max && max > 0 && filas > max)
+        {
+            var acumulado = 0;
+            var recortadas = new List<ReporteBm1EspUnidad>();
+
+            foreach (var unidad in unidades)
+            {
+                if (acumulado > 0 && acumulado + unidad.Items.Count > max) break;
+
+                recortadas.Add(unidad);
+                acumulado += unidad.Items.Count;
+            }
+
+            unidades = recortadas;
+            filas = acumulado;
+            resultado = "TRUNCADO";
+            mensaje = $"Se alcanzo el limite de {max} bienes. Se incluyeron {unidades.Count} unidad(es) completas.";
+        }
+
+        var entidad = await handler.ObtenerEntidadAsync();
+        var bytes = ReporteBm1EspPdfGenerator.Generate(unidades, entidad, query);
+
+        return new MfoResultadoEjecucion(
+            bytes,
+            $"BM1Especial_{DateTime.Now:yyyyMMdd_HHmmss}.pdf",
+            filas,
             resultado,
             mensaje);
     }
