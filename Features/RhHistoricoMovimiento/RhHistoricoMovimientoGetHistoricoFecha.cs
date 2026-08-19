@@ -106,11 +106,6 @@ public class RhHistoricoMovimientoGetHistoricoFechaHandler(ConnectionDB _connect
             return BuildInvalidResult("Tipo de consulta no soportado.", query.Page);
         }
 
-        if (isMasivo && query.Hasta.Date > query.Desde.Date.AddYears(1))
-        {
-            return BuildInvalidResult("El rango de fechas no puede ser mayor a un año.", query.Page);
-        }
-
         if (isIndividual && query.CodigoPersona <= 0)
         {
             return BuildInvalidResult("Debe seleccionar una persona.", query.Page);

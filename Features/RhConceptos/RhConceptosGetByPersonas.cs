@@ -57,11 +57,6 @@ public class RhConceptosGetByPersonasHandler(ConnectionDB _connectionDB)
             return BuildInvalidResult("Fecha Hasta no puede ser menor que Fecha Desde");
         }
 
-        if (!query.SinRestriccionFecha && query.CodigoPersona <= 0 && query.Hasta.Date > query.Desde.Date.AddYears(1))
-        {
-            return BuildInvalidResult("El rango de fechas no puede ser mayor a un año.");
-        }
-
         using var cn = _connectionDB.GetRhConnection();
 
         try
