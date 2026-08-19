@@ -5,12 +5,14 @@ using System.Data;
 namespace OssmmasoftVerticalSlice.Features.MotorFormularios;
 
 /// <summary>
-/// Comprueba los permisos de <c>MFO_PERMISO</c> para el usuario en curso.
+/// Comprueba los permisos de <c>MFO_PERMISO_USR</c> para el usuario en curso.
 ///
-/// Decision 4 de la Fase 0: los roles salen de <c>SIS.OSS_USUARIO_ROL</c>. Son
-/// dos consultas a dos schemas distintos -SIS para los roles del usuario, MFO
-/// para los permisos del formulario- porque en este repositorio una conexion no
-/// cruza schemas. No hace falta transaccion: las dos son lecturas.
+/// **El modelo es por usuario, no por rol.** La decision 4 de la Fase 0 lo puso
+/// por rol contra <c>SIS.OSS_USUARIO_ROL</c>; se cambio despues a asignacion
+/// directa. La razon es de diagnostico: con dos ejes, explicar por que alguien
+/// entra -o no entra- obliga a mirar en dos sitios, y esa pregunta se hace justo
+/// cuando hay un problema. <c>MFO_PERMISO</c> se conserva para no perder lo
+/// configurado, pero ningun slice la consulta.
 ///
 /// Politica cuando el formulario **no tiene ningun permiso definido**: se
 /// permite. Es deliberado y hay que entenderlo: el motor se instala con
@@ -53,13 +55,7 @@ public static class MfoAutorizacion
                     "Este formulario requiere un usuario identificado.");
             }
 
-            var roles = await RolesDelUsuarioAsync(conexiones, usuario);
-            if (roles.Count == 0)
-            {
-                return new Resultado(false, $"No tiene permiso para {accion.ToLowerInvariant()} este formulario.");
-            }
-
-            var tiene = await TienePermisoAsync(conexiones, formularioId, roles, accion);
+            var tiene = await TienePermisoAsync(conexiones, formularioId, usuario, accion);
 
             return tiene
                 ? Ok
@@ -73,15 +69,84 @@ public static class MfoAutorizacion
         }
     }
 
+    /// <summary>
+    /// Resultado de comprobar si el usuario es superusuario del ERP
+    /// (<c>SIS.SIS_USUARIOS.IS_SUPERUSER</c>).
+    ///
+    /// Se devuelve el motivo aparte del veredicto porque los dos "no" posibles
+    /// piden acciones distintas: "usted no es superusuario" lo resuelve un
+    /// administrador, y "la columna IS_SUPERUSER no existe en esta instalacion"
+    /// lo resuelve un DBA. Colapsarlos en un unico mensaje de permiso denegado
+    /// dejaria a alguien buscando durante horas un permiso que no es el problema.
+    /// </summary>
+    public sealed record Superusuario(bool Es, string Motivo);
+
+    /// <summary>
+    /// Lee la marca de superusuario del ERP.
+    ///
+    /// Vive en SIS, igual que los roles, y por la misma razon se consulta con su
+    /// propia conexion: en este repositorio una conexion no cruza schemas.
+    ///
+    /// **Cualquier fallo deniega.** Un error al resolver la identidad no puede
+    /// convertirse en un permiso concedido.
+    /// </summary>
+    public static async Task<Superusuario> EsSuperusuarioAsync(ConnectionDB conexiones, string? usuario)
+    {
+        if (string.IsNullOrWhiteSpace(usuario))
+        {
+            return new Superusuario(false, "Se requiere un usuario identificado.");
+        }
+
+        try
+        {
+            using var cn = conexiones.GetSisConnection();
+            await cn.OpenAsync();
+
+            // SQL constante con parametros bindeados. Se admite LOGIN o USUARIO
+            // porque la cabecera X-Usuario puede traer cualquiera de los dos,
+            // segun por donde se haya autenticado el cliente.
+            using var cmd = new OracleCommand(
+                @"SELECT NVL(MAX(NVL(u.IS_SUPERUSER, 0)), 0) AS ES_SUPER
+                    FROM SIS.SIS_USUARIOS u
+                   WHERE UPPER(u.LOGIN) = UPPER(:p_Usuario)
+                      OR UPPER(u.USUARIO) = UPPER(:p_Usuario)", cn)
+            {
+                BindByName = true
+            };
+
+            cmd.Parameters.Add("p_Usuario", OracleDbType.Varchar2).Value = usuario;
+
+            var valor = await cmd.ExecuteScalarAsync();
+            var esSuper = valor is not null && valor != DBNull.Value && Convert.ToInt32(valor) == 1;
+
+            return esSuper
+                ? new Superusuario(true, string.Empty)
+                : new Superusuario(false, "Esta operacion esta reservada a los superusuarios del sistema.");
+        }
+        catch (OracleException ex) when (ex.Number == 904)
+        {
+            // ORA-00904: la instalacion no tiene la columna. SisUsuarios ya
+            // contempla ese caso, asi que no se puede dar por supuesta.
+            return new Superusuario(false,
+                "Esta instalacion no tiene la columna SIS_USUARIOS.IS_SUPERUSER, " +
+                "asi que no se puede identificar a los superusuarios.");
+        }
+        catch (Exception ex)
+        {
+            return new Superusuario(false, $"No se pudo verificar el superusuario: {ex.Message}");
+        }
+    }
+
     private static async Task<int> ContarPermisosAsync(ConnectionDB conexiones, int formularioId)
     {
         using var cn = conexiones.GetMfoConnection();
         await cn.OpenAsync();
 
-        using var cmd = MfoDb.StoredProcedure("SP_MFO_PERMISO_GET", cn);
+        using var cmd = MfoDb.StoredProcedure("SP_MFO_PERM_USR_GET", cn);
         cmd.Parameters.Add("p_FormularioId", OracleDbType.Int32).Value = formularioId;
-        cmd.Parameters.Add("p_RolesCsv", OracleDbType.Varchar2).Value = DBNull.Value;
+        cmd.Parameters.Add("p_Usuario", OracleDbType.Varchar2).Value = DBNull.Value;
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
+        cmd.Parameters.Add("p_Reportes", OracleDbType.RefCursor, ParameterDirection.Output);
         cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
         var pTotal = cmd.Parameters.Add("p_TotalRecords", OracleDbType.Int32, ParameterDirection.Output);
 
@@ -94,15 +159,16 @@ public static class MfoAutorizacion
     }
 
     private static async Task<bool> TienePermisoAsync(
-        ConnectionDB conexiones, int formularioId, List<string> roles, string accion)
+        ConnectionDB conexiones, int formularioId, string usuario, string accion)
     {
         using var cn = conexiones.GetMfoConnection();
         await cn.OpenAsync();
 
-        using var cmd = MfoDb.StoredProcedure("SP_MFO_PERMISO_GET", cn);
+        using var cmd = MfoDb.StoredProcedure("SP_MFO_PERM_USR_GET", cn);
         cmd.Parameters.Add("p_FormularioId", OracleDbType.Int32).Value = formularioId;
-        cmd.Parameters.Add("p_RolesCsv", OracleDbType.Varchar2).Value = string.Join(',', roles);
+        cmd.Parameters.Add("p_Usuario", OracleDbType.Varchar2).Value = usuario;
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
+        cmd.Parameters.Add("p_Reportes", OracleDbType.RefCursor, ParameterDirection.Output);
         cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
         cmd.Parameters.Add("p_TotalRecords", OracleDbType.Int32, ParameterDirection.Output);
 
@@ -119,39 +185,65 @@ public static class MfoAutorizacion
     }
 
     /// <summary>
-    /// Roles del usuario en el ERP. Se lee de SIS, que es donde vive la
-    /// identidad; el motor solo guarda el codigo para compararlo.
+    /// Si el usuario puede ejecutar un reporte concreto.
+    ///
+    /// **Hereda salvo que se acote.** Sin ninguna fila en <c>MFO_PERMISO_REP</c>
+    /// para los reportes de ese formulario, puede ejecutarlos todos; en cuanto
+    /// se le asigna uno, solo los asignados. Es la misma politica que rige el
+    /// formulario -sin configurar, abierto- y evita que asignar un formulario
+    /// nuevo sean siempre dos pasos.
+    ///
+    /// Esto NO sustituye al permiso sobre el formulario: primero hay que poder
+    /// EXPORTAR, y solo despues se mira que reportes.
     /// </summary>
-    private static async Task<List<string>> RolesDelUsuarioAsync(ConnectionDB conexiones, string usuario)
+    public static async Task<Resultado> PuedeEjecutarReporteAsync(
+        ConnectionDB conexiones, int formularioId, int reporteId, string? usuario)
     {
-        using var cn = conexiones.GetSisConnection();
-        await cn.OpenAsync();
-
-        using var cmd = new OracleCommand("SIS.SP_OSS_USR_ROL_GET_USR", cn)
+        try
         {
-            CommandType = CommandType.StoredProcedure,
-            BindByName = true
-        };
+            if (string.IsNullOrWhiteSpace(usuario))
+            {
+                return Ok;
+            }
 
-        cmd.Parameters.Add("p_USUARIO", OracleDbType.Varchar2).Value = usuario;
-        cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
-        cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
+            using var cn = conexiones.GetMfoConnection();
+            await cn.OpenAsync();
 
-        var roles = new List<string>();
+            using var cmd = MfoDb.StoredProcedure("SP_MFO_PERM_USR_GET", cn);
+            cmd.Parameters.Add("p_FormularioId", OracleDbType.Int32).Value = formularioId;
+            cmd.Parameters.Add("p_Usuario", OracleDbType.Varchar2).Value = usuario;
+            cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
+            cmd.Parameters.Add("p_Reportes", OracleDbType.RefCursor, ParameterDirection.Output);
+            cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
+            cmd.Parameters.Add("p_TotalRecords", OracleDbType.Int32, ParameterDirection.Output);
 
-        using var reader = await cmd.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            // El codigo de rol es CODIGO_USUARIO_ROL; la descripcion se acepta
-            // tambien para que MFO_PERMISO se pueda configurar con cualquiera de
-            // las dos, que es como se administran los roles en el resto del ERP.
-            var codigo = reader.SafeGetInt32("CODIGO_USUARIO_ROL").ToString();
-            if (codigo != "0") roles.Add(codigo);
+            var acotados = new List<int>();
 
-            var descripcion = reader.SafeGetString("DESCRIPCION");
-            if (!string.IsNullOrWhiteSpace(descripcion)) roles.Add(descripcion.Trim().ToUpperInvariant());
+            using (var reader = await cmd.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync()) { }
+
+                if (await reader.NextResultAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        acotados.Add(reader.SafeGetInt32("REPORTE_ID"));
+                    }
+                }
+            }
+
+            if (acotados.Count == 0)
+            {
+                return Ok;
+            }
+
+            return acotados.Contains(reporteId)
+                ? Ok
+                : new Resultado(false, "No tiene asignado este reporte.");
         }
-
-        return roles;
+        catch (Exception ex)
+        {
+            return new Resultado(false, $"No se pudo verificar el permiso del reporte: {ex.Message}");
+        }
     }
 }

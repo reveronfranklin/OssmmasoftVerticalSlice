@@ -263,12 +263,6 @@ public static class MfoDb
         r.SafeGetString("CLAVE"),
         r.SafeGetString("MENSAJE"));
 
-    public static MfoPermisoResponse MapPermiso(IDataReader r) => new(
-        r.SafeGetInt32("PERMISO_ID"),
-        r.SafeGetInt32("FORMULARIO_ID"),
-        r.SafeGetString("ROL_CODIGO"),
-        r.SafeGetString("ACCION"));
-
     // ------------------------------------------------------------------------
     // Ejecucion
     // ------------------------------------------------------------------------

@@ -80,6 +80,36 @@ public class MfoReporteController(
             {
                 return Ok(MfoDb.Invalid<MfoReporteDetalle>(permiso.Mensaje));
             }
+
+            // El selector no debe ofrecer lo que el usuario no puede ejecutar:
+            // dejarlo visible solo produce un error al pulsar Generar.
+            var permitidos = new List<MfoReporteResponse>();
+
+            foreach (var r in detalle.Data.Reportes)
+            {
+                var puede = await MfoAutorizacion.PuedeEjecutarReporteAsync(
+                    connectionDB, r.FormularioId, r.ReporteId, Usuario);
+
+                if (puede.Permitido) permitidos.Add(r);
+            }
+
+            if (permitidos.Count != detalle.Data.Reportes.Count)
+            {
+                var ids = permitidos.Select(r => r.ReporteId).ToHashSet();
+
+                var filtrado = new MfoReporteDetalle(
+                    permitidos,
+                    detalle.Data.Parametros.Where(p => ids.Contains(p.ReporteId)).ToList(),
+                    detalle.Data.Columnas.Where(c => ids.Contains(c.ReporteId)).ToList());
+
+                return Ok(new ResultDto<MfoReporteDetalle>(filtrado)
+                {
+                    Data = filtrado,
+                    IsValid = true,
+                    Message = string.Empty,
+                    CantidadRegistros = permitidos.Count
+                });
+            }
         }
 
         return Ok(detalle);
@@ -149,6 +179,17 @@ public class MfoReporteController(
         if (!permiso.Permitido)
         {
             return Ok(MfoDb.InvalidList<MfoErrorValidacion>(permiso.Mensaje));
+        }
+
+        // Segundo eje: poder exportar el formulario no implica poder ejecutar
+        // todos sus reportes. Sin acotacion los hereda todos; con ella, solo los
+        // asignados.
+        var permisoReporte = await MfoAutorizacion.PuedeEjecutarReporteAsync(
+            connectionDB, reporte.FormularioId, reporte.ReporteId, Usuario);
+
+        if (!permisoReporte.Permitido)
+        {
+            return Ok(MfoDb.InvalidList<MfoErrorValidacion>(permisoReporte.Mensaje));
         }
 
         var valores = request.Valores ?? [];

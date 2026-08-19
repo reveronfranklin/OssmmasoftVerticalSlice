@@ -604,7 +604,8 @@ mirarlo.
 
 | Endpoints | Accion exigida |
 | --- | --- |
-| `api/MfoFormulario` update/delete, `api/MfoVersion` (salvo `getFull`), todo `api/MfoDefinicion`, `api/MfoPermiso`, `api/MfoReporte` upsert/delete/param/columna | `DISENAR` |
+| `api/MfoFormulario` update/delete, `api/MfoVersion` (salvo `getFull`), todo `api/MfoDefinicion`, `api/MfoReporte` upsert/delete/param/columna | `DISENAR` |
+| `api/MfoPermiso` set/GetAll | **superusuario del ERP** (`SIS_USUARIOS.IS_SUPERUSER`), sin exigir ademas `DISENAR` |
 | `api/MfoRespuesta` create/saveValores/submit/delete, `api/MfoAdjunto/upload` | `LLENAR` |
 | `api/MfoRespuesta/getById`, `api/MfoAdjunto/download`, `api/MfoReporte/getByFormulario` | `VER` |
 | `api/MfoRespuesta/export`, `api/MfoReporte/ejecutar` | `EXPORTAR` |
@@ -618,6 +619,11 @@ Reglas de la politica:
   formulario queda cerrado a quien no lo tenga.
 - **Un fallo al comprobar el permiso deniega.** Lo contrario convertiria una
   caida de SIS en una puerta abierta.
+- **Administrar permisos solo exige ser superusuario**, no `DISENAR`. Es lo que
+  permite recuperar un formulario que quedo cerrado por una asignacion mal
+  hecha, sin bajar a SQL. El superusuario no pasa por encima del resto del
+  motor: para operar sobre un formulario cerrado sigue necesitando el permiso
+  que corresponda, aunque siempre pueda concederselo.
 - `api/MfoFormulario/GetAll`, `getById`, `create` y `api/MfoVersion/getFull` no
   exigen permiso: son catalogo y metadatos, y `getFull` lo necesita el
   renderizador para pintar el formulario a quien solo tiene `LLENAR`.

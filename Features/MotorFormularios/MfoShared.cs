@@ -149,13 +149,6 @@ public record MfoHallazgoResponse(
     string Mensaje
 );
 
-public record MfoPermisoResponse(
-    int PermisoId,
-    int FormularioId,
-    string RolCodigo,
-    string Accion
-);
-
 /// <summary>
 /// La definicion completa de una version, en un solo objeto anidado.
 /// El frontend hace UNA llamada por formulario: seis viajes para armar una sola
@@ -308,4 +301,4 @@ public record MfoCondicionUpsertRequest(
 
 public record MfoIdRequest(int Id);
 
-public record MfoPermisoSetRequest(int FormularioId, string RolCodigo, List<string> Acciones);
+public record MfoPermisoSetRequest(int FormularioId, string Usuario, List<string> Acciones);
