@@ -1,6 +1,7 @@
 using OssmmasoftVerticalSlice.ContextDB;
 using OssmmasoftVerticalSlice.Features.BienesMunicipales;
 using OssmmasoftVerticalSlice.Features.ReporteBm1;
+using OssmmasoftVerticalSlice.Features.ReporteChequesPeriodoMotivo;
 using OssmmasoftVerticalSlice.Features.ReporteRelacionRetencionIva;
 using OssmmasoftVerticalSlice.Helpers;
 
@@ -97,7 +98,13 @@ public static class MfoRegistroReportes
             // de parametros -rango de fechas y estatus- es exactamente el caso
             // para el que existe el modo PARAMETROS, asi que no se codifico a
             // mano en el frontend.
-            ["REPORTE_RET_IVA_PER_PDF"] = EjecutarReporteRetIvaPerPdf
+            ["REPORTE_RET_IVA_PER_PDF"] = EjecutarReporteRetIvaPerPdf,
+
+            // Relacion de cheques emitidos por periodos, con motivo
+            // (requerimiento 23). Seis filtros, dos de ellos contra catalogos de
+            // bancos y cuentas: es el tipo de pantalla que el motor construye
+            // sola y que antes habia que codificar entera.
+            ["REPORTE_CHEQ_MOTIVO_PDF"] = EjecutarReporteChequesMotivoPdf
         };
 
     public static bool EstaRegistrado(string? clave)
@@ -401,6 +408,87 @@ public static class MfoRegistroReportes
         return new MfoResultadoEjecucion(
             bytes,
             $"RelacionRetencionIva_{DateTime.Now:yyyyMMdd_HHmmss}.pdf",
+            filas,
+            resultado,
+            mensaje);
+    }
+
+    /// <summary>
+    /// Relacion de Cheques Emitidos Por Periodos (con Motivo). Requerimiento 23.
+    ///
+    /// Seis filtros: rango de fechas obligatorio y banco, cuenta, status y
+    /// proveedor opcionales. Los dos primeros opcionales llegan resueltos desde
+    /// los catalogos SIS_BANCO_NOMBRE y SIS_CUENTA_BANCO, asi que su valor es el
+    /// nombre y el numero de cuenta reales y no hay que traducir nada aqui.
+    ///
+    /// El corte por MAX_FILAS se aplica por banco/cuenta completo, no por fila:
+    /// cada grupo imprime su subtotal, y un grupo partido a la mitad dejaria un
+    /// subtotal que no cuadra con los cheques listados debajo.
+    /// </summary>
+    private static async Task<MfoResultadoEjecucion> EjecutarReporteChequesMotivoPdf(
+        MfoContextoEjecucion contexto)
+    {
+        var usuario = contexto.Param("Usuario")?.Texto;
+
+        if (string.IsNullOrWhiteSpace(usuario))
+        {
+            return MfoResultadoEjecucion.Error(
+                "No se pudo determinar el usuario conectado, requerido para el pie de auditoria del reporte.");
+        }
+
+        var query = new ReporteChequesMotivoQuery(
+            FechaDesde: contexto.Param("FechaDesde")?.Fecha,
+            FechaHasta: contexto.Param("FechaHasta")?.Fecha,
+            NombreBanco: contexto.Param("NombreBanco")?.Texto,
+            NumeroCuenta: contexto.Param("NumeroCuenta")?.Texto,
+            Status: contexto.Param("Status")?.Texto,
+            CodigoProveedor: (int?)contexto.Param("CodigoProveedor")?.Numero,
+            Usuario: usuario);
+
+        var handler = new ReporteChequesMotivoHandler(contexto.Conexiones, contexto.Config);
+        var datos = await handler.HandleAsync(query);
+
+        if (!datos.IsValid || datos.Data is null)
+        {
+            return MfoResultadoEjecucion.Error(datos.Message);
+        }
+
+        if (datos.Data.Count == 0)
+        {
+            return MfoResultadoEjecucion.Vacio(
+                "No hay cheques emitidos en el periodo seleccionado.");
+        }
+
+        var grupos = datos.Data;
+        var filas = grupos.Sum(g => g.Items.Count);
+        var resultado = "OK";
+        var mensaje = string.Empty;
+
+        if (contexto.Reporte.MaxFilas is int max && max > 0 && filas > max)
+        {
+            var acumulado = 0;
+            var recortados = new List<ReporteChequesMotivoGrupo>();
+
+            foreach (var grupo in grupos)
+            {
+                if (acumulado > 0 && acumulado + grupo.Items.Count > max) break;
+
+                recortados.Add(grupo);
+                acumulado += grupo.Items.Count;
+            }
+
+            grupos = recortados;
+            filas = acumulado;
+            resultado = "TRUNCADO";
+            mensaje = $"Se alcanzo el limite de {max} cheques. Se incluyeron {grupos.Count} cuenta(s) completas. Refine el periodo.";
+        }
+
+        var printContext = ReportPrintContext.Create(usuario);
+        var bytes = ReporteChequesMotivoPdfGenerator.Generate(grupos, query, printContext);
+
+        return new MfoResultadoEjecucion(
+            bytes,
+            $"RelacionCheques_{DateTime.Now:yyyyMMdd_HHmmss}.pdf",
             filas,
             resultado,
             mensaje);

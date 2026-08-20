@@ -33,7 +33,15 @@ public static class MfoCatalogoRegistro
 
             // Unidades/dependencias de bienes. Es el catalogo del campo UNIDAD
             // del formulario REP_BM1_ESP (requerimiento 27).
-            ["BM_DIR_BIEN"] = ResolverBmDirBien
+            ["BM_DIR_BIEN"] = ResolverBmDirBien,
+
+            // Bancos y cuentas bancarias, para el formulario REP_CHEQ_MOTIVO
+            // (requerimiento 23). El reporte legado pedia los dos como texto
+            // libre y filtraba por igualdad exacta, asi que una tilde o un
+            // espacio de mas devolvia un reporte vacio indistinguible de "no hubo
+            // cheques". Como catalogo, el valor no se puede escribir mal.
+            ["SIS_BANCO_NOMBRE"] = ResolverSisBancoNombre,
+            ["SIS_CUENTA_BANCO"] = ResolverSisCuentaBanco
         };
 
     public static bool EstaRegistrado(string? clave)
@@ -143,6 +151,87 @@ public static class MfoCatalogoRegistro
             lista.Add(new MfoCatalogoOpcionResponse(
                 reader.SafeGetInt32("CODIGO_DIR_BIEN").ToString(),
                 reader.SafeGetString("UNIDAD")));
+        }
+
+        return lista;
+    }
+
+    /// <summary>
+    /// Nombres de banco. **El valor de la opcion es el nombre, no el codigo**,
+    /// porque el filtro del reporte de cheques compara contra
+    /// <c>SIS_BANCOS.NOMBRE</c> -asi lo hacia el reporte legado- y traducir
+    /// codigo a nombre en el ejecutor solo agregaria una consulta mas para
+    /// terminar en el mismo sitio.
+    ///
+    /// Se toman solo los bancos que tienen alguna cuenta de la empresa: un
+    /// desplegable con bancos sin cuenta ofrece filtros que garantizan cero
+    /// filas.
+    /// </summary>
+    private static async Task<List<MfoCatalogoOpcionResponse>> ResolverSisBancoNombre(
+        ConnectionDB conexiones, int empresa)
+    {
+        using var cn = conexiones.GetSisConnection();
+        await cn.OpenAsync();
+
+        using var cmd = new OracleCommand(
+            @"SELECT DISTINCT F.NOMBRE
+                FROM SIS.SIS_BANCOS F
+                JOIN SIS.SIS_CUENTAS_BANCOS E ON E.CODIGO_BANCO = F.CODIGO_BANCO
+               WHERE E.CODIGO_EMPRESA = :p_CodigoEmpresa
+                 AND F.NOMBRE IS NOT NULL
+               ORDER BY 1", cn)
+        {
+            BindByName = true
+        };
+
+        cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
+
+        var lista = new List<MfoCatalogoOpcionResponse>();
+
+        using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var nombre = reader.SafeGetString("NOMBRE").Trim();
+            lista.Add(new MfoCatalogoOpcionResponse(nombre, nombre));
+        }
+
+        return lista;
+    }
+
+    /// <summary>
+    /// Cuentas bancarias de la empresa. El valor es el numero de cuenta -de nuevo
+    /// porque es contra <c>NO_CUENTA</c> que filtra el reporte- y la etiqueta
+    /// lleva el banco delante, que es lo que permite distinguir dos cuentas de
+    /// bancos distintos en el desplegable.
+    /// </summary>
+    private static async Task<List<MfoCatalogoOpcionResponse>> ResolverSisCuentaBanco(
+        ConnectionDB conexiones, int empresa)
+    {
+        using var cn = conexiones.GetSisConnection();
+        await cn.OpenAsync();
+
+        using var cmd = new OracleCommand(
+            @"SELECT E.NO_CUENTA, F.NOMBRE
+                FROM SIS.SIS_CUENTAS_BANCOS E
+                JOIN SIS.SIS_BANCOS F ON F.CODIGO_BANCO = E.CODIGO_BANCO
+               WHERE E.CODIGO_EMPRESA = :p_CodigoEmpresa
+                 AND E.NO_CUENTA IS NOT NULL
+               ORDER BY F.NOMBRE, E.NO_CUENTA", cn)
+        {
+            BindByName = true
+        };
+
+        cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
+
+        var lista = new List<MfoCatalogoOpcionResponse>();
+
+        using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var cuenta = reader.SafeGetString("NO_CUENTA").Trim();
+            var banco = reader.SafeGetString("NOMBRE").Trim();
+
+            lista.Add(new MfoCatalogoOpcionResponse(cuenta, $"{banco} - {cuenta}"));
         }
 
         return lista;
