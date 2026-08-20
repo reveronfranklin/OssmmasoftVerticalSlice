@@ -19,13 +19,15 @@ El pie del reporte incluye las lineas de firma de `PRESIDENTE (A)` y
 
 ```json
 {
-  "codigoOrdenPago": 123
+  "codigoOrdenPago": 123,
+  "usuario": "CJHONNY"
 }
 ```
 
 | Campo | Tipo | Requerido | Descripcion |
 | --- | --- | --- | --- |
 | `codigoOrdenPago` | number | Si | Codigo de la orden de pago seleccionada. Debe ser mayor que cero. |
+| `usuario` | string | Si | Usuario conectado que se muestra en el pie del PDF. |
 
 ### Response Exitoso
 
@@ -114,7 +116,7 @@ Pantalla actual:
 
 Cambio esperado:
 
-- Para `UrlServices.GETREPORTBYORDENPAGO`, llamar directo a `ossmmasofApiVertical.post('/ReporteOrdenPago/pdf', { codigoOrdenPago }, { responseType: 'blob' })`.
+- Para `UrlServices.GETREPORTBYORDENPAGO`, llamar directo a `ossmmasofApiVertical.post('/ReporteOrdenPago/pdf', { codigoOrdenPago, usuario }, { responseType: 'blob' })`.
 - Mantener `HandleReportApiTo` para:
   - `GETREPORTBYRETENCIONES`
   - `GETREPORTBYCOMPROBANTE`

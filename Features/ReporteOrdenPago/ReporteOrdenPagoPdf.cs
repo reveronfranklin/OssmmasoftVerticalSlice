@@ -8,11 +8,14 @@ using System.Globalization;
 
 namespace OssmmasoftVerticalSlice.Features.ReporteOrdenPago;
 
-public record ReporteOrdenPagoPdfQuery(int CodigoOrdenPago);
+public record ReporteOrdenPagoPdfQuery(int CodigoOrdenPago, string? Usuario);
 
 public static class ReporteOrdenPagoPdfGenerator
 {
-    public static byte[] Generate(ReporteOrdenPagoResponse data, IWebHostEnvironment environment)
+    public static byte[] Generate(
+        ReporteOrdenPagoResponse data,
+        IWebHostEnvironment environment,
+        ReportPrintContext printContext)
     {
         QuestPDF.Settings.License = LicenseType.Evaluation;
 
@@ -53,13 +56,8 @@ public static class ReporteOrdenPagoPdfGenerator
                         "PRESIDENTE (A)",
                         "DIRECTOR(A) DE ADMINISTRACIÓN"));
 
-                    column.Item().PaddingTop(4).AlignRight().Text(text =>
-                    {
-                        text.Span("Pagina ");
-                        text.CurrentPageNumber();
-                        text.Span(" de ");
-                        text.TotalPages();
-                    });
+                    column.Item().PaddingTop(4).Element(element =>
+                        ReportPdfFooter.Build(element, printContext, 8));
                 });
             });
         }).GeneratePdf();
@@ -321,6 +319,15 @@ public class ReporteOrdenPagoPdfController(ConnectionDB _connectionDB, IWebHostE
     [Route("pdf")]
     public async Task<IActionResult> Pdf(ReporteOrdenPagoPdfQuery value)
     {
+        if (string.IsNullOrWhiteSpace(value.Usuario))
+        {
+            return BadRequest(new ResultDto<object?>(null)
+            {
+                IsValid = false,
+                Message = "El usuario conectado es requerido para generar la orden de pago."
+            });
+        }
+
         var handler = new ReporteOrdenPagoGetByCodigoHandler(_connectionDB);
         var result = await handler.HandleAsync(new ReporteOrdenPagoGetByCodigoQuery(value.CodigoOrdenPago));
 
@@ -329,7 +336,21 @@ public class ReporteOrdenPagoPdfController(ConnectionDB _connectionDB, IWebHostE
             return BadRequest(result);
         }
 
-        var pdf = ReporteOrdenPagoPdfGenerator.Generate(result.Data, _environment);
+        byte[] pdf;
+        try
+        {
+            var printContext = ReportPrintContext.Create(value.Usuario);
+            pdf = ReporteOrdenPagoPdfGenerator.Generate(result.Data, _environment, printContext);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new ResultDto<object?>(null)
+            {
+                IsValid = false,
+                Message = $"Error tecnico: {ex.Message}"
+            });
+        }
+
         var fileName = $"orden-pago-{value.CodigoOrdenPago}.pdf";
 
         Response.Headers.ContentDisposition = $"inline; filename=\"{fileName}\"";
