@@ -12,6 +12,8 @@ POST /api/ReporteOrdenPago/pdf
 ```
 
 Genera el PDF de Orden de Pago directamente desde `OssmmasoftVerticalSlice`.
+El pie del reporte incluye las lineas de firma de `PRESIDENTE (A)` y
+`DIRECTOR(A) DE ADMINISTRACIÓN`.
 
 ### Request
 

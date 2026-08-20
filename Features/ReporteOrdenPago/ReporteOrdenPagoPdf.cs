@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Helpers;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -44,12 +45,21 @@ public static class ReporteOrdenPagoPdfGenerator
                     }
                 });
 
-                page.Footer().AlignRight().Text(text =>
+                page.Footer().Column(column =>
                 {
-                    text.Span("Pagina ");
-                    text.CurrentPageNumber();
-                    text.Span(" de ");
-                    text.TotalPages();
+                    column.Item().Element(element => ReportPdfFirmantes.Build(
+                        element,
+                        8,
+                        "PRESIDENTE (A)",
+                        "DIRECTOR(A) DE ADMINISTRACIÓN"));
+
+                    column.Item().PaddingTop(4).AlignRight().Text(text =>
+                    {
+                        text.Span("Pagina ");
+                        text.CurrentPageNumber();
+                        text.Span(" de ");
+                        text.TotalPages();
+                    });
                 });
             });
         }).GeneratePdf();

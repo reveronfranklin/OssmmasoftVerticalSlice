@@ -10,11 +10,20 @@ public static class ReportPdfFirmantes
 
     public static void Build(IContainer container, float fontSize)
     {
+        Build(container, fontSize, FirmanteBeneficiario, FirmanteDirectorAdministracion);
+    }
+
+    public static void Build(
+        IContainer container,
+        float fontSize,
+        string firmanteIzquierdo,
+        string firmanteDerecho)
+    {
         container.PaddingTop(20).Row(row =>
         {
-            row.RelativeItem().Element(element => FirmanteLine(element, FirmanteBeneficiario, fontSize));
+            row.RelativeItem().Element(element => FirmanteLine(element, firmanteIzquierdo, fontSize));
             row.ConstantItem(60);
-            row.RelativeItem().Element(element => FirmanteLine(element, FirmanteDirectorAdministracion, fontSize));
+            row.RelativeItem().Element(element => FirmanteLine(element, firmanteDerecho, fontSize));
         });
     }
 
