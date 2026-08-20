@@ -2,6 +2,7 @@ using OssmmasoftVerticalSlice.ContextDB;
 using OssmmasoftVerticalSlice.Features.BienesMunicipales;
 using OssmmasoftVerticalSlice.Features.ReporteBm1;
 using OssmmasoftVerticalSlice.Features.ReporteChequesPeriodo;
+using OssmmasoftVerticalSlice.Features.ReporteRelacionCompromiso;
 using OssmmasoftVerticalSlice.Features.ReporteRelacionRetencionIva;
 using OssmmasoftVerticalSlice.Helpers;
 
@@ -111,7 +112,13 @@ public static class MfoRegistroReportes
             // un subconjunto del del 23-, pero cuelga de su propio formulario
             // porque expone menos filtros: el reporte legado del 24 no tiene
             // status ni proveedor.
-            ["REPORTE_CHEQ_PERIODO_PDF"] = EjecutarReporteChequesPeriodoPdf
+            ["REPORTE_CHEQ_PERIODO_PDF"] = EjecutarReporteChequesPeriodoPdf,
+
+            // Relacion de Compromisos (requerimiento 25). Es el primer reporte
+            // del motor que exige elegir un presupuesto: su formulario lo pide
+            // contra el catalogo PRE_PRESUPUESTO, porque no existe -ni se
+            // invento- un "presupuesto activo" en configuracion.
+            ["REPORTE_REL_COMPROMISO_PDF"] = EjecutarReporteRelCompromisoPdf
         };
 
     public static bool EstaRegistrado(string? clave)
@@ -523,6 +530,76 @@ public static class MfoRegistroReportes
             bytes,
             $"{prefijo}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf",
             filas,
+            resultado,
+            mensaje);
+    }
+
+    /// <summary>
+    /// Relacion de Compromisos. Requerimiento 25.
+    ///
+    /// <c>CodigoPresupuesto</c> es el unico parametro obligatorio de origen CAMPO
+    /// de todo el registro: el reporte no tiene sentido sin un presupuesto, y a
+    /// diferencia de la empresa **no se puede resolver en el servidor** -no existe
+    /// un settings:PresupuestoConfig y el ERP siempre lo hace elegir-. Llega
+    /// resuelto desde el catalogo PRE_PRESUPUESTO.
+    ///
+    /// Las dos fechas son opcionales e independientes, como en el reporte legado:
+    /// sin ninguna lista el presupuesto completo. Por eso lleva MAX_FILAS.
+    /// </summary>
+    private static async Task<MfoResultadoEjecucion> EjecutarReporteRelCompromisoPdf(
+        MfoContextoEjecucion contexto)
+    {
+        var usuario = contexto.Param("Usuario")?.Texto;
+
+        if (string.IsNullOrWhiteSpace(usuario))
+        {
+            return MfoResultadoEjecucion.Error(
+                "No se pudo determinar el usuario conectado, requerido para el pie de auditoria del reporte.");
+        }
+
+        var query = new ReporteRelacionCompromisoQuery(
+            CodigoPresupuesto: (int?)contexto.Param("CodigoPresupuesto")?.Numero ?? 0,
+            FechaDesde: contexto.Param("FechaDesde")?.Fecha,
+            FechaHasta: contexto.Param("FechaHasta")?.Fecha,
+            CodigoProveedor: (int?)contexto.Param("CodigoProveedor")?.Numero,
+            Usuario: usuario);
+
+        var handler = new ReporteRelacionCompromisoHandler(contexto.Conexiones, contexto.Config);
+        var datos = await handler.HandleAsync(query);
+
+        if (!datos.IsValid || datos.Data is null)
+        {
+            return MfoResultadoEjecucion.Error(datos.Message);
+        }
+
+        if (datos.Data.Count == 0)
+        {
+            return MfoResultadoEjecucion.Vacio(
+                "No hay compromisos con los parametros seleccionados.");
+        }
+
+        var items = datos.Data;
+        var resultado = "OK";
+        var mensaje = string.Empty;
+
+        // Aqui el corte si puede ser por fila: este reporte no tiene grupos ni
+        // subtotales intermedios, asi que recortar no descuadra ningun parcial.
+        // Lo que si cambia es el total de cierre, y de eso avisa el mensaje.
+        if (contexto.Reporte.MaxFilas is int max && max > 0 && items.Count > max)
+        {
+            items = items.Take(max).ToList();
+            resultado = "TRUNCADO";
+            mensaje = $"Se alcanzo el limite de {max} compromisos. El total de cierre corresponde solo a los incluidos. Refine el periodo.";
+        }
+
+        var entidad = await handler.ObtenerEntidadAsync(query.CodigoPresupuesto);
+        var printContext = ReportPrintContext.Create(usuario);
+        var bytes = ReporteRelacionCompromisoPdfGenerator.Generate(items, query, entidad, printContext);
+
+        return new MfoResultadoEjecucion(
+            bytes,
+            $"RelacionCompromisos_{DateTime.Now:yyyyMMdd_HHmmss}.pdf",
+            items.Count,
             resultado,
             mensaje);
     }

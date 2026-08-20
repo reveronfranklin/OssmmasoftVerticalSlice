@@ -41,7 +41,14 @@ public static class MfoCatalogoRegistro
             // espacio de mas devolvia un reporte vacio indistinguible de "no hubo
             // cheques". Como catalogo, el valor no se puede escribir mal.
             ["SIS_BANCO_NOMBRE"] = ResolverSisBancoNombre,
-            ["SIS_CUENTA_BANCO"] = ResolverSisCuentaBanco
+            ["SIS_CUENTA_BANCO"] = ResolverSisCuentaBanco,
+
+            // Presupuestos, para el formulario REP_REL_COMPROMISO
+            // (requerimiento 25). Ese reporte necesita un presupuesto y no hay
+            // forma de resolverlo por configuracion -no existe un
+            // PresupuestoConfig-, asi que lo elige el usuario, igual que en el
+            // resto del ERP.
+            ["PRE_PRESUPUESTO"] = ResolverPrePresupuesto
         };
 
     public static bool EstaRegistrado(string? clave)
@@ -232,6 +239,52 @@ public static class MfoCatalogoRegistro
             var banco = reader.SafeGetString("NOMBRE").Trim();
 
             lista.Add(new MfoCatalogoOpcionResponse(cuenta, $"{banco} - {cuenta}"));
+        }
+
+        return lista;
+    }
+
+    /// <summary>
+    /// Presupuestos. Reusa <c>PRE.SP_PRE_PRESUP_LIST_GET</c>, el procedimiento que
+    /// ya alimenta la lista de presupuestos del ERP (requerimiento 20), en vez de
+    /// escribir otra consulta: si algun dia cambia que cuenta como presupuesto
+    /// visible, cambia en un solo sitio.
+    ///
+    /// La etiqueta marca el presupuesto en ejecucion. Es la unica pista que tiene
+    /// el usuario para no pedir por error el reporte de un ejercicio cerrado, y el
+    /// procedimiento ya resuelve el indicador.
+    ///
+    /// **No filtra por empresa**: el procedimiento no recibe ese parametro y
+    /// devuelve todos los presupuestos, igual que la pantalla que ya lo usa.
+    /// </summary>
+    private static async Task<List<MfoCatalogoOpcionResponse>> ResolverPrePresupuesto(
+        ConnectionDB conexiones, int empresa)
+    {
+        using var cn = conexiones.GetPresupuestoConnection();
+        await cn.OpenAsync();
+
+        using var cmd = new OracleCommand("PRE.SP_PRE_PRESUP_LIST_GET", cn)
+        {
+            CommandType = CommandType.StoredProcedure,
+            BindByName = true
+        };
+
+        cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
+        cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
+
+        var lista = new List<MfoCatalogoOpcionResponse>();
+
+        using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var codigo = reader.SafeGetInt32("CODIGO_PRESUPUESTO");
+            var denominacion = reader.SafeGetString("DENOMINACION").Trim();
+            var ano = reader.SafeGetInt32("ANO");
+            var enEjecucion = reader.SafeGetInt32("PRESUPUESTO_EN_EJECUCION") == 1;
+
+            var etiqueta = $"{ano} - {denominacion}" + (enEjecucion ? " (en ejecucion)" : string.Empty);
+
+            lista.Add(new MfoCatalogoOpcionResponse(codigo.ToString(), etiqueta));
         }
 
         return lista;
