@@ -1,32 +1,49 @@
-# Contrato Frontend - ReporteChequesMotivo
+# Contrato Frontend - ReporteChequesPeriodo
 
-Fecha: 2026-08-20. Requerimiento 23.
+Fecha: 2026-08-20. Requerimientos 23 y 24.
 
-Migracion del reporte Oracle Reports `ADM_PERIODOS_CHEQUES_MOTIVO1.rdf`
-("Relacion de Cheques Emitidos Por Periodos, con Motivo").
+Migracion de los **dos** reportes Oracle Reports de relacion de cheques, que
+comparten backend porque uno es un subconjunto del otro:
+
+| Reporte legado | Requerimiento | Variante |
+| --- | --- | --- |
+| `ADM_PERIODOS_CHEQUES1.RDF` | 24 | Listado simple (`conMotivo: false`) |
+| `ADM_PERIODOS_CHEQUES_MOTIVO1.rdf` | 23 | Con motivo, orden de pago y partidas (`conMotivo: true`) |
+
+Comparten stored procedure (`ADM.SP_REP_CHEQ_PERIODO_GET`), handler y generador
+de PDF. Difieren en dos cosas visibles: la columna del numero de documento
+(`Nro. CHEQUE` crudo vs `Nro. DOCUMENTO` con el descriptivo del tipo) y el bloque
+de motivo debajo de cada fila.
 
 ## Como se consume normalmente: por el Motor de Formularios
 
-**Este reporte no necesita pantalla propia.** El PLAN.md original del
-requerimiento 23 preveia una pantalla de filtros codificada a mano y dejaba
-abierta la pregunta de en que modulo vivia el boton -no existe `src/adm/cheques`-.
-El formulario de parametros vive en el Motor de Formularios (requerimiento 16) y
-se abre en la pantalla generica:
+**Ninguno de los dos reportes necesita pantalla propia.** Los PLAN.md originales
+de los requerimientos 23 y 24 preveian pantallas de filtros codificadas a mano y
+dejaban abierta la pregunta de en que modulo vivia el boton -no existe
+`src/adm/cheques`-. Los formularios de parametros viven en el Motor de Formularios
+(requerimiento 16) y se abren en la pantalla generica:
 
 ```txt
-/apps/mfo/reporte/REP_CHEQ_MOTIVO
+/apps/mfo/reporte/REP_CHEQ_PERIODO    <- listado simple (requerimiento 24)
+/apps/mfo/reporte/REP_CHEQ_MOTIVO     <- con motivo (requerimiento 23)
 ```
 
-Campos del formulario:
+Campos de cada formulario:
 
-| Campo | Tipo | Obligatorio |
-| --- | --- | --- |
-| `FECHA_DESDE` | Fecha | Si |
-| `FECHA_HASTA` | Fecha | Si |
-| `BANCO` | Catalogo `SIS_BANCO_NOMBRE` | No |
-| `CUENTA` | Catalogo `SIS_CUENTA_BANCO` | No |
-| `STATUS` | Lista AP/AN | No |
-| `PROVEEDOR` | Numero | No |
+| Campo | Tipo | Obligatorio | `REP_CHEQ_PERIODO` | `REP_CHEQ_MOTIVO` |
+| --- | --- | --- | --- | --- |
+| `FECHA_DESDE` | Fecha | Si | Si | Si |
+| `FECHA_HASTA` | Fecha | Si | Si | Si |
+| `BANCO` | Catalogo `SIS_BANCO_NOMBRE` | No | Si | Si |
+| `CUENTA` | Catalogo `SIS_CUENTA_BANCO` | No | Si | Si |
+| `STATUS` | Lista AP/AN | No | - | Si |
+| `PROVEEDOR` | Numero | No | - | Si |
+
+**Son dos formularios y no uno con dos reportes** -que es lo que `MFO_REPORTE`
+permite y lo que hace `REP_BM1`- porque no comparten el juego de parametros: el
+.rdf del requerimiento 24 no define status ni proveedor, y colgar los dos del
+mismo formulario mostraria al usuario del listado simple dos filtros que su
+reporte nunca tuvo.
 
 `CodigoEmpresa` y `Usuario` son parametros de origen `SISTEMA`: los resuelve el
 servidor y un valor enviado en el payload se descarta sin mirarlo.
@@ -42,7 +59,7 @@ contra esas columnas que filtra el reporte.
 ## Endpoint directo (opcional)
 
 ```http
-POST /api/ReporteChequesMotivo/pdf
+POST /api/ReporteChequesPeriodo/pdf
 ```
 
 ### Request
@@ -55,7 +72,8 @@ POST /api/ReporteChequesMotivo/pdf
   "numeroCuenta": "01340031800311163500",
   "status": "AP",
   "codigoProveedor": 4210,
-  "usuario": "jperez"
+  "usuario": "jperez",
+  "conMotivo": true
 }
 ```
 
@@ -68,6 +86,7 @@ POST /api/ReporteChequesMotivo/pdf
 | `status` | No | `AP` o `AN`. Vacio o nulo = ambos. Otro valor devuelve `IsValid = false`. |
 | `codigoProveedor` | No | Cero o nulo = todos. |
 | `usuario` | Si | Usuario conectado, para el pie de auditoria. Vacio devuelve HTTP `400`. |
+| `conMotivo` | No | `true` (por omision) = variante del requerimiento 23. `false` = listado simple del 24. |
 
 No lleva `codigoEmpresa`: se resuelve desde `settings:EmpresaConfig`.
 
@@ -80,7 +99,8 @@ son independientes y se aplican con AND.
 
 - HTTP `200`
 - `Content-Type: application/pdf`
-- `Content-Disposition: inline; filename="relacion-cheques-motivo.pdf"`
+- `Content-Disposition: inline; filename="relacion-cheques-motivo.pdf"` con
+  `conMotivo: true`, o `relacion-cheques.pdf` con `false`
 
 ### Response con error o sin datos
 
@@ -97,7 +117,7 @@ El unico HTTP `400` es el de `usuario` vacio.
 ## Endpoint de datos
 
 ```http
-POST /api/ReporteChequesMotivo/GetAll
+POST /api/ReporteChequesPeriodo/GetAll
 ```
 
 Mismo request (sin `usuario`), devuelve `ResultDto<List<Grupo>>` ya agrupado por
@@ -116,6 +136,7 @@ banco/cuenta y con los subtotales calculados.
       "items": [
         {
           "fechaCheque": "2026-07-21T00:00:00",
+          "numeroCheque": "10025",
           "numeroDocumento": "PAEL 10025",
           "status": "AP",
           "estatusDescripcion": "APRO",
@@ -137,7 +158,13 @@ banco/cuenta y con los subtotales calculados.
 `total1` es el monto total de cheques validos y `total2` el de anulados: son los
 dos numeros de la columna TOTAL GENERAL del PDF.
 
-### Tres cosas que conviene entender
+### Cuatro cosas que conviene entender
+
+- **`numeroCheque` vs `numeroDocumento`.** El primero es el numero crudo
+  (`10025`), que es lo que imprime el listado simple del requerimiento 24 en su
+  columna "Nro. CHEQUE". El segundo lleva delante el descriptivo del tipo de
+  cheque (`PAEL 10025`), que es la columna "Nro. DOCUMENTO" del requerimiento 23.
+  Si el cheque no tiene tipo, los dos coinciden.
 
 - **`monto` viene negativo cuando el cheque esta anulado**, como en el reporte
   legado y en el PDF de muestra. Los subtotales `montoAnulados` en cambio son
@@ -146,8 +173,12 @@ dos numeros de la columna TOTAL GENERAL del PDF.
   a la orden de pago y las partidas presupuestarias imputadas, con saltos de
   linea reales (el SP los emite como `CHR(13)` y el backend los normaliza).
   Renderizarlo en una grilla exige respetar `\n` o el texto sale pegado.
+- **Con `conMotivo: false`, `motivo` viene vacio en todas las filas.** No es que
+  no haya motivo: el SP no lo calcula, y a proposito, porque calcularlo implica
+  recorrer `PRE_V_SALDOS` una vez por cheque.
 - **La lista de partidas puede venir vacia sin que sea un error.**
   `ADM_F_GET_PARTIDAS_CHEQUE` acumula en un `VARCHAR2(500)` y captura
   `WHEN OTHERS` devolviendo NULL, asi que un cheque con mas de una docena de
   partidas pierde la lista completa. Es una limitacion heredada del schema ADM
-  que no se toco; ver el PLAN.md del requerimiento 23.
+  que no se toco; ver el PLAN.md del requerimiento 23. Solo aplica a
+  `conMotivo: true`.

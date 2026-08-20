@@ -5,16 +5,28 @@ using OssmmasoftVerticalSlice.Helpers;
 using System.Data;
 using System.Globalization;
 
-namespace OssmmasoftVerticalSlice.Features.ReporteChequesPeriodoMotivo;
+namespace OssmmasoftVerticalSlice.Features.ReporteChequesPeriodo;
 
 // =============================================================================
-// Relacion de Cheques Emitidos Por Periodos (con Motivo).
-// Requerimiento 23 - migracion de ADM_PERIODOS_CHEQUES_MOTIVO1.rdf.
+// Relacion de Cheques Emitidos Por Periodos.
 //
-// Lista los cheques emitidos en un rango de fechas, agrupados por banco/cuenta,
-// con el motivo del cheque, la orden de pago que lo origina y las partidas
-// presupuestarias imputadas. Cada grupo cierra con la cantidad y el monto de
-// cheques validos y anulados, y el reporte con el total general.
+// **Una sola feature sirve los DOS reportes de cheques:**
+//
+//   * Requerimiento 24 - "Relacion de Cheques Emitidos Por Periodos"
+//     (ADM_PERIODOS_CHEQUES1.RDF). Listado simple, con ConMotivo = false.
+//   * Requerimiento 23 - la misma relacion "con Motivo"
+//     (ADM_PERIODOS_CHEQUES_MOTIVO1.rdf), que agrega por cada cheque el motivo,
+//     la orden de pago que lo origina y las partidas presupuestarias imputadas.
+//     Con ConMotivo = true.
+//
+// Se comparten por la misma razon que ReporteBm1 y ReporteBm1Esp comparten su
+// query: el negocio es el mismo y el .rdf del requerimiento 24 es literalmente un
+// subconjunto del .rdf del 23. Mantener dos copias garantiza que un dia se
+// corrija una sola.
+//
+// Los dos reportes listan los cheques emitidos en un rango de fechas, agrupados
+// por banco/cuenta; cada grupo cierra con la cantidad y el monto de cheques
+// validos y anulados, y el reporte con el total general.
 //
 // El agrupamiento y los subtotales se calculan aqui sobre el resultado plano del
 // SP, no en SQL: es el patron que ya usan ReporteBm1Esp y ReporteOrdenPago, y
@@ -22,26 +34,52 @@ namespace OssmmasoftVerticalSlice.Features.ReporteChequesPeriodoMotivo;
 // =============================================================================
 
 /// <summary>
-/// Filtros del reporte. El rango de fechas es obligatorio -a nivel de SQL el
-/// legado lo hacia opcional con <c>NVL(:P_FECHA_INI, A.FECHA_CHEQUE)</c>, pero el
-/// titulo del reporte siempre imprime un periodo y pedirlo sin rango recorreria
-/// el historico completo-. Los cuatro filtros restantes son opcionales.
+/// Filtros del reporte. El rango de fechas es obligatorio -a nivel de SQL los dos
+/// legados lo hacian opcional con <c>NVL(:P_FECHA_INI, A.FECHA_CHEQUE)</c>, pero
+/// el titulo siempre imprime un periodo y pedirlo sin rango recorreria el
+/// historico completo-. Los cuatro filtros restantes son opcionales.
+///
+/// <c>Status</c> y <c>CodigoProveedor</c> solo existen en el .rdf del
+/// requerimiento 23; el formulario del 24 no los expone y los deja nulos.
 /// </summary>
-public record ReporteChequesMotivoQuery(
+public record ReporteChequesPeriodoQuery(
     DateTime? FechaDesde = null,
     DateTime? FechaHasta = null,
     string? NombreBanco = null,
     string? NumeroCuenta = null,
     string? Status = null,
     int? CodigoProveedor = null,
-    string? Usuario = null
+    string? Usuario = null,
+
+    /// <summary>
+    /// <c>true</c> = variante "con Motivo" (requerimiento 23): agrega por cada
+    /// cheque el motivo, la orden de pago y las partidas imputadas.
+    /// <c>false</c> = listado simple (requerimiento 24).
+    ///
+    /// No es solo presentacion: con <c>false</c> el SP **no llama** a
+    /// <c>ADM_F_GET_PARTIDAS_CHEQUE</c>, que recorre PRE_V_SALDOS una vez por
+    /// cheque y es lo caro del reporte.
+    /// </summary>
+    bool ConMotivo = true
 );
 
 /// <summary>Una linea de detalle: una linea de beneficiario de un cheque.</summary>
-public record ReporteChequesMotivoItem(
+public record ReporteChequesPeriodoItem(
     string NombreBanco,
     string NumeroCuenta,
     DateTime? FechaCheque,
+
+    /// <summary>
+    /// Numero de cheque crudo. Es la columna "Nro. CHEQUE" del reporte del
+    /// requerimiento 24.
+    /// </summary>
+    string NumeroCheque,
+
+    /// <summary>
+    /// Descriptivo del tipo de cheque mas el numero ("PAEL 10025"). Es la columna
+    /// "Nro. DOCUMENTO" del reporte del requerimiento 23. Si el cheque no tiene
+    /// tipo, coincide con <see cref="NumeroCheque"/>.
+    /// </summary>
     string NumeroDocumento,
     string Status,
     string EstatusDescripcion,
@@ -69,22 +107,22 @@ public record ReporteChequesMotivoItem(
 /// Un banco/cuenta con sus cheques y sus subtotales. Es el grupo
 /// <c>G_DTOS_BANCO</c> del reporte legado, que quiebra pagina.
 /// </summary>
-public record ReporteChequesMotivoGrupo(
+public record ReporteChequesPeriodoGrupo(
     string NombreBanco,
     string NumeroCuenta,
-    List<ReporteChequesMotivoItem> Items,
+    List<ReporteChequesPeriodoItem> Items,
     int CantidadValidos,
     decimal MontoValidos,
     int CantidadAnulados,
     decimal MontoAnulados
 );
 
-public class ReporteChequesMotivoHandler(ConnectionDB _connectionDB, IConfiguration _config)
+public class ReporteChequesPeriodoHandler(ConnectionDB _connectionDB, IConfiguration _config)
 {
-    public async Task<ResultDto<List<ReporteChequesMotivoGrupo>>> HandleAsync(
-        ReporteChequesMotivoQuery query)
+    public async Task<ResultDto<List<ReporteChequesPeriodoGrupo>>> HandleAsync(
+        ReporteChequesPeriodoQuery query)
     {
-        if (!ReporteChequesMotivoDb.TryGetEmpresa(_config, out int empresa, out string errorEmpresa))
+        if (!ReporteChequesPeriodoDb.TryGetEmpresa(_config, out int empresa, out string errorEmpresa))
         {
             return Invalid(errorEmpresa);
         }
@@ -120,7 +158,7 @@ public class ReporteChequesMotivoHandler(ConnectionDB _connectionDB, IConfigurat
             return Invalid($"Error tecnico al abrir conexion ADM: {ex.Message}");
         }
 
-        using var cmd = new OracleCommand("ADM.SP_REP_CHEQ_MOTIVO_GET", cn)
+        using var cmd = new OracleCommand("ADM.SP_REP_CHEQ_PERIODO_GET", cn)
         {
             CommandType = CommandType.StoredProcedure,
             BindByName = true
@@ -137,15 +175,16 @@ public class ReporteChequesMotivoHandler(ConnectionDB _connectionDB, IConfigurat
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
         var pMessage = cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
         cmd.Parameters.Add("p_TotalRecords", OracleDbType.Int32, ParameterDirection.Output);
+        cmd.Parameters.Add("p_IncluirMotivo", OracleDbType.Char).Value = query.ConMotivo ? "S" : "N";
 
-        var planos = new List<ReporteChequesMotivoItem>();
+        var planos = new List<ReporteChequesPeriodoItem>();
 
         try
         {
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
             {
-                planos.Add(ReporteChequesMotivoDb.MapItem(reader));
+                planos.Add(ReporteChequesPeriodoDb.MapItem(reader));
             }
         }
         catch (OracleException ex)
@@ -159,7 +198,7 @@ public class ReporteChequesMotivoHandler(ConnectionDB _connectionDB, IConfigurat
 
         var message = pMessage.Value == DBNull.Value ? string.Empty : pMessage.Value?.ToString() ?? string.Empty;
 
-        if (!ReporteChequesMotivoDb.IsSuccessMessage(message))
+        if (!ReporteChequesPeriodoDb.IsSuccessMessage(message))
         {
             return Invalid(message);
         }
@@ -169,7 +208,7 @@ public class ReporteChequesMotivoHandler(ConnectionDB _connectionDB, IConfigurat
         // varios bloques con subtotales incompletos.
         var grupos = planos
             .GroupBy(i => new { i.NombreBanco, i.NumeroCuenta })
-            .Select(g => new ReporteChequesMotivoGrupo(
+            .Select(g => new ReporteChequesPeriodoGrupo(
                 g.Key.NombreBanco,
                 g.Key.NumeroCuenta,
                 g.ToList(),
@@ -179,7 +218,7 @@ public class ReporteChequesMotivoHandler(ConnectionDB _connectionDB, IConfigurat
                 g.Sum(i => i.MontoAnulado)))
             .ToList();
 
-        return new ResultDto<List<ReporteChequesMotivoGrupo>>(grupos)
+        return new ResultDto<List<ReporteChequesPeriodoGrupo>>(grupos)
         {
             Data = grupos,
             IsValid = true,
@@ -213,11 +252,11 @@ public class ReporteChequesMotivoHandler(ConnectionDB _connectionDB, IConfigurat
     private static object DbValue(int? value) =>
         value.HasValue && value.Value > 0 ? value.Value : DBNull.Value;
 
-    private static ResultDto<List<ReporteChequesMotivoGrupo>> Invalid(string mensaje) =>
+    private static ResultDto<List<ReporteChequesPeriodoGrupo>> Invalid(string mensaje) =>
         new(null!) { Data = null, IsValid = false, Message = mensaje };
 }
 
-internal static class ReporteChequesMotivoDb
+internal static class ReporteChequesPeriodoDb
 {
     public static bool IsSuccessMessage(string? message)
     {
@@ -246,12 +285,13 @@ internal static class ReporteChequesMotivoDb
         return true;
     }
 
-    public static ReporteChequesMotivoItem MapItem(IDataReader reader)
+    public static ReporteChequesPeriodoItem MapItem(IDataReader reader)
     {
-        return new ReporteChequesMotivoItem(
+        return new ReporteChequesPeriodoItem(
             reader.SafeGetString("NOMBRE_BANCO").Trim(),
             reader.SafeGetString("NUMERO_CUENTA").Trim(),
             SafeGetNullableDateTime(reader, "FECHA_CHEQUE"),
+            reader.SafeGetString("NUMERO_CHEQUE").Trim(),
             reader.SafeGetString("NUMERO_DOCUMENTO").Trim(),
             reader.SafeGetString("STATUS").Trim(),
             reader.SafeGetString("ESTATUS_DESC").Trim(),
@@ -294,29 +334,32 @@ internal static class ReporteChequesMotivoDb
 }
 
 [ApiController]
-[Route("api/ReporteChequesMotivo")]
-public class ReporteChequesMotivoController(
+[Route("api/ReporteChequesPeriodo")]
+public class ReporteChequesPeriodoController(
     ConnectionDB _connectionDB,
     IConfiguration _config) : ControllerBase
 {
     [HttpPost]
     [Route("GetAll")]
-    public async Task<IActionResult> GetAll(ReporteChequesMotivoQuery value)
+    public async Task<IActionResult> GetAll(ReporteChequesPeriodoQuery value)
     {
-        var handler = new ReporteChequesMotivoHandler(_connectionDB, _config);
+        var handler = new ReporteChequesPeriodoHandler(_connectionDB, _config);
         var result = await handler.HandleAsync(value);
 
         return Ok(result);
     }
 
     /// <summary>
-    /// PDF del reporte. El usuario conectado es obligatorio: alimenta el pie de
-    /// auditoria compartido (requerimiento 17), y una relacion de cheques sin
-    /// constancia de quien la emitio es justo lo que ese requerimiento cerro.
+    /// PDF del reporte. La variante la decide <c>ConMotivo</c> del request; el
+    /// valor por omision es <c>true</c>, la variante del requerimiento 23.
+    ///
+    /// El usuario conectado es obligatorio: alimenta el pie de auditoria
+    /// compartido (requerimiento 17), y una relacion de cheques sin constancia de
+    /// quien la emitio es justo lo que ese requerimiento cerro.
     /// </summary>
     [HttpPost]
     [Route("pdf")]
-    public async Task<IActionResult> Pdf(ReporteChequesMotivoQuery value)
+    public async Task<IActionResult> Pdf(ReporteChequesPeriodoQuery value)
     {
         if (string.IsNullOrWhiteSpace(value.Usuario))
         {
@@ -327,7 +370,7 @@ public class ReporteChequesMotivoController(
             });
         }
 
-        var handler = new ReporteChequesMotivoHandler(_connectionDB, _config);
+        var handler = new ReporteChequesPeriodoHandler(_connectionDB, _config);
         var result = await handler.HandleAsync(value);
 
         if (!result.IsValid || result.Data is null)
@@ -345,9 +388,10 @@ public class ReporteChequesMotivoController(
         }
 
         var printContext = ReportPrintContext.Create(value.Usuario);
-        var bytes = ReporteChequesMotivoPdfGenerator.Generate(result.Data, value, printContext);
+        var bytes = ReporteChequesPeriodoPdfGenerator.Generate(result.Data, value, printContext);
 
-        Response.Headers.ContentDisposition = "inline; filename=\"relacion-cheques-motivo.pdf\"";
+        var archivo = value.ConMotivo ? "relacion-cheques-motivo.pdf" : "relacion-cheques.pdf";
+        Response.Headers.ContentDisposition = $"inline; filename=\"{archivo}\"";
 
         return File(bytes, "application/pdf", enableRangeProcessing: true);
     }

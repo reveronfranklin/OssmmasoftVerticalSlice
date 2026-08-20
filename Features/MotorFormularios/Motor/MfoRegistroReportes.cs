@@ -1,7 +1,7 @@
 using OssmmasoftVerticalSlice.ContextDB;
 using OssmmasoftVerticalSlice.Features.BienesMunicipales;
 using OssmmasoftVerticalSlice.Features.ReporteBm1;
-using OssmmasoftVerticalSlice.Features.ReporteChequesPeriodoMotivo;
+using OssmmasoftVerticalSlice.Features.ReporteChequesPeriodo;
 using OssmmasoftVerticalSlice.Features.ReporteRelacionRetencionIva;
 using OssmmasoftVerticalSlice.Helpers;
 
@@ -104,7 +104,14 @@ public static class MfoRegistroReportes
             // (requerimiento 23). Seis filtros, dos de ellos contra catalogos de
             // bancos y cuentas: es el tipo de pantalla que el motor construye
             // sola y que antes habia que codificar entera.
-            ["REPORTE_CHEQ_MOTIVO_PDF"] = EjecutarReporteChequesMotivoPdf
+            ["REPORTE_CHEQ_MOTIVO_PDF"] = EjecutarReporteChequesMotivoPdf,
+
+            // La misma relacion sin el bloque de motivo (requerimiento 24).
+            // Comparte handler, SP y generador con la anterior -el .rdf del 24 es
+            // un subconjunto del del 23-, pero cuelga de su propio formulario
+            // porque expone menos filtros: el reporte legado del 24 no tiene
+            // status ni proveedor.
+            ["REPORTE_CHEQ_PERIODO_PDF"] = EjecutarReporteChequesPeriodoPdf
         };
 
     public static bool EstaRegistrado(string? clave)
@@ -414,19 +421,43 @@ public static class MfoRegistroReportes
     }
 
     /// <summary>
-    /// Relacion de Cheques Emitidos Por Periodos (con Motivo). Requerimiento 23.
+    /// Relacion de Cheques Emitidos Por Periodos, **con** motivo.
+    /// Requerimiento 23.
     ///
     /// Seis filtros: rango de fechas obligatorio y banco, cuenta, status y
     /// proveedor opcionales. Los dos primeros opcionales llegan resueltos desde
     /// los catalogos SIS_BANCO_NOMBRE y SIS_CUENTA_BANCO, asi que su valor es el
     /// nombre y el numero de cuenta reales y no hay que traducir nada aqui.
+    /// </summary>
+    private static Task<MfoResultadoEjecucion> EjecutarReporteChequesMotivoPdf(
+        MfoContextoEjecucion contexto) => EjecutarChequesAsync(contexto, conMotivo: true);
+
+    /// <summary>
+    /// La misma relacion **sin** el bloque de motivo. Requerimiento 24.
+    ///
+    /// Su formulario solo expone el rango de fechas, el banco y la cuenta, porque
+    /// su .rdf no define status ni proveedor. Los dos filtros que no expone
+    /// quedan nulos, que es "todos".
+    /// </summary>
+    private static Task<MfoResultadoEjecucion> EjecutarReporteChequesPeriodoPdf(
+        MfoContextoEjecucion contexto) => EjecutarChequesAsync(contexto, conMotivo: false);
+
+    /// <summary>
+    /// Ejecucion compartida por las dos variantes de la relacion de cheques.
+    ///
+    /// Lo unico que cambia entre ellas es <paramref name="conMotivo"/>, que decide
+    /// si el reporte trae el motivo, la orden de pago y las partidas -y por tanto
+    /// si el SP llama a ADM_F_GET_PARTIDAS_CHEQUE, que es lo caro-. Todo lo demas
+    /// -filtros, validacion, agrupamiento, corte por MAX_FILAS, pie de
+    /// auditoria- es identico, asi que tener dos copias solo garantizaria que un
+    /// dia se corrija una.
     ///
     /// El corte por MAX_FILAS se aplica por banco/cuenta completo, no por fila:
     /// cada grupo imprime su subtotal, y un grupo partido a la mitad dejaria un
     /// subtotal que no cuadra con los cheques listados debajo.
     /// </summary>
-    private static async Task<MfoResultadoEjecucion> EjecutarReporteChequesMotivoPdf(
-        MfoContextoEjecucion contexto)
+    private static async Task<MfoResultadoEjecucion> EjecutarChequesAsync(
+        MfoContextoEjecucion contexto, bool conMotivo)
     {
         var usuario = contexto.Param("Usuario")?.Texto;
 
@@ -436,16 +467,17 @@ public static class MfoRegistroReportes
                 "No se pudo determinar el usuario conectado, requerido para el pie de auditoria del reporte.");
         }
 
-        var query = new ReporteChequesMotivoQuery(
+        var query = new ReporteChequesPeriodoQuery(
             FechaDesde: contexto.Param("FechaDesde")?.Fecha,
             FechaHasta: contexto.Param("FechaHasta")?.Fecha,
             NombreBanco: contexto.Param("NombreBanco")?.Texto,
             NumeroCuenta: contexto.Param("NumeroCuenta")?.Texto,
             Status: contexto.Param("Status")?.Texto,
             CodigoProveedor: (int?)contexto.Param("CodigoProveedor")?.Numero,
-            Usuario: usuario);
+            Usuario: usuario,
+            ConMotivo: conMotivo);
 
-        var handler = new ReporteChequesMotivoHandler(contexto.Conexiones, contexto.Config);
+        var handler = new ReporteChequesPeriodoHandler(contexto.Conexiones, contexto.Config);
         var datos = await handler.HandleAsync(query);
 
         if (!datos.IsValid || datos.Data is null)
@@ -467,7 +499,7 @@ public static class MfoRegistroReportes
         if (contexto.Reporte.MaxFilas is int max && max > 0 && filas > max)
         {
             var acumulado = 0;
-            var recortados = new List<ReporteChequesMotivoGrupo>();
+            var recortados = new List<ReporteChequesPeriodoGrupo>();
 
             foreach (var grupo in grupos)
             {
@@ -484,11 +516,12 @@ public static class MfoRegistroReportes
         }
 
         var printContext = ReportPrintContext.Create(usuario);
-        var bytes = ReporteChequesMotivoPdfGenerator.Generate(grupos, query, printContext);
+        var bytes = ReporteChequesPeriodoPdfGenerator.Generate(grupos, query, printContext);
+        var prefijo = conMotivo ? "RelacionChequesMotivo" : "RelacionCheques";
 
         return new MfoResultadoEjecucion(
             bytes,
-            $"RelacionCheques_{DateTime.Now:yyyyMMdd_HHmmss}.pdf",
+            $"{prefijo}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf",
             filas,
             resultado,
             mensaje);

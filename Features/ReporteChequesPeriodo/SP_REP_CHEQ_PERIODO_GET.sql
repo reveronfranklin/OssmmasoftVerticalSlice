@@ -1,34 +1,49 @@
 -- =============================================================================
--- ADM - Relacion de Cheques Emitidos Por Periodos (con Motivo).
+-- ADM - Relacion de Cheques Emitidos Por Periodos.
 --
--- Migracion del reporte Oracle Reports ADM_PERIODOS_CHEQUES_MOTIVO1.rdf
--- (requerimiento 23). Devuelve una fila por linea de beneficiario de cheque
--- (ADM_BENEFICIARIOS_CH); el agrupamiento por banco/cuenta, los subtotales de
--- cheques validos y anulados y el total general los arma el generador de PDF en
--- C#, siguiendo el patron "el SP devuelve filas planas, el C# calcula totales"
--- que ya usan ReporteBm1Esp y ReporteControlPerceptivo.
+-- **Un solo procedimiento alimenta los DOS reportes de cheques:**
 --
--- DIVERGENCIAS DELIBERADAS respecto del .rdf, con su razon. Todas estan
--- explicadas en detalle en
--- Requerimientos/23 - RelaciondeChequesEmitidosPorPeriodosconMotivo/PLAN.md:
+--   * Requerimiento 24 - "Relacion de Cheques Emitidos Por Periodos"
+--     (ADM_PERIODOS_CHEQUES1.RDF). Listado simple. Se pide con
+--     p_IncluirMotivo = 'N'.
+--   * Requerimiento 23 - la misma relacion "con Motivo"
+--     (ADM_PERIODOS_CHEQUES_MOTIVO1.rdf), que agrega por cada cheque el motivo,
+--     la orden de pago que lo origina y las partidas presupuestarias imputadas.
+--     Se pide con p_IncluirMotivo = 'S'.
+--
+-- Se comparte en vez de duplicar por la misma razon que BM.SP_REP_BM1_GET
+-- alimenta el listado BM1 y el formulario BM-1 Especial: el query de negocio es
+-- el mismo -mismas seis tablas, mismos joins, mismo rango de fechas, mismo
+-- DECODE de anulados- y mantener dos copias garantiza que un dia se corrija una
+-- sola. El .rdf del requerimiento 24 es literalmente un subconjunto del .rdf del
+-- 23.
+--
+-- Devuelve una fila por linea de beneficiario de cheque (ADM_BENEFICIARIOS_CH).
+-- El agrupamiento por banco/cuenta, los subtotales de cheques validos y anulados
+-- y el total general los arma el generador de PDF en C#, siguiendo el patron "el
+-- SP devuelve filas planas, el C# calcula totales" que ya usan ReporteBm1Esp y
+-- ReporteControlPerceptivo.
+--
+-- DIVERGENCIAS DELIBERADAS respecto de los dos .rdf, con su razon. Estan
+-- explicadas en detalle en los PLAN.md de los requerimientos 23 y 24:
 --
 --   1. **La informacion de orden de pago se correlaciona por linea de
---      beneficiario, no por cheque.** La vista en linea AA del reporte legado
+--      beneficiario, no por cheque.** La vista en linea AA del requerimiento 23
 --      agrupa por CODIGO_CHEQUE sin DISTINCT ni GROUP BY, y se une por
 --      A.CODIGO_CHEQUE = AA.CODIGO_CHEQUE(+) mientras el detalle ya venia unido
 --      por D.CODIGO_CHEQUE = A.CODIGO_CHEQUE. Un cheque con N lineas de
 --      beneficiario ligadas a ordenes de pago produce por tanto N x N filas, y
 --      **los montos se cuentan N veces en los subtotales**. Aqui AA se
---      correlaciona por CODIGO_BENEFICIARIO_OP -que es la PK de
---      ADM_BENEFICIARIOS_OP-, asi que cada linea de detalle trae su propia orden
---      de pago y aparece exactamente una vez. Para un cheque de una sola linea
---      -el unico caso presente en el PDF de muestra- el resultado es identico.
---   2. **Sin SQL dinamico.** El lexico &P_WHERE_STATUS del reporte legado se
+--      correlaciona por CODIGO_BENEFICIARIO_OP -la PK de ADM_BENEFICIARIOS_OP-,
+--      asi que cada linea de detalle trae su propia orden de pago y aparece
+--      exactamente una vez.
+--   2. **Sin SQL dinamico.** El lexico &P_WHERE_STATUS del requerimiento 23 se
 --      reemplaza por predicados (p_X IS NULL OR ...). Ademas de quitar la
---      concatenacion, corrige el comportamiento: AfterPForm usaba un ELSIF, de
+--      concatenacion, corrige el comportamiento: su AfterPForm usaba un ELSIF, de
 --      modo que al informar estatus **y** proveedor solo se aplicaba el estatus y
 --      el filtro de proveedor se ignoraba en silencio. Aqui los dos filtros son
---      independientes y se combinan con AND.
+--      independientes y se combinan con AND. El reporte del requerimiento 24 no
+--      expone ninguno de los dos: simplemente los deja nulos.
 --   3. **La fecha de la orden de pago se formatea explicitamente.** El legado
 --      concatenaba AOP.FECHA_ORDEN_PAGO sin TO_CHAR, dependiendo del
 --      NLS_DATE_FORMAT de la sesion; desde .NET eso produce un formato distinto
@@ -36,19 +51,36 @@
 --   4. **El rango de fechas se evalua como >= TRUNC(desde) y < TRUNC(hasta)+1**,
 --      que incluye el ultimo dia aunque FECHA_CHEQUE lleve hora -el <= del legado
 --      lo perderia- y permite usar el indice sobre la columna.
---   5. **BANCO_CUENTA se devuelve descompuesto** en NOMBRE_BANCO y
---      NUMERO_CUENTA en vez de como el literal concatenado
---      "<banco> CUENTA N <cuenta>". El texto de presentacion lo arma el
+--   5. **El banco y la cuenta se devuelven descompuestos** en NOMBRE_BANCO y
+--      NUMERO_CUENTA, no como el literal concatenado "<banco> CUENTA N <cuenta>"
+--      (BCO_CTA / BANCO_CUENTA en los .rdf). El texto de presentacion lo arma el
 --      generador; asi el agrupamiento no depende de una cadena.
+--   6. **SIS_RECONVERTIR_OLD no se llama.** El requerimiento 24 envolvia el monto
+--      en SIS.SIS_RECONVERTIR_OLD('DUMMY', FECHA_CHEQUE, ...), cuya logica real
+--      -multiplicar por 1000 los montos anteriores a la reconversion monetaria de
+--      2008- **esta comentada en el cuerpo de la funcion**: hoy devuelve su
+--      argumento sin tocarlo (verificado en
+--      'Requerimientos/09 - Migrar BM/SIS.sql'). Llamarla sugeriria una
+--      conversion que no ocurre.
+--   7. **El orden es determinista.** El requerimiento 24 ordenaba por ORDER BY 1
+--      -solo la fecha-, dejando el orden dentro de un mismo dia a merced del plan
+--      de ejecucion; en su PDF de muestra los cheques del 08/07/2026 salen
+--      desordenados (10015, 3712026, 3752026, 3742026, 3672026...). Aqui se
+--      ordena por banco, cuenta, fecha, numero y tipo, que es lo que ya hacia el
+--      requerimiento 23. Dos corridas del mismo periodo devuelven lo mismo.
 --
--- LIMITACION HEREDADA QUE NO SE TOCA: ADM_F_GET_PARTIDAS_CHEQUE declara su
--- acumulador como VARCHAR2(500) y captura WHEN OTHERS devolviendo NULL, asi que
--- un cheque con mas de una docena de partidas imputadas **pierde la lista
--- completa en silencio**. Es un objeto compartido del schema ADM y ampliarlo a
--- VARCHAR2(4000) afectaria a otros consumidores, asi que la decision queda para
--- el usuario; se llama tal cual, como el reporte legado.
+-- El banco y la cuenta van primero en el ORDER BY porque el quiebre de grupo se
+-- hace en C# sobre este orden: sin ellos delante, un mismo banco saldria partido
+-- en varios bloques, cada uno con su subtotal incompleto.
+--
+-- LIMITACION HEREDADA QUE NO SE TOCA (solo afecta a p_IncluirMotivo = 'S'):
+-- ADM_F_GET_PARTIDAS_CHEQUE declara su acumulador como VARCHAR2(500) y captura
+-- WHEN OTHERS devolviendo NULL, asi que un cheque con mas de una docena de
+-- partidas imputadas **pierde la lista completa en silencio**. Es un objeto
+-- compartido del schema ADM y ampliarlo a VARCHAR2(4000) afectaria a otros
+-- consumidores, asi que la decision queda para el usuario.
 -- =============================================================================
-CREATE OR REPLACE PROCEDURE ADM.SP_REP_CHEQ_MOTIVO_GET (
+CREATE OR REPLACE PROCEDURE ADM.SP_REP_CHEQ_PERIODO_GET (
     p_CodigoEmpresa    IN  NUMBER,
     p_FechaDesde       IN  DATE,
     p_FechaHasta       IN  DATE,
@@ -58,7 +90,12 @@ CREATE OR REPLACE PROCEDURE ADM.SP_REP_CHEQ_MOTIVO_GET (
     p_CodigoProveedor  IN  NUMBER   DEFAULT NULL,
     p_ResultSet        OUT SYS_REFCURSOR,
     p_Message          OUT VARCHAR2,
-    p_TotalRecords     OUT NUMBER
+    p_TotalRecords     OUT NUMBER,
+    -- 'S' agrega el motivo, la orden de pago y las partidas (requerimiento 23).
+    -- 'N' devuelve MOTIVO nulo y **no llama a ADM_F_GET_PARTIDAS_CHEQUE**, que es
+    -- lo caro del reporte: recorre PRE_V_SALDOS una vez por cheque. Oracle
+    -- cortocircuita el CASE, asi que con 'N' la funcion no se evalua.
+    p_IncluirMotivo    IN  CHAR     DEFAULT 'S'
 ) AS
     v_desde DATE := TRUNC(p_FechaDesde);
     v_hasta DATE := TRUNC(p_FechaHasta) + 1;
@@ -89,8 +126,12 @@ BEGIN
         SELECT F.NOMBRE                                     NOMBRE_BANCO,
                E.NO_CUENTA                                  NUMERO_CUENTA,
                A.FECHA_CHEQUE                               FECHA_CHEQUE,
-               -- Descriptivo del tipo de cheque + numero: 'PAEL 10025',
-               -- 'NDOP 3962026'. ADM_F_DESCRIPTIVAS_ID('A.CODIGO', ...) es un
+               -- Numero de cheque crudo: es lo que imprime el reporte del
+               -- requerimiento 24 en su columna "Nro. CHEQUE".
+               TO_CHAR(A.NUMERO_CHEQUE)                     NUMERO_CHEQUE,
+               -- Descriptivo del tipo de cheque + numero ('PAEL 10025',
+               -- 'NDOP 3962026'): es la columna "Nro. DOCUMENTO" del
+               -- requerimiento 23. ADM_F_DESCRIPTIVAS_ID('A.CODIGO', ...) es un
                -- EXECUTE IMMEDIATE por fila; se sustituye por el join a
                -- ADM_DESCRIPTIVAS, que es lo que la funcion hace por dentro.
                LTRIM(NVL(TCH.CODIGO, ' ') || ' ' || TO_CHAR(A.NUMERO_CHEQUE))
@@ -101,14 +142,16 @@ BEGIN
                                 NVL(A.STATUS, ' '))         ESTATUS_DESC,
                NVL(LTRIM(RTRIM(C.NOMBRE || ' ' || C.APELLIDO)),
                    B.NOMBRE_PROVEEDOR)                      BENEFICIARIO,
-               -- Los anulados salen en negativo, como en el reporte legado y en
-               -- el PDF de muestra. El generador los vuelve a positivo para la
-               -- linea "CHEQUES ANULADOS", igual que hacia CF_1.
+               -- Los anulados salen en negativo, como en los dos reportes
+               -- legados y en sus PDF de muestra. El generador los vuelve a
+               -- positivo para la linea "CHEQUES ANULADOS", igual que hacia CF_1.
                DECODE(A.STATUS, 'AN', -1 * NVL(D.MONTO, 0),
                                       NVL(D.MONTO, 0))      MONTO,
-               A.MOTIVO || ' ' || AA.INFO_OP || '    ' || CHR(13) ||
-                   ADM.ADM_F_GET_PARTIDAS_CHEQUE(A.CODIGO_CHEQUE)
-                                                            MOTIVO
+               CASE WHEN p_IncluirMotivo = 'S'
+                    THEN A.MOTIVO || ' ' || AA.INFO_OP || '    ' || CHR(13) ||
+                         ADM.ADM_F_GET_PARTIDAS_CHEQUE(A.CODIGO_CHEQUE)
+                    ELSE NULL
+               END                                          MOTIVO
           FROM ADM.ADM_CHEQUES A
           JOIN ADM.ADM_PROVEEDORES B
             ON B.CODIGO_PROVEEDOR = A.CODIGO_PROVEEDOR
@@ -139,9 +182,6 @@ BEGIN
            AND (p_NumeroCuenta    IS NULL OR E.NO_CUENTA = p_NumeroCuenta)
            AND (p_Status          IS NULL OR A.STATUS = p_Status)
            AND (p_CodigoProveedor IS NULL OR A.CODIGO_PROVEEDOR = p_CodigoProveedor)
-         -- El banco y la cuenta van primero: el quiebre de grupo se hace en C#
-         -- sobre este orden, y sin ellos delante un mismo banco saldria partido
-         -- en varios bloques. Dentro del grupo se conserva el orden del legado.
          ORDER BY F.NOMBRE, E.NO_CUENTA, A.FECHA_CHEQUE, A.NUMERO_CHEQUE, TCH.CODIGO;
 
     p_Message := 'Success';
@@ -153,6 +193,7 @@ EXCEPTION
             SELECT CAST(NULL AS VARCHAR2(200))  NOMBRE_BANCO,
                    CAST(NULL AS VARCHAR2(50))   NUMERO_CUENTA,
                    CAST(NULL AS DATE)           FECHA_CHEQUE,
+                   CAST(NULL AS VARCHAR2(100))  NUMERO_CHEQUE,
                    CAST(NULL AS VARCHAR2(100))  NUMERO_DOCUMENTO,
                    CAST(NULL AS VARCHAR2(10))   STATUS,
                    CAST(NULL AS VARCHAR2(30))   ESTATUS_DESC,
@@ -161,5 +202,5 @@ EXCEPTION
                    CAST(NULL AS VARCHAR2(4000)) MOTIVO
               FROM DUAL
              WHERE 1 = 0;
-END SP_REP_CHEQ_MOTIVO_GET;
+END SP_REP_CHEQ_PERIODO_GET;
 /

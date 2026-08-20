@@ -4,25 +4,33 @@ using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
 using System.Globalization;
 
-namespace OssmmasoftVerticalSlice.Features.ReporteChequesPeriodoMotivo;
+namespace OssmmasoftVerticalSlice.Features.ReporteChequesPeriodo;
 
 /// <summary>
-/// Relacion de Cheques Emitidos Por Periodos (con Motivo). Requerimiento 23.
+/// Relacion de Cheques Emitidos Por Periodos, en sus dos variantes:
+/// <c>ADM_PERIODOS_CHEQUES1.RDF</c> (requerimiento 24, listado simple) y
+/// <c>ADM_PERIODOS_CHEQUES_MOTIVO1.rdf</c> (requerimiento 23, con motivo).
 ///
-/// Reproduce el layout de <c>ADM_PERIODOS_CHEQUES_MOTIVO1.rdf</c> segun el PDF de
-/// muestra: una seccion por banco/cuenta que arranca en pagina nueva, con el
-/// titulo y el encabezado del banco repetidos en cada pagina de la seccion, la
-/// tabla de cheques con su bloque de motivo debajo de cada fila, y al cierre de
-/// la seccion el recuadro de totales con dos columnas -TOTAL BANCO y TOTAL
-/// GENERAL-.
+/// **Un solo generador para las dos.** Sus layouts son el mismo -mismo titulo,
+/// mismo encabezado de banco, misma tabla, mismo recuadro de totales- y difieren
+/// en exactamente dos cosas, que <c>query.ConMotivo</c> decide: la columna del
+/// numero de documento (numero de cheque crudo, o descriptivo del tipo mas
+/// numero) y el bloque de motivo debajo de cada fila. Escribir dos archivos para
+/// eso duplicaria el encabezado, la tabla y la totalizacion.
+///
+/// Reproduce el layout de los dos PDF de muestra: una seccion por banco/cuenta
+/// que arranca en pagina nueva, con el titulo y el encabezado del banco repetidos
+/// en cada pagina de la seccion, la tabla de cheques, y al cierre de la seccion
+/// el recuadro de totales con dos columnas -TOTAL BANCO y TOTAL GENERAL-.
 ///
 /// **El TOTAL GENERAL se repite en cada seccion y es el del reporte completo**,
-/// no un acumulado parcial. Es lo que hacia el reporte legado con sus columnas de
-/// resumen a nivel de reporte (<c>CS_TOTAL_VALIDOS</c> y compania), y se
-/// comprueba en el PDF de muestra: los tres grupos imprimen el mismo
-/// 44 / 208.234.142,39, que es la suma de los tres subtotales.
+/// no un acumulado parcial. Es lo que hacian los dos reportes legados con sus
+/// columnas de resumen a nivel de reporte (<c>CS_TOTAL_VALIDOS</c> y compania), y
+/// se comprueba en los dos PDF de muestra: sus grupos imprimen todos el mismo
+/// total -44 / 208.234.142,39 en el del requerimiento 23, 69 / 301.329.787,56 en
+/// el del 24-, que es la suma de los subtotales de cada uno.
 /// </summary>
-public static class ReporteChequesMotivoPdfGenerator
+public static class ReporteChequesPeriodoPdfGenerator
 {
     private const string Titulo = "RELACION DE CHEQUES EMITIDOS DURANTE EL PERIODO";
 
@@ -32,8 +40,8 @@ public static class ReporteChequesMotivoPdfGenerator
     private const float AnchoMonto = 100f;
 
     public static byte[] Generate(
-        IReadOnlyList<ReporteChequesMotivoGrupo> grupos,
-        ReporteChequesMotivoQuery query,
+        IReadOnlyList<ReporteChequesPeriodoGrupo> grupos,
+        ReporteChequesPeriodoQuery query,
         ReportPrintContext printContext)
     {
         QuestPDF.Settings.License = LicenseType.Evaluation;
@@ -64,7 +72,7 @@ public static class ReporteChequesMotivoPdfGenerator
                     page.Header().Element(e => Encabezado(e, grupo, periodo, query));
                     page.Content().PaddingTop(6).Column(col =>
                     {
-                        col.Item().Element(e => TablaCheques(e, grupo, culture));
+                        col.Item().Element(e => TablaCheques(e, grupo, culture, query.ConMotivo));
                         col.Item().PaddingTop(10).Element(e => Totalizacion(e, grupo, general, culture));
                     });
                     page.Footer().PaddingTop(4).Element(e =>
@@ -80,9 +88,9 @@ public static class ReporteChequesMotivoPdfGenerator
 
     private static void Encabezado(
         IContainer container,
-        ReporteChequesMotivoGrupo grupo,
+        ReporteChequesPeriodoGrupo grupo,
         string periodo,
-        ReporteChequesMotivoQuery query)
+        ReporteChequesPeriodoQuery query)
     {
         container.Column(col =>
         {
@@ -111,7 +119,10 @@ public static class ReporteChequesMotivoPdfGenerator
     // ------------------------------------------------------------------------
 
     private static void TablaCheques(
-        IContainer container, ReporteChequesMotivoGrupo grupo, CultureInfo culture)
+        IContainer container,
+        ReporteChequesPeriodoGrupo grupo,
+        CultureInfo culture,
+        bool conMotivo)
     {
         container.Table(table =>
         {
@@ -130,7 +141,7 @@ public static class ReporteChequesMotivoPdfGenerator
             table.Header(header =>
             {
                 Cabecera(header, "FECHA", centrar: true);
-                Cabecera(header, "Nro. DOCUMENTO", centrar: true);
+                Cabecera(header, conMotivo ? "Nro. DOCUMENTO" : "Nro. CHEQUE", centrar: true);
                 Cabecera(header, "STATUS", centrar: true);
                 Cabecera(header, "BENEFICIARIO");
                 Cabecera(header, "MONTO Bs.", derecha: true);
@@ -141,7 +152,7 @@ public static class ReporteChequesMotivoPdfGenerator
                 table.Cell().PaddingVertical(1).AlignCenter()
                     .Text(Fecha(item.FechaCheque, culture)).FontSize(6.5f);
                 table.Cell().PaddingVertical(1).AlignCenter()
-                    .Text(item.NumeroDocumento).FontSize(6.5f);
+                    .Text(conMotivo ? item.NumeroDocumento : item.NumeroCheque).FontSize(6.5f);
                 table.Cell().PaddingVertical(1).AlignCenter()
                     .Text(item.EstatusDescripcion).FontSize(6.5f);
                 table.Cell().PaddingVertical(1)
@@ -149,7 +160,7 @@ public static class ReporteChequesMotivoPdfGenerator
                 table.Cell().PaddingVertical(1).AlignRight()
                     .Text(Monto(item.Monto, culture)).FontSize(6.5f);
 
-                if (string.IsNullOrWhiteSpace(item.Motivo))
+                if (!conMotivo || string.IsNullOrWhiteSpace(item.Motivo))
                 {
                     continue;
                 }
@@ -175,7 +186,7 @@ public static class ReporteChequesMotivoPdfGenerator
 
     private static void Totalizacion(
         IContainer container,
-        ReporteChequesMotivoGrupo grupo,
+        ReporteChequesPeriodoGrupo grupo,
         Totales general,
         CultureInfo culture)
     {
@@ -236,7 +247,7 @@ public static class ReporteChequesMotivoPdfGenerator
     /// Subtitulo del reporte. Replica <c>CF_MENBRETE</c>, que concatenaba el
     /// titulo con el rango de fechas.
     /// </summary>
-    private static string ConstruirPeriodo(ReporteChequesMotivoQuery query, CultureInfo culture)
+    private static string ConstruirPeriodo(ReporteChequesPeriodoQuery query, CultureInfo culture)
     {
         var desde = Fecha(query.FechaDesde, culture);
         var hasta = Fecha(query.FechaHasta, culture);
@@ -255,7 +266,7 @@ public static class ReporteChequesMotivoPdfGenerator
     /// pantalla de parametros adjunta. Los que no se usaron no se mencionan: una
     /// linea que diga "banco: todos" es ruido.
     /// </summary>
-    private static string ConstruirFiltros(ReporteChequesMotivoQuery query)
+    private static string ConstruirFiltros(ReporteChequesPeriodoQuery query)
     {
         var partes = new List<string>();
 
