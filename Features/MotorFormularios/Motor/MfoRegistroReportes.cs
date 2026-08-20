@@ -1,6 +1,8 @@
 using OssmmasoftVerticalSlice.ContextDB;
 using OssmmasoftVerticalSlice.Features.BienesMunicipales;
 using OssmmasoftVerticalSlice.Features.ReporteBm1;
+using OssmmasoftVerticalSlice.Features.ReporteRelacionRetencionIva;
+using OssmmasoftVerticalSlice.Helpers;
 
 namespace OssmmasoftVerticalSlice.Features.MotorFormularios;
 
@@ -88,7 +90,14 @@ public static class MfoRegistroReportes
             // Formulario oficial BM-1 (requerimiento 27). Comparte el query de
             // negocio con REPORTE_BM1_PDF pero expone filtros propios, asi que
             // cuelga de su propio formulario de parametros.
-            ["REPORTE_BM1_ESP_PDF"] = EjecutarReporteBm1EspPdf
+            ["REPORTE_BM1_ESP_PDF"] = EjecutarReporteBm1EspPdf,
+
+            // Relacion de Retenciones de IVA por periodos (requerimiento 22).
+            // Primer reporte del dominio ADM que entra por el motor: su pantalla
+            // de parametros -rango de fechas y estatus- es exactamente el caso
+            // para el que existe el modo PARAMETROS, asi que no se codifico a
+            // mano en el frontend.
+            ["REPORTE_RET_IVA_PER_PDF"] = EjecutarReporteRetIvaPerPdf
         };
 
     public static bool EstaRegistrado(string? clave)
@@ -309,6 +318,89 @@ public static class MfoRegistroReportes
         return new MfoResultadoEjecucion(
             bytes,
             $"BM1Especial_{DateTime.Now:yyyyMMdd_HHmmss}.pdf",
+            filas,
+            resultado,
+            mensaje);
+    }
+
+    /// <summary>
+    /// Relacion de Retenciones de IVA por periodos. Requerimiento 22.
+    ///
+    /// Las dos fechas son obligatorias y el motor ya las exige por
+    /// <c>MFO_REP_PARAM.OBLIGATORIO</c>; el handler las vuelve a validar porque
+    /// el endpoint <c>api/ReporteRelacionRetIva/pdf</c> tambien es publico y no
+    /// pasa por aqui.
+    ///
+    /// <c>Usuario</c> se mapea como parametro de origen SISTEMA y **si** se usa:
+    /// es lo que imprime el pie de auditoria del requerimiento 17. Un reporte
+    /// fiscal sin constancia de quien lo emitio es justo lo que ese
+    /// requerimiento vino a cerrar, asi que sin usuario identificado no se
+    /// genera.
+    /// </summary>
+    private static async Task<MfoResultadoEjecucion> EjecutarReporteRetIvaPerPdf(MfoContextoEjecucion contexto)
+    {
+        var usuario = contexto.Param("Usuario")?.Texto;
+
+        if (string.IsNullOrWhiteSpace(usuario))
+        {
+            return MfoResultadoEjecucion.Error(
+                "No se pudo determinar el usuario conectado, requerido para el pie de auditoria del reporte.");
+        }
+
+        var query = new ReporteRelacionRetIvaQuery(
+            FechaDesde: contexto.Param("FechaDesde")?.Fecha,
+            FechaHasta: contexto.Param("FechaHasta")?.Fecha,
+            Estatus: contexto.Param("Estatus")?.Texto,
+            Usuario: usuario);
+
+        var handler = new ReporteRelacionRetIvaHandler(contexto.Conexiones, contexto.Config);
+        var datos = await handler.HandleAsync(query);
+
+        if (!datos.IsValid || datos.Data is null)
+        {
+            return MfoResultadoEjecucion.Error(datos.Message);
+        }
+
+        if (datos.Data.Count == 0)
+        {
+            return MfoResultadoEjecucion.Vacio(
+                "No hay retenciones de IVA en el periodo seleccionado.");
+        }
+
+        var comprobantes = datos.Data;
+        var filas = comprobantes.Sum(c => c.Documentos.Count);
+        var resultado = "OK";
+        var mensaje = string.Empty;
+
+        // El corte se aplica por comprobante completo, igual que el BM-1 corta
+        // por unidad: partir un comprobante a la mitad deja un TOTAL que no
+        // cuadra con las filas impresas, y en un reporte fiscal un total mal es
+        // peor que un reporte truncado.
+        if (contexto.Reporte.MaxFilas is int max && max > 0 && filas > max)
+        {
+            var acumulado = 0;
+            var recortados = new List<ReporteRelacionRetIvaComprobante>();
+
+            foreach (var comprobante in comprobantes)
+            {
+                if (acumulado > 0 && acumulado + comprobante.Documentos.Count > max) break;
+
+                recortados.Add(comprobante);
+                acumulado += comprobante.Documentos.Count;
+            }
+
+            comprobantes = recortados;
+            filas = acumulado;
+            resultado = "TRUNCADO";
+            mensaje = $"Se alcanzo el limite de {max} documentos. Se incluyeron {comprobantes.Count} comprobante(s) completos. Refine el periodo.";
+        }
+
+        var printContext = ReportPrintContext.Create(usuario);
+        var bytes = ReporteRelacionRetIvaPdfGenerator.Generate(comprobantes, query, printContext);
+
+        return new MfoResultadoEjecucion(
+            bytes,
+            $"RelacionRetencionIva_{DateTime.Now:yyyyMMdd_HHmmss}.pdf",
             filas,
             resultado,
             mensaje);
