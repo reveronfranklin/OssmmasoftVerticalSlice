@@ -85,14 +85,23 @@ public class BmBienesFotosController(ConnectionDB connectionDB, IConfiguration c
         var openError = await BmDb.TryOpenAsync(cn, "BM");
         if (openError is not null) return Ok(BmDb.InvalidList<BmBienFotoResponse>(openError));
 
+        // La placa que manda el cliente no se usa como clave de almacenamiento: se
+        // resuelve la canonica (BM_BIENES.NUMERO_PLACA) desde el codigo del bien,
+        // como hacia BmBienesFotoService.AddImage del sistema anterior. La vista
+        // BM_V_BM1 expone un numeroPlaca derivado -SUBSTR+LPAD, y un rango cuando
+        // agrupa-, y guardar ese valor deja la foto en una carpeta que despues nadie
+        // encuentra. Si no se puede resolver se respeta lo enviado, para no rechazar
+        // una carga por un bien que la vista no alcance.
+        var placaCanonica = await ResolverPlacaCanonicaAsync(cn, empresa, codigoBien) ?? numeroPlaca;
+
         var folder = BmDb.GetBmFilesPath(config);
-        var placaFolder = BuildSafeFolderName(numeroPlaca);
+        var placaFolder = BuildSafeFolderName(placaCanonica);
         var targetFolder = Path.Combine(folder, placaFolder);
         Directory.CreateDirectory(targetFolder);
 
         foreach (var file in files.Where(file => file.Length > 0))
         {
-            var fileName = BmDb.BuildSafeFileName(codigoBien, numeroPlaca, file.FileName);
+            var fileName = BmDb.BuildSafeFileName(codigoBien, placaCanonica, file.FileName);
             var fullPath = Path.Combine(targetFolder, fileName);
 
             await using (var stream = System.IO.File.Create(fullPath))
@@ -103,7 +112,7 @@ public class BmBienesFotosController(ConnectionDB connectionDB, IConfiguration c
             using var cmd = BmDb.StoredProcedure("BM.SP_BM_FOTO_INS", cn);
             cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
             cmd.Parameters.Add("p_CodigoBien", OracleDbType.Int32).Value = codigoBien;
-            cmd.Parameters.Add("p_NumeroPlaca", OracleDbType.Varchar2).Value = BmDb.DbValue(numeroPlaca);
+            cmd.Parameters.Add("p_NumeroPlaca", OracleDbType.Varchar2).Value = BmDb.DbValue(placaCanonica);
             cmd.Parameters.Add("p_Foto", OracleDbType.Varchar2).Value = fileName;
             cmd.Parameters.Add("p_Titulo", OracleDbType.Varchar2).Value = BmDb.DbValue(titulo);
             cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
@@ -115,7 +124,7 @@ public class BmBienesFotosController(ConnectionDB connectionDB, IConfiguration c
             }
         }
 
-        return Ok(await GetByPlacaAsync(numeroPlaca));
+        return Ok(await GetByPlacaAsync(placaCanonica));
     }
 
     [HttpPost("Delete")]
@@ -191,6 +200,47 @@ public class BmBienesFotosController(ConnectionDB connectionDB, IConfiguration c
         }
 
         return $"/api/BmBienesFotos/Image?numeroPlaca={Uri.EscapeDataString(numeroPlaca)}&foto={Uri.EscapeDataString(fileName)}";
+    }
+
+    /// <summary>
+    /// Placa canonica del bien: <c>BM_BIENES.NUMERO_PLACA</c>, la misma columna que
+    /// la vista <c>BM_V_BM1</c> expone como <c>NRO_PLACA</c> y con la que se guardan
+    /// las fotos y se nombra su carpeta en <c>BmFiles</c>.
+    ///
+    /// Consulta directa y sin procedimiento propio, como
+    /// <c>ReporteBm1Esp.ObtenerEntidadAsync</c>: es una fila sin logica de negocio.
+    /// Devuelve <c>null</c> si no se puede resolver.
+    /// </summary>
+    private static async Task<string?> ResolverPlacaCanonicaAsync(OracleConnection cn, int empresa, int codigoBien)
+    {
+        try
+        {
+            using var cmd = new OracleCommand(
+                @"SELECT B.NUMERO_PLACA
+                    FROM BM.BM_BIENES B
+                   WHERE B.CODIGO_EMPRESA = :p_CodigoEmpresa
+                     AND B.CODIGO_BIEN = :p_CodigoBien", cn)
+            {
+                BindByName = true
+            };
+
+            cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
+            cmd.Parameters.Add("p_CodigoBien", OracleDbType.Int32).Value = codigoBien;
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            if (!await reader.ReadAsync())
+            {
+                return null;
+            }
+
+            var placa = reader.SafeGetString("NUMERO_PLACA").Trim();
+
+            return string.IsNullOrWhiteSpace(placa) ? null : placa;
+        }
+        catch (OracleException)
+        {
+            return null;
+        }
     }
 
     private static string BuildSafeFolderName(string value)
