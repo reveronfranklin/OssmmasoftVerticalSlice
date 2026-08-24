@@ -123,6 +123,9 @@ public class MfoFormularioController(ConnectionDB connectionDB, IConfiguration c
     [HttpPost("create")]
     public async Task<IActionResult> Create(MfoFormularioCreateRequest request)
     {
+        var superusuario = await MfoAutorizacion.EsSuperusuarioAsync(connectionDB, Usuario);
+        if (!superusuario.Es) return Ok(MfoDb.Invalid<int>(superusuario.Motivo));
+
         if (!MfoDb.TryGetEmpresa(config, out var empresa, out var error))
         {
             return Ok(MfoDb.Invalid<int>(error));

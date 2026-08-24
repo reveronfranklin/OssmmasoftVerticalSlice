@@ -41,19 +41,13 @@ public static class MfoAmbitoDefinicion
     public static async Task<MfoAutorizacion.Resultado> PuedeDisenarAsync(
         ConnectionDB conexiones, Pieza pieza, int id, string? usuario)
     {
-        if (pieza == Pieza.Formulario)
-        {
-            return await MfoAutorizacion.PuedeAsync(conexiones, id, MfoAutorizacion.Disenar, usuario);
-        }
-
-        var formularioId = await ResolverFormularioAsync(conexiones, pieza, id);
-        if (formularioId is null)
-        {
-            return new MfoAutorizacion.Resultado(false, $"El elemento indicado no existe ({pieza}).");
-        }
-
-        return await MfoAutorizacion.PuedeAsync(
-            conexiones, formularioId.Value, MfoAutorizacion.Disenar, usuario);
+        // Toda modificacion de la definicion es administrativa. El permiso
+        // DISENAR legado ya no concede acceso: solo la marca IS_SUPERUSER del
+        // ERP, comprobada en el servidor, autoriza estas operaciones.
+        var superusuario = await MfoAutorizacion.EsSuperusuarioAsync(conexiones, usuario);
+        return superusuario.Es
+            ? new MfoAutorizacion.Resultado(true, string.Empty)
+            : new MfoAutorizacion.Resultado(false, superusuario.Motivo);
     }
 
     public static async Task<int?> ResolverFormularioAsync(
