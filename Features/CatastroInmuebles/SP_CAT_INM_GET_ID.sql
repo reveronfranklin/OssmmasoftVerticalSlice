@@ -1,0 +1,62 @@
+CREATE OR REPLACE PROCEDURE SP_CAT_INM_GET_ID
+(
+  p_CodigoInmueble IN NUMBER,
+  p_CodigoEmpresa  IN NUMBER,
+  p_ResultSet      OUT SYS_REFCURSOR,
+  p_Message        OUT VARCHAR2
+)
+AS
+  v_Count NUMBER;
+BEGIN
+  SELECT COUNT(*)
+    INTO v_Count
+    FROM CAT_INMUEBLES
+   WHERE CODIGO_INMUEBLE = p_CodigoInmueble
+     AND CODIGO_EMPRESA = p_CodigoEmpresa;
+
+  IF v_Count = 0 THEN
+    p_Message := 'No se encontró el inmueble solicitado.';
+    OPEN p_ResultSet FOR
+      SELECT i.CODIGO_INMUEBLE, i.CODIGO_CATASTRO,
+             i.CODIGO_CONTRIBUYENTE, i.NOMBRE_INMUEBLE,
+             i.NUMERO_INMUEBLE, i.AREA, i.VALOR_INMUEBLE,
+             i.VALOR_TERRENO, i.VALOR_CONSTRUCCION,
+             i.CODIGO_PARCELA, i.CODIGO_FICHA, i.OBSERVACION,
+             d.CODIGO_DIRECCION, d.ESTADO_ID, d.MUNICIPIO_ID,
+             d.PARROQUIA_ID, d.SECTOR_ID, d.MANZANA_ID,
+             d.PARCELA_ID, d.VIALIDAD, d.VIVIENDA,
+             d.NUMERO_UNIDAD, d.COMPLEMENTO_DIR, d.PRINCIPAL
+        FROM CAT_INMUEBLES i, CAT_DIRECCIONES d
+       WHERE 1 = 0;
+    RETURN;
+  END IF;
+
+  OPEN p_ResultSet FOR
+    SELECT *
+      FROM (
+        SELECT i.CODIGO_INMUEBLE, i.CODIGO_CATASTRO,
+               i.CODIGO_CONTRIBUYENTE, i.NOMBRE_INMUEBLE,
+               i.NUMERO_INMUEBLE, i.AREA, i.VALOR_INMUEBLE,
+               i.VALOR_TERRENO, i.VALOR_CONSTRUCCION,
+               i.CODIGO_PARCELA, i.CODIGO_FICHA, i.OBSERVACION,
+               d.CODIGO_DIRECCION, d.ESTADO_ID, d.MUNICIPIO_ID,
+               d.PARROQUIA_ID, d.SECTOR_ID, d.MANZANA_ID,
+               d.PARCELA_ID, d.VIALIDAD, d.VIVIENDA,
+               d.NUMERO_UNIDAD, d.COMPLEMENTO_DIR, d.PRINCIPAL
+          FROM CAT_INMUEBLES i, CAT_DIRECCIONES d
+         WHERE i.CODIGO_INMUEBLE = p_CodigoInmueble
+           AND i.CODIGO_EMPRESA = p_CodigoEmpresa
+           AND d.CODIGO_INMUEBLE(+) = i.CODIGO_INMUEBLE
+           AND d.CODIGO_CONTRIBUYENTE(+) = i.CODIGO_CONTRIBUYENTE
+           AND d.CODIGO_EMPRESA(+) = i.CODIGO_EMPRESA
+         ORDER BY NVL(d.PRINCIPAL, 0) DESC, d.CODIGO_DIRECCION
+      )
+     WHERE ROWNUM = 1;
+
+  p_Message := 'success';
+EXCEPTION
+  WHEN OTHERS THEN
+    p_Message := 'Error al consultar el inmueble: ' || SQLERRM;
+    OPEN p_ResultSet FOR SELECT 1 AS CODIGO_INMUEBLE FROM DUAL WHERE 1 = 0;
+END SP_CAT_INM_GET_ID;
+/

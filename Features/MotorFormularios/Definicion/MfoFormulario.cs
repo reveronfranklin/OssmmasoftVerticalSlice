@@ -32,6 +32,11 @@ public class MfoFormularioController(ConnectionDB connectionDB, IConfiguration c
             return Ok(MfoDb.InvalidList<MfoFormularioResponse>(error));
         }
 
+        // El catalogo tambien es una frontera de autorizacion. Filtrarlo solo
+        // en la UI expondria nombres y alias de formularios no asignados a
+        // cualquier cliente que invoque el endpoint directamente.
+        var superusuario = await MfoAutorizacion.EsSuperusuarioAsync(connectionDB, Usuario);
+
         using var cn = connectionDB.GetMfoConnection();
         var openError = await MfoDb.TryOpenAsync(cn);
         if (openError is not null)
@@ -44,6 +49,8 @@ public class MfoFormularioController(ConnectionDB connectionDB, IConfiguration c
         cmd.Parameters.Add("p_SearchText", OracleDbType.Varchar2).Value = MfoDb.DbValue(request.SearchText);
         cmd.Parameters.Add("p_Estado", OracleDbType.Varchar2).Value = MfoDb.DbValue(request.Estado);
         cmd.Parameters.Add("p_ModoUso", OracleDbType.Varchar2).Value = MfoDb.DbValue(request.ModoUso);
+        cmd.Parameters.Add("p_Usuario", OracleDbType.Varchar2).Value = MfoDb.DbValue(Usuario);
+        cmd.Parameters.Add("p_EsSuperuser", OracleDbType.Int32).Value = superusuario.Es ? 1 : 0;
         cmd.Parameters.Add("p_Page", OracleDbType.Int32).Value = request.Page;
         cmd.Parameters.Add("p_PageSize", OracleDbType.Int32).Value = request.PageSize;
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);

@@ -7,6 +7,8 @@ CREATE OR REPLACE PROCEDURE MFO.SP_MFO_FORM_GET_ALL (
     p_SearchText    IN  VARCHAR2,
     p_Estado        IN  VARCHAR2,
     p_ModoUso       IN  VARCHAR2,
+    p_Usuario       IN  VARCHAR2,
+    p_EsSuperuser   IN  NUMBER,
     p_Page          IN  NUMBER,
     p_PageSize      IN  NUMBER,
     p_ResultSet     OUT SYS_REFCURSOR,
@@ -25,6 +27,11 @@ BEGIN
       INTO p_TotalRecords
       FROM MFO_FORMULARIO F
      WHERE F.CODIGO_EMPRESA = p_CodigoEmpresa
+       AND (NVL(p_EsSuperuser, 0) = 1 OR EXISTS (
+            SELECT 1
+              FROM MFO_PERMISO_USR P
+             WHERE P.FORMULARIO_ID = F.FORMULARIO_ID
+               AND UPPER(P.USUARIO) = UPPER(TRIM(p_Usuario))))
        AND (p_Estado   IS NULL OR F.ESTADO   = p_Estado)
        AND (p_ModoUso  IS NULL OR F.MODO_USO = p_ModoUso)
        AND (p_SearchText IS NULL
@@ -62,6 +69,11 @@ BEGIN
                           FROM MFO_FORMULARIO F
                           LEFT JOIN MFO_VERSION V ON V.VERSION_ID = F.VERSION_PUBL_ID
                          WHERE F.CODIGO_EMPRESA = p_CodigoEmpresa
+                           AND (NVL(p_EsSuperuser, 0) = 1 OR EXISTS (
+                                SELECT 1
+                                  FROM MFO_PERMISO_USR P
+                                 WHERE P.FORMULARIO_ID = F.FORMULARIO_ID
+                                   AND UPPER(P.USUARIO) = UPPER(TRIM(p_Usuario))))
                            AND (p_Estado  IS NULL OR F.ESTADO   = p_Estado)
                            AND (p_ModoUso IS NULL OR F.MODO_USO = p_ModoUso)
                            AND (p_SearchText IS NULL
