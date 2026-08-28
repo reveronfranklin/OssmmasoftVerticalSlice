@@ -84,6 +84,12 @@ public class BmConteoController(ConnectionDB connectionDB, IConfiguration config
 
     private async Task<ResultDto<List<BmConteoResponse>>> MutateConteoAsync(string procedureName, BmConteoUpsertRequest request)
     {
+        var validationError = ValidateUpsert(request);
+        if (validationError is not null)
+        {
+            return BmDb.InvalidList<BmConteoResponse>(validationError);
+        }
+
         if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
         {
             return BmDb.InvalidList<BmConteoResponse>(error);
@@ -105,6 +111,31 @@ public class BmConteoController(ConnectionDB connectionDB, IConfiguration config
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
         return await BmDb.ExecuteListAsync(cmd, MapConteo);
+    }
+
+    private static string? ValidateUpsert(BmConteoUpsertRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Titulo))
+        {
+            return "El titulo del conteo es requerido.";
+        }
+
+        if (request.CodigoPersonaResponsable <= 0)
+        {
+            return "Debe seleccionar una persona responsable.";
+        }
+
+        if (request.ConteoId <= 0)
+        {
+            return "Debe seleccionar la cantidad de conteos.";
+        }
+
+        if (request.ListIcpSeleccionado is null || request.ListIcpSeleccionado.All(icp => icp.CodigoIcp <= 0))
+        {
+            return "Debe seleccionar al menos un ICP.";
+        }
+
+        return null;
     }
 
     internal static BmConteoResponse MapConteo(IDataReader reader)

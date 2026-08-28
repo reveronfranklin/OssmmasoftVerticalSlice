@@ -771,7 +771,20 @@ EXCEPTION
     WHEN OTHERS THEN
         p_TotalRecords := 0;
         p_Message := 'Error tecnico: ' || SQLERRM;
-        OPEN p_ResultSet FOR SELECT * FROM BMC.BM_CONTEO WHERE 1 = 0;
+        OPEN p_ResultSet FOR
+            SELECT CAST(NULL AS NUMBER) CODIGO_BM_CONTEO,
+                   CAST(NULL AS VARCHAR2(100)) TITULO,
+                   CAST(NULL AS VARCHAR2(4000)) COMENTARIO,
+                   CAST(NULL AS NUMBER) CODIGO_PERSONA_RESPONSABLE,
+                   CAST(NULL AS VARCHAR2(200)) NOMBRE_PERSONA_RESPONSABLE,
+                   CAST(NULL AS NUMBER) CONTEO_ID,
+                   CAST(NULL AS DATE) FECHA,
+                   CAST(NULL AS NUMBER) CONTEO,
+                   CAST(NULL AS NUMBER) TOTAL_CANTIDAD,
+                   CAST(NULL AS NUMBER) TOTAL_CANTIDAD_CONTADA,
+                   CAST(NULL AS NUMBER) TOTAL_DIFERENCIA
+              FROM DUAL
+             WHERE 1 = 0;
 END SP_BM_CONTEO_INS;
 /
 
