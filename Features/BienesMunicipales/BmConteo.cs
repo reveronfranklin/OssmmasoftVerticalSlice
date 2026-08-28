@@ -110,7 +110,14 @@ public class BmConteoController(ConnectionDB connectionDB, IConfiguration config
         cmd.Parameters.Add("p_CodigosIcp", OracleDbType.Varchar2).Value = BmDb.DbValue(BmDb.ToIcpCsv(request.ListIcpSeleccionado));
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
-        return await BmDb.ExecuteListAsync(cmd, MapConteo);
+        try
+        {
+            return await BmDb.ExecuteListAsync(cmd, MapConteo);
+        }
+        catch (Exception ex)
+        {
+            return BmDb.InvalidList<BmConteoResponse>($"Error tecnico al ejecutar {procedureName}: {ex.Message}");
+        }
     }
 
     private static string? ValidateUpsert(BmConteoUpsertRequest request)
