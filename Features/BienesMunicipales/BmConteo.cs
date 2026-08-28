@@ -3,6 +3,7 @@ using Oracle.ManagedDataAccess.Client;
 using OssmmasoftVerticalSlice.ContextDB;
 using OssmmasoftVerticalSlice.Helpers;
 using System.Data;
+using System.Globalization;
 
 namespace OssmmasoftVerticalSlice.Features.BienesMunicipales;
 
@@ -95,6 +96,18 @@ public class BmConteoController(ConnectionDB connectionDB, IConfiguration config
             return BmDb.InvalidList<BmConteoResponse>(error);
         }
 
+        int? cantidadConteos = null;
+        if (procedureName.EndsWith("_INS", StringComparison.Ordinal))
+        {
+            var cantidadResult = await GetCantidadConteosAsync(empresa, request.ConteoId);
+            if (!cantidadResult.IsValid)
+            {
+                return BmDb.InvalidList<BmConteoResponse>(cantidadResult.Message);
+            }
+
+            cantidadConteos = cantidadResult.Data;
+        }
+
         using var cn = connectionDB.GetBmcConnection();
         var openError = await BmDb.TryOpenAsync(cn, "BMC");
         if (openError is not null) return BmDb.InvalidList<BmConteoResponse>(openError);
@@ -108,6 +121,10 @@ public class BmConteoController(ConnectionDB connectionDB, IConfiguration config
         cmd.Parameters.Add("p_ConteoId", OracleDbType.Int32).Value = request.ConteoId;
         cmd.Parameters.Add("p_Fecha", OracleDbType.Date).Value = BmDb.DbValue(request.Fecha);
         cmd.Parameters.Add("p_CodigosIcp", OracleDbType.Varchar2).Value = BmDb.DbValue(BmDb.ToIcpCsv(request.ListIcpSeleccionado));
+        if (cantidadConteos.HasValue)
+        {
+            cmd.Parameters.Add("p_CantidadConteos", OracleDbType.Int32).Value = cantidadConteos.Value;
+        }
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
         try
@@ -117,6 +134,42 @@ public class BmConteoController(ConnectionDB connectionDB, IConfiguration config
         catch (Exception ex)
         {
             return BmDb.InvalidList<BmConteoResponse>($"Error tecnico al ejecutar {procedureName}: {ex.Message}");
+        }
+    }
+
+    private async Task<ResultDto<int>> GetCantidadConteosAsync(int empresa, int conteoId)
+    {
+        using var cn = connectionDB.GetBmConnection();
+        var openError = await BmDb.TryOpenAsync(cn, "BM");
+        if (openError is not null)
+        {
+            return new ResultDto<int>(0) { IsValid = false, Message = openError };
+        }
+
+        using var cmd = BmDb.StoredProcedure("BM.SP_BM_DESC_GET_TIT", cn);
+        cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
+        cmd.Parameters.Add("p_TituloId", OracleDbType.Int32).Value = 7;
+        cmd.Parameters.Add("p_DescripcionId", OracleDbType.Int32).Value = conteoId;
+        cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
+
+        try
+        {
+            var result = await BmDb.ExecuteListAsync(cmd, reader => reader.SafeGetString("DESCRIPCION"));
+            var descripcion = result.Data?.SingleOrDefault();
+            if (!result.IsValid || !int.TryParse(descripcion, NumberStyles.Integer, CultureInfo.InvariantCulture, out var cantidad) || cantidad < 1)
+            {
+                return new ResultDto<int>(0)
+                {
+                    IsValid = false,
+                    Message = result.IsValid ? "Cantidad de conteos invalida." : result.Message
+                };
+            }
+
+            return new ResultDto<int>(cantidad) { IsValid = true, Message = "Success" };
+        }
+        catch (Exception ex)
+        {
+            return new ResultDto<int>(0) { IsValid = false, Message = $"Error tecnico al consultar cantidad de conteos: {ex.Message}" };
         }
     }
 

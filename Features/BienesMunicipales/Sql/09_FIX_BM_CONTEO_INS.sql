@@ -9,22 +9,15 @@ CREATE OR REPLACE PROCEDURE BMC.SP_BM_CONTEO_INS (
     p_ConteoId IN NUMBER,
     p_Fecha IN DATE,
     p_CodigosIcp IN VARCHAR2,
+    p_CantidadConteos IN NUMBER,
     p_ResultSet OUT SYS_REFCURSOR,
     p_Message OUT VARCHAR2,
     p_TotalRecords OUT NUMBER
 ) AS
     v_Id NUMBER;
     v_Icp VARCHAR2(4000);
-    v_CantidadConteos NUMBER;
 BEGIN
-    SELECT TO_NUMBER(TRIM(D.DESCRIPCION))
-      INTO v_CantidadConteos
-      FROM BM.BM_DESCRIPTIVAS D
-     WHERE D.CODIGO_EMPRESA = p_CodigoEmpresa
-       AND D.TITULO_ID = 7
-       AND D.DESCRIPCION_ID = p_ConteoId;
-
-    IF v_CantidadConteos < 1 THEN
+    IF NVL(p_CantidadConteos, 0) < 1 THEN
         RAISE_APPLICATION_ERROR(-20001, 'Cantidad de conteos invalida');
     END IF;
 
@@ -53,7 +46,7 @@ BEGIN
     );
 
     v_Icp := NVL(p_CodigosIcp, 'TODOS');
-    BMC.BM_P_CONTEO(v_Icp, p_CodigoEmpresa, -1, v_Id, v_CantidadConteos);
+    BMC.BM_P_CONTEO(v_Icp, p_CodigoEmpresa, -1, v_Id, p_CantidadConteos);
     BMC.SP_BM_CONTEO_GET_ALL(
         p_CodigoEmpresa,
         p_ResultSet,
