@@ -68,6 +68,11 @@ public class BmConteoDetalleController(ConnectionDB connectionDB, IConfiguration
 
     private async Task<ResultDto<List<BmConteoDetalleResponse>>> GetDetalleAsync(string procedureName, BmConteoDetalleFilterRequest request)
     {
+        if (request.CodigoBmConteo <= 0)
+        {
+            return BmDb.InvalidList<BmConteoDetalleResponse>("El codigo del conteo es requerido.");
+        }
+
         if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
         {
             return BmDb.InvalidList<BmConteoDetalleResponse>(error);
@@ -82,7 +87,15 @@ public class BmConteoDetalleController(ConnectionDB connectionDB, IConfiguration
         cmd.Parameters.Add("p_CodigoBmConteo", OracleDbType.Int32).Value = request.CodigoBmConteo;
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
-        return await BmDb.ExecuteListAsync(cmd, MapDetalle);
+        try
+        {
+            return await BmDb.ExecuteListAsync(cmd, MapDetalle);
+        }
+        catch (Exception ex)
+        {
+            return BmDb.InvalidList<BmConteoDetalleResponse>(
+                $"Error tecnico al consultar el detalle del conteo: {ex.Message}");
+        }
     }
 
     private static BmConteoDetalleResponse MapDetalle(IDataReader reader)
