@@ -49,6 +49,7 @@ public class BmReplicaConteoService(ConnectionDB connectionDB)
                 try
                 {
                     await ReplaceTableAsync(rhc, rhcTx, "RHC.RH_PERSONAS", personas);
+                    await VerifyRowCountAsync(rhc, rhcTx, "RHC.RH_PERSONAS", personas.Rows.Count);
                     rhcTx.Commit();
                 }
                 catch
@@ -70,6 +71,15 @@ public class BmReplicaConteoService(ConnectionDB connectionDB)
                 await ReplaceTableAsync(bmc, tx, "BMC.BM_MOV_BIENES", movimientos);
                 await ReplaceTableAsync(bmc, tx, "BMC.BM_DIR_BIEN", direcciones);
                 await ReplaceTableAsync(bmc, tx, "BMC.BM_CLASIFICACION_BIENES", clasificaciones);
+                await VerifyRowCountAsync(bmc, tx, "BMC.BM_ARTICULOS", articulos.Rows.Count);
+                await VerifyRowCountAsync(bmc, tx, "BMC.BM_BIENES", bienes.Rows.Count);
+                await VerifyRowCountAsync(bmc, tx, "BMC.BM_MOV_BIENES", movimientos.Rows.Count);
+                await VerifyRowCountAsync(bmc, tx, "BMC.BM_DIR_BIEN", direcciones.Rows.Count);
+                await VerifyRowCountAsync(
+                    bmc,
+                    tx,
+                    "BMC.BM_CLASIFICACION_BIENES",
+                    clasificaciones.Rows.Count);
                 tx.Commit();
             }
             catch
@@ -151,6 +161,26 @@ public class BmReplicaConteoService(ConnectionDB connectionDB)
                 insert.Parameters[index].Value = row.IsNull(index) ? DBNull.Value : row[index];
             }
             await insert.ExecuteNonQueryAsync();
+        }
+    }
+
+    private static async Task VerifyRowCountAsync(
+        OracleConnection cn,
+        OracleTransaction tx,
+        string tableName,
+        int expected)
+    {
+        using var cmd = new OracleCommand($"SELECT COUNT(*) FROM {tableName}", cn)
+        {
+            Transaction = tx,
+            BindByName = true
+        };
+        var value = await cmd.ExecuteScalarAsync();
+        var actual = Convert.ToInt32(value);
+        if (actual != expected)
+        {
+            throw new InvalidOperationException(
+                $"La verificacion de {tableName} fallo. Origen: {expected}; destino: {actual}.");
         }
     }
 
