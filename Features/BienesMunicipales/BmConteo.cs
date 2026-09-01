@@ -99,6 +99,21 @@ public class BmConteoController(ConnectionDB connectionDB, IConfiguration config
         int? cantidadConteos = null;
         if (procedureName.EndsWith("_INS", StringComparison.Ordinal))
         {
+            var selectedIcps = request.ListIcpSeleccionado!
+                .Where(item => item.CodigoIcp > 0)
+                .Select(item => item.CodigoIcp)
+                .Distinct()
+                .ToArray();
+            var sourceValidation = await ValidateIcpsAsync(
+                connectionDB.GetBmConnection(),
+                "BM.BM_DIR_BIEN",
+                selectedIcps,
+                "BM origen");
+            if (sourceValidation is not null)
+            {
+                return BmDb.InvalidList<BmConteoResponse>(sourceValidation);
+            }
+
             var cantidadResult = await GetCantidadConteosAsync(empresa, request.ConteoId);
             if (!cantidadResult.IsValid)
             {
@@ -111,6 +126,24 @@ public class BmConteoController(ConnectionDB connectionDB, IConfiguration config
         using var cn = connectionDB.GetBmcConnection();
         var openError = await BmDb.TryOpenAsync(cn, "BMC");
         if (openError is not null) return BmDb.InvalidList<BmConteoResponse>(openError);
+
+        if (procedureName.EndsWith("_INS", StringComparison.Ordinal))
+        {
+            var selectedIcps = request.ListIcpSeleccionado!
+                .Where(item => item.CodigoIcp > 0)
+                .Select(item => item.CodigoIcp)
+                .Distinct()
+                .ToArray();
+            var targetValidation = await ValidateOpenIcpsAsync(
+                cn,
+                "BMC.BM_DIR_BIEN",
+                selectedIcps,
+                "BMC destino");
+            if (targetValidation is not null)
+            {
+                return BmDb.InvalidList<BmConteoResponse>(targetValidation);
+            }
+        }
 
         using var cmd = BmDb.StoredProcedure(procedureName, cn);
         cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
@@ -171,6 +204,52 @@ public class BmConteoController(ConnectionDB connectionDB, IConfiguration config
         {
             return new ResultDto<int>(0) { IsValid = false, Message = $"Error tecnico al consultar cantidad de conteos: {ex.Message}" };
         }
+    }
+
+    private static async Task<string?> ValidateIcpsAsync(
+        OracleConnection cn,
+        string tableName,
+        IReadOnlyCollection<int> selectedIcps,
+        string connectionName)
+    {
+        using (cn)
+        {
+            var openError = await BmDb.TryOpenAsync(cn, connectionName);
+            if (openError is not null) return openError;
+            return await ValidateOpenIcpsAsync(cn, tableName, selectedIcps, connectionName);
+        }
+    }
+
+    private static async Task<string?> ValidateOpenIcpsAsync(
+        OracleConnection cn,
+        string tableName,
+        IReadOnlyCollection<int> selectedIcps,
+        string connectionName)
+    {
+        var parameters = selectedIcps.Select((_, index) => $":p{index}").ToArray();
+        using var cmd = new OracleCommand(
+            $"SELECT DISTINCT CODIGO_ICP FROM {tableName} WHERE CODIGO_ICP IN ({string.Join(",", parameters)})",
+            cn)
+        {
+            BindByName = true
+        };
+        var index = 0;
+        foreach (var codigoIcp in selectedIcps)
+        {
+            cmd.Parameters.Add($"p{index++}", OracleDbType.Int32).Value = codigoIcp;
+        }
+
+        var found = new HashSet<int>();
+        using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            found.Add(Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture));
+        }
+
+        var missing = selectedIcps.Where(codigoIcp => !found.Contains(codigoIcp)).OrderBy(value => value).ToArray();
+        return missing.Length == 0
+            ? null
+            : $"Los ICP {string.Join(", ", missing)} no existen en BM_DIR_BIEN de {connectionName}. Ejecute la replica y seleccione nuevamente los ICP.";
     }
 
     private static string? ValidateUpsert(BmConteoUpsertRequest request)
