@@ -11,6 +11,8 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 // Registrar nuestra clase de conexión
 builder.Services.AddScoped<ConnectionDB>();
+builder.Services.AddScoped<OssmmasoftVerticalSlice.Features.BienesMunicipales.BmReplicaConteoService>();
+builder.Services.AddHostedService<OssmmasoftVerticalSlice.Features.BienesMunicipales.BmReplicaConteoWorker>();
 
 // Motor de Formularios (requerimiento 16). Singleton y no Scoped a proposito:
 // la cache de definiciones tiene que sobrevivir entre peticiones, que es todo su

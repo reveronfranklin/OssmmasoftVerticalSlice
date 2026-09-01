@@ -296,6 +296,22 @@ en servidores Oracle diferentes: el backend lee con `DefaultConnectionBM` y `Def
 y escribe con `DefaultConnectionBMC`; no requiere database links. No recibe cuerpo. Debe solicitar
 confirmacion al usuario antes de ejecutarse.
 
+La misma operacion se ejecuta automaticamente mediante un worker. Se controla con:
+
+```json
+{
+  "settings": {
+    "ReplicarConteo": "1",
+    "ReplicarConteoIntervaloMinutos": 60
+  }
+}
+```
+
+`ReplicarConteo` acepta `"1"`/`"true"` para habilitar y cualquier otro valor para deshabilitar.
+El worker espera el intervalo antes de la primera ejecucion y vuelve a consultar el indicador en
+cada ciclo. El boton y el worker comparten un bloqueo para que nunca se ejecuten dos replicas al
+mismo tiempo.
+
 Respuesta `data[0]`:
 
 ```json

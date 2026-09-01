@@ -8,20 +8,28 @@ namespace OssmmasoftVerticalSlice.Features.BienesMunicipales;
 
 [ApiController]
 [Route("api/BmReplicaConteo")]
-public class BmReplicaConteoController(ConnectionDB connectionDB) : ControllerBase
+public class BmReplicaConteoController(BmReplicaConteoService service) : ControllerBase
 {
     [HttpPost("Replicar")]
-    public async Task<IActionResult> Replicar()
+    public async Task<IActionResult> Replicar() => Ok(await service.ReplicarAsync());
+}
+
+public class BmReplicaConteoService(ConnectionDB connectionDB)
+{
+    private static readonly SemaphoreSlim ReplicaLock = new(1, 1);
+
+    public async Task<ResultDto<List<BmReplicaConteoResponse>>> ReplicarAsync()
     {
+        await ReplicaLock.WaitAsync();
         try
         {
             using var bm = connectionDB.GetBmConnection();
             var bmError = await BmDb.TryOpenAsync(bm, "BM origen");
-            if (bmError is not null) return Ok(Invalid(bmError));
+            if (bmError is not null) return Invalid(bmError);
 
             using var rh = connectionDB.GetRhConnection();
             var rhError = await BmDb.TryOpenAsync(rh, "RH origen");
-            if (rhError is not null) return Ok(Invalid(rhError));
+            if (rhError is not null) return Invalid(rhError);
 
             var articulos = await ReadTableAsync(bm, "BM.BM_ARTICULOS");
             var bienes = await ReadTableAsync(bm, "BM.BM_BIENES");
@@ -32,7 +40,7 @@ public class BmReplicaConteoController(ConnectionDB connectionDB) : ControllerBa
 
             using var bmc = connectionDB.GetBmcConnection();
             var bmcError = await BmDb.TryOpenAsync(bmc, "BMC destino");
-            if (bmcError is not null) return Ok(Invalid(bmcError));
+            if (bmcError is not null) return Invalid(bmcError);
 
             using var tx = bmc.BeginTransaction();
             try
@@ -59,17 +67,21 @@ public class BmReplicaConteoController(ConnectionDB connectionDB) : ControllerBa
                 clasificaciones.Rows.Count,
                 personas.Rows.Count);
 
-            return Ok(new ResultDto<List<BmReplicaConteoResponse>>(new List<BmReplicaConteoResponse> { response })
+            return new ResultDto<List<BmReplicaConteoResponse>>(new List<BmReplicaConteoResponse> { response })
             {
                 IsValid = true,
                 Message = "Success",
                 CantidadRegistros = articulos.Rows.Count + bienes.Rows.Count + movimientos.Rows.Count
                     + direcciones.Rows.Count + clasificaciones.Rows.Count + personas.Rows.Count
-            });
+            };
         }
         catch (Exception ex)
         {
-            return Ok(Invalid($"Error tecnico al replicar datos: {ex.Message}"));
+            return Invalid($"Error tecnico al replicar datos: {ex.Message}");
+        }
+        finally
+        {
+            ReplicaLock.Release();
         }
     }
 
@@ -130,5 +142,48 @@ public class BmReplicaConteoController(ConnectionDB connectionDB) : ControllerBa
         if (type == typeof(byte[])) return OracleDbType.Raw;
         if (type == typeof(float) || type == typeof(double)) return OracleDbType.Double;
         return OracleDbType.Decimal;
+    }
+}
+
+public class BmReplicaConteoWorker(
+    IServiceScopeFactory scopeFactory,
+    IConfiguration config,
+    ILogger<BmReplicaConteoWorker> logger) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        var minutos = Math.Max(1, config.GetValue<int?>("settings:ReplicarConteoIntervaloMinutos") ?? 60);
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(minutos));
+        logger.LogInformation("Worker de replica BM/BMC iniciado. Intervalo: {Minutos} minutos.", minutos);
+
+        while (await timer.WaitForNextTickAsync(stoppingToken))
+        {
+            var enabled = config["settings:ReplicarConteo"];
+            if (!string.Equals(enabled, "1", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase))
+            {
+                logger.LogInformation("Replica BM/BMC omitida porque settings:ReplicarConteo esta deshabilitado.");
+                continue;
+            }
+
+            try
+            {
+                using var scope = scopeFactory.CreateScope();
+                var service = scope.ServiceProvider.GetRequiredService<BmReplicaConteoService>();
+                var result = await service.ReplicarAsync();
+                if (result.IsValid)
+                {
+                    logger.LogInformation("Replica BM/BMC completada. Registros: {Total}.", result.CantidadRegistros);
+                }
+                else
+                {
+                    logger.LogError("Replica BM/BMC fallo: {Message}", result.Message);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error no controlado en el worker de replica BM/BMC.");
+            }
+        }
     }
 }
