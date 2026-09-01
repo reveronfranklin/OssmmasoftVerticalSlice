@@ -681,7 +681,7 @@ BEGIN
                C.TITULO,
                C.COMENTARIO,
                C.CODIGO_PERSONA_RESPONSABLE,
-               '' NOMBRE_PERSONA_RESPONSABLE,
+               TRIM(NVL(P.NOMBRE, '') || ' ' || NVL(P.APELLIDO, '')) NOMBRE_PERSONA_RESPONSABLE,
                C.CANTIDAD_CONTEOS_ID CONTEO_ID,
                C.FECHA,
                C.CANTIDAD_CONTEOS_ID CONTEO,
@@ -689,6 +689,7 @@ BEGIN
                NVL(S.TOTAL_CANTIDAD_CONTADA, 0) TOTAL_CANTIDAD_CONTADA,
                NVL(S.TOTAL_DIFERENCIA, 0) TOTAL_DIFERENCIA
           FROM BMC.BM_CONTEO C,
+               RH.RH_PERSONAS P,
                (
                 SELECT CODIGO_BM_CONTEO,
                        SUM(NVL(CANTIDAD, 0)) TOTAL_CANTIDAD,
@@ -699,6 +700,8 @@ BEGIN
                  GROUP BY CODIGO_BM_CONTEO
                ) S
          WHERE C.CODIGO_EMPRESA = p_CodigoEmpresa
+           AND P.CODIGO_PERSONA(+) = C.CODIGO_PERSONA_RESPONSABLE
+           AND P.CODIGO_EMPRESA(+) = C.CODIGO_EMPRESA
            AND S.CODIGO_BM_CONTEO(+) = C.CODIGO_BM_CONTEO
          ORDER BY C.FECHA DESC, C.CODIGO_BM_CONTEO DESC;
 
@@ -741,6 +744,8 @@ CREATE OR REPLACE PROCEDURE BMC.SP_BM_CONTEO_INS (
     v_Id NUMBER;
     v_Icp VARCHAR2(4000);
 BEGIN
+    SAVEPOINT SP_BM_CONTEO_INS_START;
+
     IF NVL(p_CantidadConteos, 0) < 1 THEN
         RAISE_APPLICATION_ERROR(-20001, 'Cantidad de conteos invalida');
     END IF;
@@ -774,6 +779,7 @@ BEGIN
     BMC.SP_BM_CONTEO_GET_ALL(p_CodigoEmpresa, p_ResultSet, p_Message, p_TotalRecords);
 EXCEPTION
     WHEN OTHERS THEN
+        ROLLBACK TO SP_BM_CONTEO_INS_START;
         p_TotalRecords := 0;
         p_Message := 'Error tecnico: ' || SQLERRM;
         OPEN p_ResultSet FOR
@@ -833,10 +839,46 @@ CREATE OR REPLACE PROCEDURE BMC.SP_BM_CONTEO_DEL (
     p_Message OUT VARCHAR2,
     p_TotalRecords OUT NUMBER
 ) AS
+    v_Existe NUMBER;
+    v_Iniciados NUMBER;
+    v_Restantes NUMBER;
 BEGIN
+    SAVEPOINT SP_BM_CONTEO_DEL_START;
+
+    SELECT COUNT(*)
+      INTO v_Existe
+      FROM BMC.BM_CONTEO
+     WHERE CODIGO_EMPRESA = p_CodigoEmpresa
+       AND CODIGO_BM_CONTEO = p_CodigoBmConteo;
+
+    IF v_Existe = 0 THEN
+        RAISE_APPLICATION_ERROR(-20003, 'El conteo no existe');
+    END IF;
+
+    SELECT COUNT(*)
+      INTO v_Iniciados
+      FROM BMC.BM_CONTEO_DETALLE
+     WHERE CODIGO_EMPRESA = p_CodigoEmpresa
+       AND CODIGO_BM_CONTEO = p_CodigoBmConteo
+       AND NVL(CANTIDAD_CONTADA, 0) > 0;
+
+    IF v_Iniciados > 0 THEN
+        RAISE_APPLICATION_ERROR(-20004, 'No puede eliminar un conteo iniciado');
+    END IF;
+
     DELETE FROM BMC.BM_CONTEO_DETALLE
      WHERE CODIGO_EMPRESA = p_CodigoEmpresa
        AND CODIGO_BM_CONTEO = p_CodigoBmConteo;
+
+    SELECT COUNT(*)
+      INTO v_Restantes
+      FROM BMC.BM_CONTEO_DETALLE
+     WHERE CODIGO_EMPRESA = p_CodigoEmpresa
+       AND CODIGO_BM_CONTEO = p_CodigoBmConteo;
+
+    IF v_Restantes > 0 THEN
+        RAISE_APPLICATION_ERROR(-20005, 'No se pudo eliminar el detalle del conteo');
+    END IF;
 
     DELETE FROM BMC.BM_CONTEO
      WHERE CODIGO_EMPRESA = p_CodigoEmpresa
@@ -845,6 +887,7 @@ BEGIN
     BMC.SP_BM_CONTEO_GET_ALL(p_CodigoEmpresa, p_ResultSet, p_Message, p_TotalRecords);
 EXCEPTION
     WHEN OTHERS THEN
+        ROLLBACK TO SP_BM_CONTEO_DEL_START;
         p_TotalRecords := 0;
         p_Message := 'Error tecnico: ' || SQLERRM;
         OPEN p_ResultSet FOR SELECT * FROM BMC.BM_CONTEO WHERE 1 = 0;
@@ -911,7 +954,36 @@ BEGIN
               C.CODIGO_EMPRESA,
               C.COMENTARIO;
 
-    INSERT INTO BMC.BM_CONTEO_DETALLE_HISTORICO
+    INSERT INTO BMC.BM_CONTEO_DETALLE_HISTORICO (
+        CODIGO_BM_CONTEO,
+        CONTEO,
+        CODIGO_ICP,
+        UNIDAD_TRABAJO,
+        CODIGO_GRUPO,
+        CODIGO_NIVEL1,
+        CODIGO_NIVEL2,
+        NUMERO_LOTE,
+        CANTIDAD,
+        NUMERO_PLACA,
+        VALOR_ACTUAL,
+        ARTICULO,
+        ESPECIFICACION,
+        SERVICIO,
+        RESPONSABLE_BIEN,
+        FECHA_MOVIMIENTO,
+        CODIGO_BIEN,
+        CODIGO_MOV_BIEN,
+        CANTIDAD_CONTADA,
+        DIFERENCIA,
+        CODIGO_EMPRESA,
+        USUARIO_INS,
+        FECHA_INS,
+        USUARIO_UPD,
+        FECHA_UPD,
+        COMENTARIO,
+        REPLICAR_COMENTARIO,
+        CODIGO_BM_CONTEO_MOTIVO
+    )
     SELECT CODIGO_BM_CONTEO,
            CONTEO,
            CODIGO_ICP,
@@ -938,7 +1010,7 @@ BEGIN
            USUARIO_UPD,
            FECHA_UPD,
            COMENTARIO,
-           REPLICAR_MOTIVO,
+           REPLICAR_COMENTARIO,
            CODIGO_BM_CONTEO_MOTIVO
       FROM BMC.BM_CONTEO_DETALLE
      WHERE CODIGO_EMPRESA = p_CodigoEmpresa
@@ -1005,7 +1077,7 @@ BEGIN
                D.CODIGO_BIEN,
                D.CODIGO_MOV_BIEN,
                C.FECHA,
-               NVL(D.REPLICAR_MOTIVO, 0) REPLICAR_COMENTARIO
+               NVL(D.REPLICAR_COMENTARIO, 0) REPLICAR_COMENTARIO
           FROM BMC.BM_CONTEO_DETALLE D,
                BMC.BM_CONTEO C
          WHERE D.CODIGO_EMPRESA = p_CodigoEmpresa
@@ -1056,7 +1128,7 @@ BEGIN
        SET CANTIDAD_CONTADA = p_CantidadContada,
            DIFERENCIA = NVL(CANTIDAD, 0) - NVL(p_CantidadContada, 0),
            COMENTARIO = p_Comentario,
-           REPLICAR_MOTIVO = p_ReplicarComentario,
+           REPLICAR_COMENTARIO = p_ReplicarComentario,
            FECHA_UPD = SYSDATE
      WHERE CODIGO_EMPRESA = p_CodigoEmpresa
        AND CODIGO_BM_CONTEO_DETALLE = p_CodigoDetalle;
@@ -1064,7 +1136,7 @@ BEGIN
     IF p_ReplicarComentario = 1 THEN
         UPDATE BMC.BM_CONTEO_DETALLE
            SET COMENTARIO = p_Comentario,
-               REPLICAR_MOTIVO = p_ReplicarComentario,
+               REPLICAR_COMENTARIO = p_ReplicarComentario,
                FECHA_UPD = SYSDATE
          WHERE CODIGO_EMPRESA = p_CodigoEmpresa
            AND CODIGO_BM_CONTEO = v_Conteo;
@@ -1146,15 +1218,18 @@ BEGIN
                H.TITULO,
                H.COMENTARIO,
                H.CODIGO_PERSONA_RESPONSABLE,
-               '' NOMBRE_PERSONA_RESPONSABLE,
+               TRIM(NVL(P.NOMBRE, '') || ' ' || NVL(P.APELLIDO, '')) NOMBRE_PERSONA_RESPONSABLE,
                H.CANTIDAD_CONTEOS_ID CONTEO_ID,
                H.FECHA,
                H.CANTIDAD_CONTEOS_ID CONTEO,
                H.TOTAL_CANTIDAD,
                H.TOTAL_CANTIDAD_CONTADA,
                H.TOTAL_DIFERENCIA
-          FROM BMC.BM_CONTEO_HISTORICO H
+          FROM BMC.BM_CONTEO_HISTORICO H,
+               RH.RH_PERSONAS P
          WHERE H.CODIGO_EMPRESA = p_CodigoEmpresa
+           AND P.CODIGO_PERSONA(+) = H.CODIGO_PERSONA_RESPONSABLE
+           AND P.CODIGO_EMPRESA(+) = H.CODIGO_EMPRESA
          ORDER BY H.FECHA_CIERRE DESC;
 
     p_Message := 'Success';
@@ -1168,7 +1243,7 @@ END SP_BM_CONT_HIST_GET;
 
 CREATE OR REPLACE PROCEDURE BMC.SP_BM_UBI_RESP_GET (
     p_CodigoEmpresa IN NUMBER,
-    p_CodigoUsuario IN NUMBER,
+    p_UsuarioResponsable IN VARCHAR2,
     p_ResultSet OUT SYS_REFCURSOR,
     p_Message OUT VARCHAR2,
     p_TotalRecords OUT NUMBER
@@ -1177,7 +1252,7 @@ BEGIN
     SELECT COUNT(*)
       INTO p_TotalRecords
       FROM BMC.BM_V_UBICA_RESPONSABLE V
-     WHERE p_CodigoUsuario = 0 OR V.CODIGO_USUARIO = p_CodigoUsuario;
+     WHERE UPPER(V.LOGIN) = UPPER(TRIM(p_UsuarioResponsable));
 
     OPEN p_ResultSet FOR
         SELECT V.CODIGO_BM_CONTEO,
@@ -1190,10 +1265,10 @@ BEGIN
                V.CODIGO_PERSONA,
                V.LOGIN,
                V.CEDULA,
-               V.CODIGO_BM_CONTEO || '-' || V.CONTEO || '-' || V.UNIDAD_TRABAJO DESCRIPCION,
-               V.CODIGO_BM_CONTEO || '-' || V.CONTEO || '-' || V.UNIDAD_TRABAJO KEY_UBICACION_RESPONSABLE
+               'Conteo:' || V.CONTEO || '-' || V.UNIDAD_TRABAJO DESCRIPCION,
+               V.CODIGO_BM_CONTEO || '-' || V.CONTEO || '-' || V.CODIGO_DIR_BIEN KEY_UBICACION_RESPONSABLE
           FROM BMC.BM_V_UBICA_RESPONSABLE V
-         WHERE p_CodigoUsuario = 0 OR V.CODIGO_USUARIO = p_CodigoUsuario
+         WHERE UPPER(V.LOGIN) = UPPER(TRIM(p_UsuarioResponsable))
          ORDER BY V.TITULO, V.UNIDAD_TRABAJO;
 
     p_Message := 'Success';

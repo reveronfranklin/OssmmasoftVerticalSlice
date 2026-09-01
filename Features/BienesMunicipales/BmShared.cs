@@ -165,7 +165,7 @@ public record BmConteoRecibeItemRequest(
     int UbicacionFisica
 );
 
-public record BmUbicacionResponsableRequest(int CodigoUsuario);
+public record BmUbicacionResponsableRequest(string UsuarioResponsable);
 
 public record BmUbicacionResponsableResponse(
     int CodigoBmConteo,

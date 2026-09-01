@@ -17,6 +17,8 @@ CREATE OR REPLACE PROCEDURE BMC.SP_BM_CONTEO_INS (
     v_Id NUMBER;
     v_Icp VARCHAR2(4000);
 BEGIN
+    SAVEPOINT SP_BM_CONTEO_INS_START;
+
     IF NVL(p_CantidadConteos, 0) < 1 THEN
         RAISE_APPLICATION_ERROR(-20001, 'Cantidad de conteos invalida');
     END IF;
@@ -55,6 +57,7 @@ BEGIN
     );
 EXCEPTION
     WHEN OTHERS THEN
+        ROLLBACK TO SP_BM_CONTEO_INS_START;
         p_TotalRecords := 0;
         p_Message := 'Error tecnico: ' || SQLERRM;
         OPEN p_ResultSet FOR

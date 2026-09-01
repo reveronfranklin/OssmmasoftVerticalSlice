@@ -294,11 +294,12 @@ Request:
 
 ```json
 {
-  "codigoUsuario": 1
+  "usuarioResponsable": "nombre.login"
 }
 ```
 
-Devuelve conteos/ubicaciones disponibles para captura movil.
+Devuelve conteos/ubicaciones disponibles para captura movil. Conserva la logica legacy: el filtro
+se realiza por `LOGIN`, sin distinguir mayusculas y minusculas.
 
 ## Historico
 

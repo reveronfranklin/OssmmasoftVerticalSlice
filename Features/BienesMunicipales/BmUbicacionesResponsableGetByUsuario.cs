@@ -12,6 +12,11 @@ public class BmUbicacionesResponsableController(ConnectionDB connectionDB, IConf
     [HttpPost("GetByUsuarioResponsable")]
     public async Task<IActionResult> GetByUsuarioResponsable(BmUbicacionResponsableRequest request)
     {
+        if (string.IsNullOrWhiteSpace(request.UsuarioResponsable))
+        {
+            return Ok(BmDb.InvalidList<BmUbicacionResponsableResponse>("UsuarioResponsable es requerido."));
+        }
+
         if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
         {
             return Ok(BmDb.InvalidList<BmUbicacionResponsableResponse>(error));
@@ -23,7 +28,7 @@ public class BmUbicacionesResponsableController(ConnectionDB connectionDB, IConf
 
         using var cmd = BmDb.StoredProcedure("BMC.SP_BM_UBI_RESP_GET", cn);
         cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
-        cmd.Parameters.Add("p_CodigoUsuario", OracleDbType.Int32).Value = request.CodigoUsuario;
+        cmd.Parameters.Add("p_UsuarioResponsable", OracleDbType.Varchar2).Value = request.UsuarioResponsable.Trim();
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
         return Ok(await BmDb.ExecuteListAsync(cmd, reader => new BmUbicacionResponsableResponse(
