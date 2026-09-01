@@ -31,19 +31,27 @@ public class BmUbicacionesResponsableController(ConnectionDB connectionDB, IConf
         cmd.Parameters.Add("p_UsuarioResponsable", OracleDbType.Varchar2).Value = request.UsuarioResponsable.Trim();
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
-        return Ok(await BmDb.ExecuteListAsync(cmd, reader => new BmUbicacionResponsableResponse(
-            reader.SafeGetInt32("CODIGO_BM_CONTEO"),
-            reader.SafeGetInt32("CONTEO"),
-            reader.SafeGetString("TITULO"),
-            reader.SafeGetInt32("CODIGO_DIR_BIEN"),
-            reader.SafeGetInt32("CODIGO_ICP"),
-            reader.SafeGetString("UNIDAD_EJECUTORA"),
-            reader.SafeGetInt32("CODIGO_USUARIO"),
-            reader.SafeGetInt32("CODIGO_PERSONA"),
-            reader.SafeGetString("LOGIN"),
-            reader.SafeGetInt32("CEDULA"),
-            reader.SafeGetString("DESCRIPCION"),
-            reader.SafeGetString("KEY_UBICACION_RESPONSABLE")
-        )));
+        try
+        {
+            return Ok(await BmDb.ExecuteListAsync(cmd, reader => new BmUbicacionResponsableResponse(
+                reader.SafeGetInt32("CODIGO_BM_CONTEO"),
+                reader.SafeGetInt32("CONTEO"),
+                reader.SafeGetString("TITULO"),
+                reader.SafeGetInt32("CODIGO_DIR_BIEN"),
+                reader.SafeGetInt32("CODIGO_ICP"),
+                reader.SafeGetString("UNIDAD_EJECUTORA"),
+                reader.SafeGetInt32("CODIGO_USUARIO"),
+                reader.SafeGetInt32("CODIGO_PERSONA"),
+                reader.SafeGetString("LOGIN"),
+                reader.SafeGetInt32("CEDULA"),
+                reader.SafeGetString("DESCRIPCION"),
+                reader.SafeGetString("KEY_UBICACION_RESPONSABLE")
+            )));
+        }
+        catch (Exception ex)
+        {
+            return Ok(BmDb.InvalidList<BmUbicacionResponsableResponse>(
+                $"Error tecnico al consultar conteos del responsable: {ex.Message}"));
+        }
     }
 }
