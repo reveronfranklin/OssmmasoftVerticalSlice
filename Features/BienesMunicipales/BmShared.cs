@@ -167,6 +167,15 @@ public record BmConteoRecibeItemRequest(
 
 public record BmUbicacionResponsableRequest(string UsuarioResponsable);
 
+public record BmReplicaConteoResponse(
+    int Articulos,
+    int Bienes,
+    int Movimientos,
+    int Direcciones,
+    int Clasificaciones,
+    int Personas
+);
+
 public record BmUbicacionResponsableResponse(
     int CodigoBmConteo,
     int Conteo,

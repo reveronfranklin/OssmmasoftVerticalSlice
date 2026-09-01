@@ -288,6 +288,27 @@ Nota: el primer corte recibe el lote y responde `Success`. La normalizacion defi
 
 ## Ubicaciones por responsable
 
+### `POST api/BmReplicaConteo/Replicar`
+
+Reemplaza las tablas replica de BMC con los datos maestros actuales de BM y RH, conservando el
+proceso previo a la creacion de conteos del sistema legacy. Los origenes y el destino pueden estar
+en servidores Oracle diferentes: el backend lee con `DefaultConnectionBM` y `DefaultConnectionRH`,
+y escribe con `DefaultConnectionBMC`; no requiere database links. No recibe cuerpo. Debe solicitar
+confirmacion al usuario antes de ejecutarse.
+
+Respuesta `data[0]`:
+
+```json
+{
+  "articulos": 100,
+  "bienes": 500,
+  "movimientos": 800,
+  "direcciones": 25,
+  "clasificaciones": 40,
+  "personas": 1200
+}
+```
+
 ### `POST api/BmUbicacionesResponsable/GetByUsuarioResponsable`
 
 Request:
