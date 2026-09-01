@@ -293,7 +293,9 @@ Nota: el primer corte recibe el lote y responde `Success`. La normalizacion defi
 Reemplaza las tablas replica de BMC con los datos maestros actuales de BM y RH, conservando el
 proceso previo a la creacion de conteos del sistema legacy. Los origenes y el destino pueden estar
 en servidores Oracle diferentes: el backend lee con `DefaultConnectionBM` y `DefaultConnectionRH`,
-y escribe con `DefaultConnectionBMC`; no requiere database links. No recibe cuerpo. Debe solicitar
+y escribe los maestros BM con `DefaultConnectionBMC` y las personas con `DefaultConnectionRHC`;
+no requiere database links. En el servidor destino, el sinonimo publico `RH_PERSONAS` consumido por
+`BMC.BM_V_UBICA_RESPONSABLE` debe apuntar a `RHC.RH_PERSONAS`. No recibe cuerpo. Debe solicitar
 confirmacion al usuario antes de ejecutarse.
 
 La misma operacion se ejecuta automaticamente mediante un worker. Se controla con:

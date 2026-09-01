@@ -38,6 +38,26 @@ public class BmReplicaConteoService(ConnectionDB connectionDB)
             var clasificaciones = await ReadTableAsync(bm, "BM.BM_CLASIFICACION_BIENES");
             var personas = await ReadTableAsync(rh, "RH.RH_PERSONAS");
 
+            // Legacy usa una conexion distinta para la replica de personas: RH es
+            // el origen y RHC es el esquema replica en el servidor de conteo.
+            using var rhc = connectionDB.GetRhcConnection();
+            var rhcError = await BmDb.TryOpenAsync(rhc, "RHC destino");
+            if (rhcError is not null) return Invalid(rhcError);
+
+            using (var rhcTx = rhc.BeginTransaction())
+            {
+                try
+                {
+                    await ReplaceTableAsync(rhc, rhcTx, "RHC.RH_PERSONAS", personas);
+                    rhcTx.Commit();
+                }
+                catch
+                {
+                    rhcTx.Rollback();
+                    throw;
+                }
+            }
+
             using var bmc = connectionDB.GetBmcConnection();
             var bmcError = await BmDb.TryOpenAsync(bmc, "BMC destino");
             if (bmcError is not null) return Invalid(bmcError);
@@ -50,7 +70,6 @@ public class BmReplicaConteoService(ConnectionDB connectionDB)
                 await ReplaceTableAsync(bmc, tx, "BMC.BM_MOV_BIENES", movimientos);
                 await ReplaceTableAsync(bmc, tx, "BMC.BM_DIR_BIEN", direcciones);
                 await ReplaceTableAsync(bmc, tx, "BMC.BM_CLASIFICACION_BIENES", clasificaciones);
-                await ReplaceTableAsync(bmc, tx, "BMC.RH_PERSONAS", personas);
                 tx.Commit();
             }
             catch

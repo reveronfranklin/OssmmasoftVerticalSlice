@@ -23,9 +23,14 @@ public class ConnectionDB(IConfiguration _config)
     {
         return new OracleConnection(_config.GetConnectionString("DefaultConnectionADM"));
     }
-      public OracleConnection GetRhConnection()
+    public OracleConnection GetRhConnection()
     {
         return new OracleConnection(_config.GetConnectionString("DefaultConnectionRH"));
+    }
+
+    public OracleConnection GetRhcConnection()
+    {
+        return new OracleConnection(_config.GetConnectionString("DefaultConnectionRHC"));
     }
 
     public OracleConnection GetSisConnection()
