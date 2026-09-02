@@ -99,21 +99,6 @@ public class BmConteoController(ConnectionDB connectionDB, IConfiguration config
         int? cantidadConteos = null;
         if (procedureName.EndsWith("_INS", StringComparison.Ordinal))
         {
-            var selectedIcps = request.ListIcpSeleccionado!
-                .Where(item => item.CodigoIcp > 0)
-                .Select(item => item.CodigoIcp)
-                .Distinct()
-                .ToArray();
-            var sourceValidation = await ValidateIcpsAsync(
-                connectionDB.GetBmConnection(),
-                "BM.BM_DIR_BIEN",
-                selectedIcps,
-                "BM origen");
-            if (sourceValidation is not null)
-            {
-                return BmDb.InvalidList<BmConteoResponse>(sourceValidation);
-            }
-
             var cantidadResult = await GetCantidadConteosAsync(empresa, request.ConteoId);
             if (!cantidadResult.IsValid)
             {
@@ -203,20 +188,6 @@ public class BmConteoController(ConnectionDB connectionDB, IConfiguration config
         catch (Exception ex)
         {
             return new ResultDto<int>(0) { IsValid = false, Message = $"Error tecnico al consultar cantidad de conteos: {ex.Message}" };
-        }
-    }
-
-    private static async Task<string?> ValidateIcpsAsync(
-        OracleConnection cn,
-        string tableName,
-        IReadOnlyCollection<int> selectedIcps,
-        string connectionName)
-    {
-        using (cn)
-        {
-            var openError = await BmDb.TryOpenAsync(cn, connectionName);
-            if (openError is not null) return openError;
-            return await ValidateOpenIcpsAsync(cn, tableName, selectedIcps, connectionName);
         }
     }
 

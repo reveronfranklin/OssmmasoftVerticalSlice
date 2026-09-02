@@ -288,6 +288,11 @@ Nota: el primer corte recibe el lote y responde `Success`. La normalizacion defi
 
 ## Ubicaciones por responsable
 
+El catalogo `GET api/Bm1/GetListICP` usado al crear conteos consulta
+`BMC.SP_BM1_GET_LIST_ICP` mediante `DefaultConnectionBMC`. La fuente es
+`BMC.BM_V_BM1`, para que el selector y `BMC.BM_P_CONTEO` trabajen sobre la
+misma fotografia replicada y no mezclen datos del servidor BM origen.
+
 ### `POST api/BmReplicaConteo/Replicar`
 
 Reemplaza las tablas replica de BMC con los datos maestros actuales de BM y RH, conservando el

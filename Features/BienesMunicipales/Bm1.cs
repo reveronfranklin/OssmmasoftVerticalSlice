@@ -19,11 +19,11 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config, IWe
             return Ok(BmDb.InvalidList<BmIcpResponse>(error));
         }
 
-        using var cn = connectionDB.GetBmConnection();
-        var openError = await BmDb.TryOpenAsync(cn, "BM");
+        using var cn = connectionDB.GetBmcConnection();
+        var openError = await BmDb.TryOpenAsync(cn, "BMC");
         if (openError is not null) return Ok(BmDb.InvalidList<BmIcpResponse>(openError));
 
-        using var cmd = BmDb.StoredProcedure("BM.SP_BM1_GET_LIST_ICP", cn);
+        using var cmd = BmDb.StoredProcedure("BMC.SP_BM1_GET_LIST_ICP", cn);
         cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
