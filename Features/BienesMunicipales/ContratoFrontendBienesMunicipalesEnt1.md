@@ -314,7 +314,8 @@ La misma operacion se ejecuta automaticamente mediante un worker. Se controla co
 }
 ```
 
-`ReplicarConteo` acepta `"1"`/`"true"` para habilitar y cualquier otro valor para deshabilitar.
+`ReplicarConteo` acepta exclusivamente `"1"` para habilitar. Cualquier otro valor deshabilita
+la replica tanto para el endpoint manual como para el worker.
 El worker espera el intervalo antes de la primera ejecucion y vuelve a consultar el indicador en
 cada ciclo. El boton y el worker comparten un bloqueo para que nunca se ejecuten dos replicas al
 mismo tiempo.

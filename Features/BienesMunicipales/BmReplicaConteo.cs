@@ -14,15 +14,29 @@ public class BmReplicaConteoController(BmReplicaConteoService service) : Control
     public async Task<IActionResult> Replicar() => Ok(await service.ReplicarAsync());
 }
 
-public class BmReplicaConteoService(ConnectionDB connectionDB)
+public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration config)
 {
     private static readonly SemaphoreSlim ReplicaLock = new(1, 1);
 
     public async Task<ResultDto<List<BmReplicaConteoResponse>>> ReplicarAsync()
     {
+        if (!string.Equals(config["settings:ReplicarConteo"], "1", StringComparison.OrdinalIgnoreCase))
+        {
+            return Invalid(
+                "La replica de conteo esta deshabilitada en la configuracion (settings:ReplicarConteo)."
+            );
+        }
+
         await ReplicaLock.WaitAsync();
         try
         {
+            if (!string.Equals(config["settings:ReplicarConteo"], "1", StringComparison.OrdinalIgnoreCase))
+            {
+                return Invalid(
+                    "La replica de conteo fue deshabilitada antes de iniciar su ejecucion."
+                );
+            }
+
             using var bm = connectionDB.GetBmConnection();
             var bmError = await BmDb.TryOpenAsync(bm, "BM origen");
             if (bmError is not null) return Invalid(bmError);
@@ -208,8 +222,7 @@ public class BmReplicaConteoWorker(
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
             var enabled = config["settings:ReplicarConteo"];
-            if (!string.Equals(enabled, "1", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(enabled, "1", StringComparison.OrdinalIgnoreCase))
             {
                 logger.LogInformation("Replica BM/BMC omitida porque settings:ReplicarConteo esta deshabilitado.");
                 continue;

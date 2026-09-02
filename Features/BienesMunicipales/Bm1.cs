@@ -27,10 +27,18 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config, IWe
         cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
-        return Ok(await BmDb.ExecuteListAsync(cmd, reader => new BmIcpResponse(
-            reader.SafeGetInt32("CODIGO_ICP"),
-            reader.SafeGetString("UNIDAD_TRABAJO")
-        )));
+        try
+        {
+            return Ok(await BmDb.ExecuteListAsync(cmd, reader => new BmIcpResponse(
+                reader.SafeGetInt32("CODIGO_ICP"),
+                reader.SafeGetString("UNIDAD_TRABAJO")
+            )));
+        }
+        catch (Exception ex)
+        {
+            return Ok(BmDb.InvalidList<BmIcpResponse>(
+                $"Error tecnico al consultar ICP en BMC: {ex.Message}"));
+        }
     }
 
     [HttpGet("GetPlacas")]
