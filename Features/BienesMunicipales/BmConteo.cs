@@ -157,14 +157,14 @@ public class BmConteoController(ConnectionDB connectionDB, IConfiguration config
 
     private async Task<ResultDto<int>> GetCantidadConteosAsync(int empresa, int conteoId)
     {
-        using var cn = connectionDB.GetBmConnection();
-        var openError = await BmDb.TryOpenAsync(cn, "BM");
+        using var cn = connectionDB.GetBmcConnection();
+        var openError = await BmDb.TryOpenAsync(cn, "BMC");
         if (openError is not null)
         {
             return new ResultDto<int>(0) { IsValid = false, Message = openError };
         }
 
-        using var cmd = BmDb.StoredProcedure("BM.SP_BM_DESC_GET_TIT", cn);
+        using var cmd = BmDb.StoredProcedure("BMC.SP_BM_DESC_GET_TIT", cn);
         cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
         cmd.Parameters.Add("p_TituloId", OracleDbType.Int32).Value = 7;
         cmd.Parameters.Add("p_DescripcionId", OracleDbType.Int32).Value = conteoId;

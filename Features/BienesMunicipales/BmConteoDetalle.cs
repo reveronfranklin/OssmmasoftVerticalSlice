@@ -48,6 +48,11 @@ public class BmConteoDetalleController(ConnectionDB connectionDB, IConfiguration
     [HttpPost("RecibeConteo")]
     public async Task<IActionResult> RecibeConteo(List<BmConteoRecibeItemRequest> request)
     {
+        if (request.Count == 0)
+        {
+            return Ok(BmDb.InvalidList<BmConteoDetalleResponse>("Debe enviar al menos una placa para contabilizar."));
+        }
+
         if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
         {
             return Ok(BmDb.InvalidList<BmConteoDetalleResponse>(error));
@@ -63,7 +68,14 @@ public class BmConteoDetalleController(ConnectionDB connectionDB, IConfiguration
             string.Join("|", item.Id, item.NroPlaca, item.UbicacionFisica, item.CodigoDirBien, item.KeyUbicacionResponsable)));
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
-        return Ok(await BmDb.ExecuteListAsync(cmd, MapDetalle));
+        var result = await BmDb.ExecuteListAsync(cmd, MapDetalle);
+        if (result.IsValid && result.CantidadRegistros != request.Count)
+        {
+            return Ok(BmDb.InvalidList<BmConteoDetalleResponse>(
+                $"Se recibieron {request.Count} placas, pero solo se contabilizaron {result.CantidadRegistros}."));
+        }
+
+        return Ok(result);
     }
 
     private async Task<ResultDto<List<BmConteoDetalleResponse>>> GetDetalleAsync(string procedureName, BmConteoDetalleFilterRequest request)

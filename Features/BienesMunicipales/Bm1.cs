@@ -171,11 +171,11 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config, IWe
             return Ok(BmDb.InvalidList<BmProductMobileResponse>(error));
         }
 
-        using var cn = connectionDB.GetBmConnection();
-        var openError = await BmDb.TryOpenAsync(cn, "BM");
+        using var cn = connectionDB.GetBmcConnection();
+        var openError = await BmDb.TryOpenAsync(cn, "BMC");
         if (openError is not null) return Ok(BmDb.InvalidList<BmProductMobileResponse>(openError));
 
-        using var cmd = BmDb.StoredProcedure("BM.SP_BM1_GET_PRODUCT_MOB", cn);
+        using var cmd = BmDb.StoredProcedure("BMC.SP_BM1_GET_PRODUCT_MOB", cn);
         var searchText = string.IsNullOrWhiteSpace(request.SearchText) ? request.SearhText : request.SearchText;
         var page = request.Page > 0 ? request.Page : request.PageNumber > 0 ? request.PageNumber : 1;
         var pageSize = request.PageSize > 0 ? request.PageSize : 25;
