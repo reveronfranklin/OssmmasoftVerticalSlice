@@ -2,8 +2,8 @@
 
 Requerimiento 32. Modulo de facturacion electronica sobre PostgreSQL (schema `FED`).
 
-**Estado: Fase 1.** Endpoint de salud y CRUD de emisores. Los numeros de control y los
-documentos llegan en las fases siguientes.
+**Estado: Fase 2.** Endpoint de salud, CRUD de emisores y **nucleo de asignacion del numero
+de control**. Los documentos fiscales llegan en las fases siguientes.
 
 ## Base
 
@@ -94,8 +94,8 @@ HTTP 200, como el resto del proyecto. El fallo viaja en `isValid`, no en el codi
 ## Notas para el frontend
 
 - El modulo vive en `src/fed/facturacion/`. La pagina es `src/pages/apps/fed/index.tsx`.
-- **Todavia no hay entrada en el menu lateral.** Se llega por URL directa hasta que el
-  modulo tenga algo que mostrar; el item entra al cerrar la Fase 1.
+- Menu lateral: **Facturacion Electronica > Emisores** (`/apps/fed`) y **Facturacion
+  Electronica > Numeros de Control** (`/apps/fed/numeros-control`).
 - `data` es un escalar. `IResponseBase<T>` del proyecto tipa `data` como `T[]`, asi que el
   modulo declara su propio `IHealthResponse` en `interfaces/api.interface.ts`.
 
@@ -249,3 +249,179 @@ POST /api/FacturacionElectronica/update
 
 Si el id no existe, `isValid = false` con
 `No se encontró el emisor que se intenta actualizar.`
+
+
+---
+
+# Numeros de control
+
+El nucleo del **Rol A - imprenta digital**. El Articulo 7.4 exige que toda factura lleve el
+numero de control asignado por la imprenta digital autorizada, y el Articulo 30 establece que
+es esa imprenta quien lo asigna. **Los cuatro documentos en alcance lo requieren**, asi que
+ninguno se emite sin pasar por aqui.
+
+## Lo que el frontend tiene que entender antes de consumirlo
+
+Este endpoint sostiene `INV-1`: **nunca dos numeros de control distintos para el mismo
+documento de un mismo emisor**. Violarlo es la causal del Articulo 34.2 y cuesta la
+autorizacion de Ossmmasoft como imprenta digital. De ahi tres consecuencias de contrato:
+
+1. **La operacion es idempotente cuando se envia `documentoId`.** Una segunda solicitud para
+   el mismo documento **devuelve el numero ya asignado**, no uno nuevo, y lo indica con
+   `yaExistia = true`. El frontend debe distinguir los dos desenlaces: mostrarlos igual
+   esconderia justo lo que la invariante vigila.
+2. **Sin `documentoId` no hay idempotencia posible.** Cada llamada asigna un numero nuevo. Es
+   valido en esta fase -el Rol B todavia no existe- pero quien integre debe saberlo.
+3. **El formato lo fija la norma, no la UI.** El backend devuelve el numero ya formateado en
+   `numeroControl` (`00-00000001`) y `numeroControlTexto` (`N° de Control 00-00000001`). No
+   armarlo en el frontend.
+
+## Modelo NumeroControlAsignado
+
+```json
+{
+  "id": 1,
+  "emisorId": 1,
+  "documentoId": 0,
+  "identificador": "00",
+  "secuencial": 1,
+  "numeroControl": "00-00000001",
+  "numeroControlTexto": "N° de Control 00-00000001",
+  "tipoDocumento": "factura",
+  "fechaAsignacion": "03/09/2026 13:41:20",
+  "yaExistia": false
+}
+```
+
+| Campo | Tipo | Notas |
+| --- | --- | --- |
+| `identificador` | `string` | Dos digitos. Inicia en `00` y **rota al agotarse el secuencial** (decision `D-2`) |
+| `secuencial` | `number` | Hasta ocho digitos. Inicia en `1`. Consecutivo **por emisor** |
+| `documentoId` | `number` | `0` significa asignado sin documento. Es un estado valido en la Fase 2 |
+| `yaExistia` | `boolean` | `true` = se devolvio un numero ya asignado, no se genero uno nuevo |
+
+El relleno con ceros y el guion de `numeroControl` son **interpretacion nuestra**: el
+Articulo 30 fija la cantidad de digitos, no como se escriben. Se eligio el formato de uso
+corriente en Venezuela. Si cambia, cambia en el backend y el frontend no se toca.
+
+## Tipos de documento admitidos
+
+| Valor | Documento | Articulo |
+| --- | --- | --- |
+| `factura` | Factura (`DOC-1`) | 7 |
+| `debito` | Nota de debito (`DOC-2`) | 8 |
+| `credito` | Nota de credito (`DOC-3`) | 8 |
+| `entrega` | Nota de entrega (`DOC-4`) | 10 |
+
+Cualquier otro valor responde `isValid = false` con
+`El tipo de documento debe ser factura, débito, crédito o entrega.` Lo sostiene tambien un
+`CHECK` en la tabla.
+
+## asignarNumeroControl
+
+```http
+POST /api/FacturacionElectronica/asignarNumeroControl
+```
+
+### Request
+
+```json
+{
+  "emisorId": 1,
+  "tipoDocumento": "factura",
+  "documentoId": 0,
+  "usuarioIns": "arivas"
+}
+```
+
+`documentoId` es opcional; `0` significa sin documento.
+
+### Response - exito
+
+```json
+{
+  "data": {
+    "numeroControl": "00-00000001",
+    "numeroControlTexto": "N° de Control 00-00000001",
+    "yaExistia": false
+  },
+  "isValid": true,
+  "message": "suscces"
+}
+```
+
+### Response - el documento ya tenia numero
+
+Mismo `isValid = true`, pero `yaExistia = true` y el numero es el que ya estaba. **No es un
+error**: es la idempotencia funcionando.
+
+### Response - fallas de negocio
+
+| Situacion | `message` |
+| --- | --- |
+| Emisor inexistente | `No existe un emisor con el identificador <id>.` |
+| Emisor inactivo | `El emisor está inactivo: no se le pueden asignar números de control.` |
+| Tipo fuera de alcance | `El tipo de documento debe ser factura, débito, crédito o entrega.` |
+| Secuencia agotada | `La secuencia de números de control del emisor se agotó: se consumieron los 99 identificadores de dos dígitos.` |
+
+Todas HTTP 200 con `isValid = false`.
+
+## numeroControlGetAll
+
+Lectura del registro del Articulo 32: por emisor -numeral 1- y por fecha de asignacion
+-numeral 2-.
+
+```http
+POST /api/FacturacionElectronica/numeroControlGetAll
+```
+
+### Request
+
+```json
+{
+  "emisorId": 0,
+  "fechaDesde": null,
+  "fechaHasta": null,
+  "pageSize": 10,
+  "pageNumber": 1
+}
+```
+
+| Campo | Significado cuando viene vacio |
+| --- | --- |
+| `emisorId` | `0` = todos los emisores |
+| `fechaDesde` / `fechaHasta` | `null` = sin limite por ese extremo. `fechaHasta` **incluye** el dia completo |
+
+### Response
+
+```json
+{
+  "data": [
+    {
+      "id": 1,
+      "emisorId": 1,
+      "emisorRif": "J-30412887-5",
+      "emisorRazonSocial": "Servicios Integrales Aramendi, C.A.",
+      "documentoId": 0,
+      "identificador": "00",
+      "secuencial": 1,
+      "numeroControl": "00-00000001",
+      "tipoDocumento": "factura",
+      "fechaAsignacion": "03/09/2026 13:41:20",
+      "reporteId": 0,
+      "usuarioIns": "arivas"
+    }
+  ],
+  "isValid": true,
+  "message": "suscces",
+  "page": 1,
+  "totalPage": 1,
+  "cantidadRegistros": 1
+}
+```
+
+`reporteId` en `0` significa **pendiente de informar al SENIAT**. El control del plazo de los
+10 dias continuos del Articulo 29.7 es la Fase 3; aqui solo se expone el dato.
+
+Este listado **no** trae `numeroControlTexto`: la frase `N° de Control` corresponde a la
+representacion grafica del documento, no a una tabla de consulta.
