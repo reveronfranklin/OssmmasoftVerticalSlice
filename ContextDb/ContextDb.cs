@@ -1,5 +1,6 @@
 using Oracle.ManagedDataAccess.Client;
 using Microsoft.Data.SqlClient;
+using Npgsql;
 using System.Data;
 
 namespace OssmmasoftVerticalSlice.ContextDB;
@@ -69,5 +70,15 @@ public class ConnectionDB(IConfiguration _config)
     public OracleConnection GetMfoConnection()
     {
         return new OracleConnection(_config.GetConnectionString("DefaultConnectionMFO"));
+    }
+
+    // Facturacion Electronica (requerimiento 32). Unico getter PostgreSQL del
+    // proyecto: el modulo no usa Oracle. Clave propia DefaultConnectionFed y no
+    // DefaultConnectionPostgres, que ya existe y la usa otro consumidor. El rol
+    // de la cadena es "fed", propietario del schema FED y distinto de ossmmapg,
+    // para que el append-only del Art. 18.2 se pueda sostener con permisos.
+    public NpgsqlConnection GetFedConnection()
+    {
+        return new NpgsqlConnection(_config.GetConnectionString("DefaultConnectionFed"));
     }
 }
