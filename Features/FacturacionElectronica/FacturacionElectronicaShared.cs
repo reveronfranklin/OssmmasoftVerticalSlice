@@ -52,6 +52,41 @@ public record NumeroControlListaResponse(
     long ReporteId,
     string UsuarioIns);
 
+// Fila del registro del Articulo 32. Los siete numerales, en orden.
+//
+// El numeral 6 llega desdoblado -DocumentoId y FacturaServicio- porque la norma
+// admite las dos lecturas: ver D-15. NumeracionFormato viaja vacio hasta la
+// Fase 4, cuando exista FED_DOCUMENTO (D-17).
+public record RegistroArt32Response(
+    long NumControlId,
+    string EmisorRif,
+    string EmisorRazonSocial,
+    string FechaAsignacion,
+    string FechaAsignacion8d,
+    string TipoDocumento,
+    string NumeroControl,
+    string NumeracionFormato,
+    long DocumentoId,
+    string FacturaServicio,
+    string EstadoConciliacion,
+    string DatosAdicionales,
+    long ReporteId,
+    string Periodo);
+
+// Un periodo mensual del Art. 29.7. La fila existe desde antes de que haya algo
+// que reportar: eso es lo que convierte un periodo omitido en algo visible.
+public record ReporteMensualResponse(
+    long Id,
+    string Periodo,
+    string FechaCierre,
+    string FechaVence,
+    string EnviadoEn,
+    int CantidadReportada,
+    string Estado,
+    string UltimoIntentoEn,
+    string UltimoError,
+    bool Vencido);
+
 // Piezas comunes del modulo de Facturacion Electronica (requerimiento 32).
 //
 // Unico modulo del proyecto sobre PostgreSQL: usa GetFedConnection y el schema
@@ -186,6 +221,100 @@ public static class FacturacionElectronicaDb
         LIMIT @page_size OFFSET @row_offset;";
 
     // -----------------------------------------------------------------------
+    // Registro del Art. 32 y reporte mensual del Art. 29.7 - Fase 3
+    // -----------------------------------------------------------------------
+
+    public const string SqlRegistroArt32GetAll = @"
+        SELECT
+            NUM_CONTROL_ID, EMISOR_RIF, EMISOR_RAZON_SOCIAL, FECHA_ASIGNACION, FECHA_ASIGNACION_8D,
+            TIPO_DOCUMENTO, NUMERO_CONTROL, NUMERACION_FORMATO, DOCUMENTO_ID, FACTURA_SERVICIO,
+            ESTADO_CONCILIACION, DATOS_ADICIONALES, REPORTE_ID, PERIODO,
+            COUNT(*) OVER() AS TOTAL_REGISTROS
+        FROM FED.FED_V_REGISTRO_ART32
+        WHERE (@emisor_rif = '' OR EMISOR_RIF = @emisor_rif)
+          AND (@periodo = '' OR PERIODO = @periodo)
+        ORDER BY EMISOR_RIF, IDENTIFICADOR, SECUENCIAL
+        LIMIT @page_size OFFSET @row_offset;";
+
+    // Crea por adelantado la fila de cada periodo, desde el mes de la primera
+    // asignacion hasta el mes en curso. Reejecutable por el ON CONFLICT.
+    //
+    // Si no hay ninguna asignacion todavia, el COALESCE hace que igual se cree la
+    // fila del mes actual: el Art. 29.7 obliga a reportar "con independencia de no
+    // haber asignado ningun numero de control", asi que el periodo tiene que
+    // existir aunque este vacio.
+    public const string SqlReporteAsegurarPeriodos = @"
+        INSERT INTO FED.FED_REPORTE_MENSUAL (PERIODO, FECHA_CIERRE, FECHA_VENCE)
+        SELECT
+            TO_CHAR(m, 'YYYYMM'),
+            (m + INTERVAL '1 month - 1 day')::date,
+            (m + INTERVAL '1 month - 1 day')::date + 10
+        FROM generate_series(
+            COALESCE(
+                (SELECT date_trunc('month', MIN(FECHA_ASIGNACION)) FROM FED.FED_NUM_CONTROL),
+                date_trunc('month', now())),
+            date_trunc('month', now()),
+            INTERVAL '1 month') AS m
+        ON CONFLICT (PERIODO) DO NOTHING;";
+
+    // Periodos cuyo mes ya cerro y todavia no tienen reporte generado.
+    public const string SqlReportePendientesACerrar = @"
+        SELECT ID, PERIODO
+        FROM FED.FED_REPORTE_MENSUAL
+        WHERE ESTADO = 'pendiente'
+          AND FECHA_CIERRE < CURRENT_DATE
+        ORDER BY PERIODO;";
+
+    // Ata al reporte los numeros de su periodo que todavia no esten atados.
+    public const string SqlReporteAtarNumeros = @"
+        UPDATE FED.FED_NUM_CONTROL
+           SET REPORTE_ID = @reporte_id
+         WHERE TO_CHAR(FECHA_ASIGNACION, 'YYYYMM') = @periodo
+           AND REPORTE_ID IS NULL;";
+
+    // Cero es un resultado valido y esperado, no una anomalia.
+    public const string SqlReporteContarPeriodo = @"
+        SELECT COUNT(*) FROM FED.FED_NUM_CONTROL
+        WHERE TO_CHAR(FECHA_ASIGNACION, 'YYYYMM') = @periodo;";
+
+    // Se marca 'generado', no 'enviado': el reporte esta calculado pero no existe
+    // canal para transmitirlo al SENIAT. Ver D-19.
+    public const string SqlReporteMarcarGenerado = @"
+        UPDATE FED.FED_REPORTE_MENSUAL SET
+            ESTADO             = 'generado',
+            CANTIDAD_REPORTADA = @cantidad,
+            ULTIMO_INTENTO_EN  = now(),
+            ULTIMO_ERROR       = NULL
+        WHERE ID = @id;";
+
+    // Vencimiento del Art. 29.7. Devuelve los periodos que ACABAN de vencer, y
+    // solo esos: la alerta se dispara en la transicion y no en cada tick, para que
+    // no se vuelva ruido que nadie mira.
+    public const string SqlReporteMarcarVencidos = @"
+        UPDATE FED.FED_REPORTE_MENSUAL SET
+            ESTADO = 'vencido'
+        WHERE ESTADO IN ('pendiente', 'generado')
+          AND ENVIADO_EN IS NULL
+          AND FECHA_VENCE < CURRENT_DATE
+        RETURNING PERIODO, CANTIDAD_REPORTADA;";
+
+    public const string SqlReporteRegistrarError = @"
+        UPDATE FED.FED_REPORTE_MENSUAL SET
+            ULTIMO_INTENTO_EN = now(),
+            ULTIMO_ERROR      = @error
+        WHERE ID = @id;";
+
+    public const string SqlReporteGetAll = @"
+        SELECT
+            ID, PERIODO, FECHA_CIERRE, FECHA_VENCE, ENVIADO_EN, CANTIDAD_REPORTADA,
+            ESTADO, ULTIMO_INTENTO_EN, ULTIMO_ERROR,
+            COUNT(*) OVER() AS TOTAL_REGISTROS
+        FROM FED.FED_REPORTE_MENSUAL
+        WHERE (@estado = '' OR ESTADO = @estado)
+        ORDER BY PERIODO DESC
+        LIMIT @page_size OFFSET @row_offset;";
+
+    // -----------------------------------------------------------------------
     // Reglas del numero de control
     // -----------------------------------------------------------------------
 
@@ -262,9 +391,28 @@ public static class FacturacionElectronicaDb
     {
         int ordinal = reader.GetOrdinal(columna);
 
-        return reader.IsDBNull(ordinal)
-            ? string.Empty
-            : Convert.ToDateTime(reader.GetValue(ordinal)).ToString(formato);
+        if (reader.IsDBNull(ordinal))
+        {
+            return string.Empty;
+        }
+
+        // Npgsql mapea el tipo date de PostgreSQL a DateOnly, que NO implementa
+        // IConvertible: Convert.ToDateTime lo rechaza con
+        // "Unable to cast object of type 'System.DateOnly' to type 'System.IConvertible'".
+        //
+        // Se descubrio al leer FED_REPORTE_MENSUAL, pero el defecto ya existia
+        // desde la Fase 1: EMISOR.RIF_VERIFICADO_EL tambien es date, y solo no
+        // aparecio porque estuvo siempre en NULL y el mapeo salia antes por el
+        // IsDBNull. Con un emisor de RIF verificado, el listado se habria caido.
+        object valor = reader.GetValue(ordinal);
+
+        return valor switch
+        {
+            DateOnly fecha       => fecha.ToDateTime(TimeOnly.MinValue).ToString(formato),
+            DateTime fechaHora   => fechaHora.ToString(formato),
+            DateTimeOffset fecha => fecha.LocalDateTime.ToString(formato),
+            _                    => Convert.ToDateTime(valor).ToString(formato)
+        };
     }
 
     public static EmisorResponse MapEmisor(IDataReader reader) => new(
@@ -319,6 +467,41 @@ public static class FacturacionElectronicaDb
             SafeGetFecha(reader, "fecha_asignacion", "dd/MM/yyyy HH:mm:ss"),
             reader.SafeGetInt64("reporte_id"),
             reader.SafeGetString("usuario_ins"));
+    }
+
+    public static RegistroArt32Response MapRegistroArt32(IDataReader reader) => new(
+        reader.SafeGetInt64("num_control_id"),
+        reader.SafeGetString("emisor_rif"),
+        reader.SafeGetString("emisor_razon_social"),
+        SafeGetFecha(reader, "fecha_asignacion", "dd/MM/yyyy HH:mm:ss"),
+        reader.SafeGetString("fecha_asignacion_8d"),
+        reader.SafeGetString("tipo_documento"),
+        reader.SafeGetString("numero_control"),
+        reader.SafeGetString("numeracion_formato"),
+        reader.SafeGetInt64("documento_id"),
+        reader.SafeGetString("factura_servicio"),
+        reader.SafeGetString("estado_conciliacion"),
+        reader.SafeGetString("datos_adicionales"),
+        reader.SafeGetInt64("reporte_id"),
+        reader.SafeGetString("periodo"));
+
+    // Vencido se calcula aqui y no en la pantalla: es la condicion que dispara
+    // INV-2, y no puede depender de que cada consumidor la reimplemente igual.
+    public static ReporteMensualResponse MapReporteMensual(IDataReader reader)
+    {
+        string estado = reader.SafeGetString("estado");
+
+        return new ReporteMensualResponse(
+            reader.SafeGetInt64("id"),
+            reader.SafeGetString("periodo"),
+            SafeGetFecha(reader, "fecha_cierre", "dd/MM/yyyy"),
+            SafeGetFecha(reader, "fecha_vence", "dd/MM/yyyy"),
+            SafeGetFecha(reader, "enviado_en", "dd/MM/yyyy HH:mm"),
+            reader.SafeGetInt32("cantidad_reportada"),
+            estado,
+            SafeGetFecha(reader, "ultimo_intento_en", "dd/MM/yyyy HH:mm"),
+            reader.SafeGetString("ultimo_error"),
+            estado == "vencido");
     }
 
     // Nulos via helper y no con "?? DBNull.Value" inline, como pide el estandar.

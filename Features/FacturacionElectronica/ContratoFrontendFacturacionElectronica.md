@@ -2,8 +2,9 @@
 
 Requerimiento 32. Modulo de facturacion electronica sobre PostgreSQL (schema `FED`).
 
-**Estado: Fase 2.** Endpoint de salud, CRUD de emisores y **nucleo de asignacion del numero
-de control**. Los documentos fiscales llegan en las fases siguientes.
+**Estado: Fase 3.** Endpoint de salud, CRUD de emisores, nucleo de asignacion del numero de
+control y **registro del Art. 32 con su reporte mensual**. Los documentos fiscales llegan en
+las fases siguientes.
 
 ## Base
 
@@ -94,8 +95,9 @@ HTTP 200, como el resto del proyecto. El fallo viaja en `isValid`, no en el codi
 ## Notas para el frontend
 
 - El modulo vive en `src/fed/facturacion/`. La pagina es `src/pages/apps/fed/index.tsx`.
-- Menu lateral: **Facturacion Electronica > Emisores** (`/apps/fed`) y **Facturacion
-  Electronica > Numeros de Control** (`/apps/fed/numeros-control`).
+- Menu lateral: **Facturacion Electronica > Emisores** (`/apps/fed`), **Numeros de Control**
+  (`/apps/fed/numeros-control`) y **Reporte Mensual** (`/apps/fed/reporte-mensual`). El menu
+  no sale de `src/navigation/vertical`: ver `SqlOracle/README.md`.
 - `data` es un escalar. `IResponseBase<T>` del proyecto tipa `data` como `T[]`, asi que el
   modulo declara su propio `IHealthResponse` en `interfaces/api.interface.ts`.
 
@@ -425,3 +427,161 @@ POST /api/FacturacionElectronica/numeroControlGetAll
 
 Este listado **no** trae `numeroControlTexto`: la frase `N° de Control` corresponde a la
 representacion grafica del documento, no a una tabla de consulta.
+
+
+---
+
+# Registro del Art. 32 y reporte mensual
+
+El **Rol A** frente al SENIAT. Aqui vive `INV-2`: nunca dejar de informar la totalidad de
+numeros de control asignados en un periodo mensual. **Dos periodos omitidos en un ano
+calendario, consecutivos o no, son causal de revocatoria** (Art. 34.3), y no hace falta
+sancion previa.
+
+## Lo que el frontend tiene que entender
+
+1. **Las filas de periodo existen desde antes de que haya algo que reportar.** No se crean al
+   enviar. Es lo que convierte un periodo omitido en una fila visible en vez de una ausencia
+   que hay que salir a calcular.
+2. **Cero es un reporte valido.** El Art. 29.7 obliga a reportar "con independencia de no
+   haber asignado ningun numero de control". Un periodo con `cantidadReportada: 0` **no** es
+   un error ni un periodo sin procesar.
+3. **`generado` no es `enviado`.** Ver la tabla de estados.
+
+## Estados del periodo
+
+| Estado | Significa |
+| --- | --- |
+| `pendiente` | El periodo existe y su reporte todavia no se genero. Si el mes no cerro, es lo normal |
+| `generado` | El reporte esta calculado y sus numeros atados al periodo, pero **NO se transmitio al SENIAT** |
+| `enviado` | Transmitido, con constancia en `enviadoEn` |
+| `vencido` | Pasaron los diez dias continuos sin transmitir. **Es la alerta** |
+
+**Por que existe `generado`.** Hoy no hay canal para transmitirle al SENIAT: el Art. 29.7 dice
+que la informacion se remite "en los terminos y condiciones que se establezca en el Portal
+Fiscal", y esas especificaciones no estan en nuestras manos. Marcar `enviado` algo que no se
+envio seria escribir una constancia falsa en la tabla con la que justamente se prueba que se
+reporto. Ver decision `D-19`.
+
+## registroArt32GetAll
+
+Lectura del registro. Sale de una **vista**, no de una tabla: por construccion no puede
+diferir de lo asignado.
+
+```http
+POST /api/FacturacionElectronica/registroArt32GetAll
+```
+
+### Request
+
+```json
+{ "emisorRif": "", "periodo": "202607", "pageSize": 10, "pageNumber": 1 }
+```
+
+`emisorRif` vacio = todos. `periodo` en `AAAAMM`, vacio = todos.
+
+### Response
+
+```json
+{
+  "data": [
+    {
+      "numControlId": 1,
+      "emisorRif": "J-30412887-5",
+      "emisorRazonSocial": "Servicios Integrales Aramendi, C.A.",
+      "fechaAsignacion": "15/07/2026 10:00:00",
+      "fechaAsignacion8d": "15072026",
+      "tipoDocumento": "factura",
+      "numeroControl": "00-00000001",
+      "numeracionFormato": "",
+      "documentoId": 0,
+      "facturaServicio": "",
+      "estadoConciliacion": "sin_documento",
+      "datosAdicionales": "",
+      "reporteId": 3,
+      "periodo": "202607"
+    }
+  ],
+  "isValid": true,
+  "message": "suscces",
+  "cantidadRegistros": 3
+}
+```
+
+Tres campos necesitan explicacion:
+
+- **`numeracionFormato` viaja vacio** hasta la Fase 4. Es el numeral 5 y sale del documento,
+  que todavia no existe. No es un error de datos.
+- **El numeral 6 viene desdoblado** en `documentoId` y `facturaServicio`. La norma admite dos
+  lecturas y se guardan las dos: ver `D-15`.
+- **`estadoConciliacion` en `sin_documento` es valido**, no un pendiente que alguien olvido.
+  Asignar un numero antes de que exista el documento es lo que la norma prevee (`D-16`).
+
+## reporteMensualGetAll
+
+```http
+POST /api/FacturacionElectronica/reporteMensualGetAll
+```
+
+### Request
+
+```json
+{ "estado": "", "pageSize": 24, "pageNumber": 1 }
+```
+
+### Response
+
+```json
+{
+  "data": [
+    {
+      "id": 3,
+      "periodo": "202607",
+      "fechaCierre": "31/07/2026",
+      "fechaVence": "10/08/2026",
+      "enviadoEn": "",
+      "cantidadReportada": 3,
+      "estado": "vencido",
+      "ultimoIntentoEn": "03/09/2026 19:20",
+      "ultimoError": "",
+      "vencido": true
+    }
+  ],
+  "isValid": true,
+  "message": "suscces",
+  "cantidadRegistros": 3,
+  "total1": 1
+}
+```
+
+**`total1` trae la cantidad de periodos vencidos.** Viaja aparte para que la pantalla pueda
+avisar sin recorrer las filas: dos en un ano calendario cuestan la autorizacion.
+
+`vencido` lo calcula el backend y no la pantalla. Es la condicion que dispara `INV-2` y no
+puede depender de que cada consumidor la reimplemente igual.
+
+## reporteMensualEjecutar
+
+Corre el ciclo a mano: asegura las filas de periodo, genera lo que corresponda y vence lo que
+paso el plazo. Un worker lo hace solo cada hora; este endpoint existe para el operador de la
+imprenta y para poder verificar sin esperar un tick.
+
+```http
+POST /api/FacturacionElectronica/reporteMensualEjecutar
+```
+
+### Request
+
+```json
+{}
+```
+
+### Response
+
+```json
+{ "data": 2, "isValid": true, "message": "suscces", "cantidadRegistros": 2, "total1": 1 }
+```
+
+`data` y `cantidadRegistros` = periodos generados en esta corrida. `total1` = periodos que
+**acaban de vencer**. **Es idempotente**: dos corridas seguidas devuelven cero en la segunda y
+no duplican nada.

@@ -136,6 +136,16 @@ builder.Services.AddScoped<ConfirmCntAutomaticoHandler>();
 builder.Services.AddScoped<GetCntMayorAnaliticoHandler>();
 builder.Services.AddScoped<GetCntMovimientoAuxiliarHandler>();
 builder.Services.AddHostedService<EmailQueueWorker>();
+
+// Facturacion Electronica (requerimiento 32), Fase 3. UNICA linea que el modulo
+// agrega a este archivo, y estaba anticipada desde el plan: la decision D-8 dice
+// que el modulo no toca Program.cs salvo por el job del reporte mensual, que no
+// tiene otra forma de existir. Todo lo demas del modulo instancia su handler.
+//
+// Sostiene INV-2: dos periodos mensuales omitidos en un ano calendario son causal
+// de revocatoria de la autorizacion como imprenta digital (Art. 34.3).
+builder.Services.AddScoped<OssmmasoftVerticalSlice.Features.FacturacionElectronica.FacturacionElectronicaReporteMensualService>();
+builder.Services.AddHostedService<OssmmasoftVerticalSlice.Features.FacturacionElectronica.FacturacionElectronicaReporteMensualWorker>();
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("MyPolicy", 

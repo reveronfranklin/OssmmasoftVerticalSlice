@@ -16,7 +16,7 @@ PROMPT Registrando el modulo de Facturacion Electronica en el menu (SIS)
 -- OSS_MOD / OSS_MENU / OSS_ROL_MENU. Agregar la opcion en el archivo de
 -- TypeScript no tenia ningun efecto: era codigo muerto, y por eso se elimino.
 --
--- QUE HACE. Registra el modulo y sus dos opciones en el modelo normalizado, con
+-- QUE HACE. Registra el modulo y sus tres opciones en el modelo normalizado, con
 -- MERGE, de forma reejecutable. Sigue el patron de
 -- Features/SisSeguridad/Sql/08_SEED_APP_ROUTES.sql, del que se copiaron los
 -- procedimientos locales.
@@ -32,8 +32,8 @@ PROMPT Registrando el modulo de Facturacion Electronica en el menu (SIS)
 --   3. Recargar el ERP: el menu se pide al montar el layout.
 --
 -- COMO SE REVIERTE
---   DELETE FROM OSS_ROL_MENU WHERE CODIGO_MENU IN (9000, 9010, 9020);
---   DELETE FROM OSS_MENU     WHERE CODIGO_MENU IN (9000, 9010, 9020);
+--   DELETE FROM OSS_ROL_MENU WHERE CODIGO_MENU IN (9000, 9010, 9020, 9030);
+--   DELETE FROM OSS_MENU     WHERE CODIGO_MENU IN (9000, 9010, 9020, 9030);
 --   DELETE FROM OSS_MOD      WHERE CODIGO_MOD = 9;
 --   DELETE FROM OSS_USUARIO_ROL WHERE UPPER(TRIM(DESCRIPCION)) = 'FED';
 --   y volver a regenerar el cache.
@@ -91,10 +91,11 @@ BEGIN
   -- con path se vuelve navegable y no debe serlo.
   up_menu(9000, 9, NULL, 'Facturacion Electronica', NULL, 'mdi:receipt-text-outline', 10);
 
-  -- Opciones. Los path tienen que coincidir con las paginas reales del frontend:
-  -- src/pages/apps/fed/index.tsx y src/pages/apps/fed/numeros-control/index.tsx
+  -- Opciones. Cada path tiene que coincidir con una pagina real del frontend,
+  -- bajo src/pages/apps/fed/.
   up_menu(9010, 9, 9000, 'Emisores', '/apps/fed', 'mdi:account-box-outline', 20);
   up_menu(9020, 9, 9000, 'Numeros de Control', '/apps/fed/numeros-control', 'mdi:numeric', 30);
+  up_menu(9030, 9, 9000, 'Reporte Mensual', '/apps/fed/reporte-mensual', 'mdi:calendar-check-outline', 40);
 
   -- Otorgamiento al rol, solo si se indico una clave arriba.
   IF v_rol_clave IS NOT NULL AND LENGTH(TRIM(v_rol_clave)) > 0 THEN
@@ -102,6 +103,7 @@ BEGIN
       add_rm(r.CODIGO_ROL, 9000);
       add_rm(r.CODIGO_ROL, 9010);
       add_rm(r.CODIGO_ROL, 9020);
+      add_rm(r.CODIGO_ROL, 9030);
       v_otorgados := v_otorgados + 1;
     END LOOP;
 
