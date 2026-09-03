@@ -9,8 +9,17 @@
 --
 -- Identificadores calificados con el schema a proposito: sin calificar, un
 -- search_path distinto crearia los objetos en public, que es de report-server, y
--- DROP SCHEMA FED CASCADE no los limpiaria. Sin comillas, tambien a proposito:
--- PostgreSQL los pliega a minusculas de forma pareja.
+-- DROP SCHEMA FED CASCADE no los limpiaria.
+--
+-- MAYUSCULA SIN COMILLAS, decision D-14. La convencion del equipo es escribir las
+-- tablas en mayuscula, y en Oracle eso sale gratis porque el motor pliega a
+-- mayuscula lo que no lleva comillas. PostgreSQL pliega al reves, a minuscula, asi
+-- que esta tabla existe fisicamente como fed.fed_emisor y asi se ve en DBeaver.
+--
+-- NO agregar comillas para "arreglarlo": obligaria a comillar en todo el SQL del
+-- modulo y en cualquier consulta manual, para siempre, y olvidarlo una sola vez da
+-- relation does not exist. Se conserva la convencion donde se lee -aqui- y se
+-- evita el costo permanente.
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS FED.FED_EMISOR (
