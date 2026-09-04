@@ -50,6 +50,7 @@ public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration co
             var movimientos = await ReadTableAsync(bm, "BM.BM_MOV_BIENES");
             var direcciones = await ReadTableAsync(bm, "BM.BM_DIR_BIEN");
             var clasificaciones = await ReadTableAsync(bm, "BM.BM_CLASIFICACION_BIENES");
+            var descriptivas = await ReadTableAsync(bm, "BM.BM_DESCRIPTIVAS");
             var personas = await ReadTableAsync(rh, "RH.RH_PERSONAS");
 
             // Legacy usa una conexion distinta para la replica de personas: RH es
@@ -85,6 +86,7 @@ public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration co
                 await ReplaceTableAsync(bmc, tx, "BMC.BM_MOV_BIENES", movimientos);
                 await ReplaceTableAsync(bmc, tx, "BMC.BM_DIR_BIEN", direcciones);
                 await ReplaceTableAsync(bmc, tx, "BMC.BM_CLASIFICACION_BIENES", clasificaciones);
+                await ReplaceTableAsync(bmc, tx, "BMC.BM_DESCRIPTIVAS", descriptivas);
                 await VerifyRowCountAsync(bmc, tx, "BMC.BM_ARTICULOS", articulos.Rows.Count);
                 await VerifyRowCountAsync(bmc, tx, "BMC.BM_BIENES", bienes.Rows.Count);
                 await VerifyRowCountAsync(bmc, tx, "BMC.BM_MOV_BIENES", movimientos.Rows.Count);
@@ -94,6 +96,7 @@ public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration co
                     tx,
                     "BMC.BM_CLASIFICACION_BIENES",
                     clasificaciones.Rows.Count);
+                await VerifyRowCountAsync(bmc, tx, "BMC.BM_DESCRIPTIVAS", descriptivas.Rows.Count);
                 tx.Commit();
             }
             catch
@@ -115,7 +118,8 @@ public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration co
                 IsValid = true,
                 Message = "Success",
                 CantidadRegistros = articulos.Rows.Count + bienes.Rows.Count + movimientos.Rows.Count
-                    + direcciones.Rows.Count + clasificaciones.Rows.Count + personas.Rows.Count
+                    + direcciones.Rows.Count + clasificaciones.Rows.Count + descriptivas.Rows.Count
+                    + personas.Rows.Count
             };
         }
         catch (Exception ex)
