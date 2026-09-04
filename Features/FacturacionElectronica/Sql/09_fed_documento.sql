@@ -89,6 +89,19 @@ CREATE TABLE IF NOT EXISTS FED.FED_DOCUMENTO (
     IMPRENTA_PROVIDENCIA  VARCHAR(200),
     ES_PRUEBA             BOOLEAN      NOT NULL DEFAULT TRUE,
 
+    -- Clave de idempotencia de la emision (T4.9).
+    --
+    -- INV-3 la sostiene el UNIQUE de (emisor, tipo, serie, numeracion), pero eso
+    -- solo alcanza cuando la numeracion la trae el emisor. Cuando la genera el
+    -- sistema (D-21), dos peticiones identicas obtendrian numeraciones distintas
+    -- y producirian DOS ejemplares del mismo documento, que es exactamente lo que
+    -- el Art. 21.2 castiga. El doble clic no es un caso raro: es el caso normal.
+    --
+    -- Con esta clave, la segunda peticion devuelve el documento que ya existe.
+    -- Nula cuando quien llama no la envia: entonces la unica defensa es el UNIQUE
+    -- de la numeracion, y eso queda advertido en el contrato.
+    CLAVE_IDEMPOTENCIA    VARCHAR(80),
+
     USUARIO_INS           VARCHAR(50)  NOT NULL,
     FECHA_INS             TIMESTAMPTZ  NOT NULL DEFAULT now(),
 
@@ -97,6 +110,9 @@ CREATE TABLE IF NOT EXISTS FED.FED_DOCUMENTO (
 
     -- INV-3. Un ejemplar y nada mas.
     CONSTRAINT FED_DOCUMENTO_UK UNIQUE (EMISOR_ID, TIPO_DOCUMENTO, SERIE, NUMERACION),
+
+    -- INV-3 por el otro lado: la misma solicitud no produce dos documentos.
+    CONSTRAINT FED_DOCUMENTO_IDEM_UK UNIQUE (EMISOR_ID, CLAVE_IDEMPOTENCIA),
 
     CONSTRAINT FED_DOCUMENTO_TIPO_CK
         CHECK (TIPO_DOCUMENTO IN ('factura', 'debito', 'credito', 'entrega')),
@@ -122,6 +138,26 @@ CREATE TABLE IF NOT EXISTS FED.FED_DOCUMENTO (
                    AND IMPRENTA_RAZON_SOCIAL IS NOT NULL
                    AND IMPRENTA_PROVIDENCIA IS NOT NULL))
 );
+
+-- Para bases donde la tabla ya existia antes de T4.9. Reejecutable.
+ALTER TABLE FED.FED_DOCUMENTO
+    ADD COLUMN IF NOT EXISTS CLAVE_IDEMPOTENCIA VARCHAR(80);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fed_documento_idem_uk'
+          AND conrelid = 'fed.fed_documento'::regclass
+    ) THEN
+        ALTER TABLE FED.FED_DOCUMENTO
+            ADD CONSTRAINT FED_DOCUMENTO_IDEM_UK UNIQUE (EMISOR_ID, CLAVE_IDEMPOTENCIA);
+    END IF;
+END
+$$;
+
+COMMENT ON COLUMN FED.FED_DOCUMENTO.CLAVE_IDEMPOTENCIA IS
+    'Clave de la solicitud de emision. Sin ella, dos peticiones identicas con numeracion generada por el sistema producirian dos ejemplares del mismo documento (Art. 21.2).';
 
 -- Consulta natural: los documentos de un emisor por fecha. Es la del listado y la
 -- del acceso del SENIAT (Art. 18.7).

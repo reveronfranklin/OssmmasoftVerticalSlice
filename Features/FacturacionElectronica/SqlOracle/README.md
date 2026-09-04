@@ -44,6 +44,10 @@ El bloque a insertar, como **nuevo elemento raíz** del arreglo:
     {
       "title": "Reporte Mensual",
       "path": "/apps/fed/reporte-mensual"
+    },
+    {
+      "title": "Documentos Fiscales",
+      "path": "/apps/fed/facturas"
     }
   ]
 }
@@ -58,6 +62,7 @@ Los `path` tienen que coincidir con las páginas reales:
 | `/apps/fed` | `src/pages/apps/fed/index.tsx` |
 | `/apps/fed/numeros-control` | `src/pages/apps/fed/numeros-control/index.tsx` |
 | `/apps/fed/reporte-mensual` | `src/pages/apps/fed/reporte-mensual/index.tsx` |
+| `/apps/fed/facturas` | `src/pages/apps/fed/facturas/index.tsx` |
 
 Procedimiento: `SELECT` con `ROWID` del usuario, editar el CLOB agregando el bloque al arreglo, guardar. Reversa: quitar el bloque.
 
@@ -65,7 +70,7 @@ Procedimiento: `SELECT` con `ROWID` del usuario, editar el CLOB agregando el blo
 
 ## Camino B - `SIS_MENU_FED.sql`
 
-`SIS_MENU_FED.sql` registra el módulo en el modelo normalizado: `OSS_MOD` código 9 (`FED`) y las opciones 9000 padre, 9010 Emisores, 9020 Números de Control, 9030 Reporte Mensual, con `MERGE` reejecutable.
+`SIS_MENU_FED.sql` registra el módulo en el modelo normalizado: `OSS_MOD` código 9 (`FED`) y las opciones 9000 padre, 9010 Emisores, 9020 Números de Control, 9030 Reporte Mensual, 9040 Documentos Fiscales, con `MERGE` reejecutable.
 
 **Registrar no es mostrar.** Sin fila en `OSS_ROL_MENU` esas opciones no llegan a ningún `JSON_MENU`, y el script deja `v_rol_clave` vacío a propósito.
 
