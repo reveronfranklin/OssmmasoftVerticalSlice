@@ -87,6 +87,28 @@ public record ReporteMensualResponse(
     string UltimoError,
     bool Vencido);
 
+// Fila unica de contadores del panel. Es un DTO propio y no los campos Total1..4
+// del ResultDto: esos, en las seis operaciones del repo que los usan, siempre
+// acompanan a una lista. Un tablero que devolviera cuatro decimales sin nombre
+// obligaria al frontend a recordar cual es cual. Ver D-25.
+//
+// Cada campo sale de una consulta que lo cuenta. Ninguno se estima ni se deduce
+// de una pagina: en un modulo fiscal una cifra de adorno es peor que un hueco,
+// porque el hueco se ve y la cifra falsa se cree. Ver D-23.
+public record PanelResumenResponse(
+    string Periodo,
+    int DocumentosPeriodo,
+    int DocumentosPrueba,
+    int NumerosAsignadosPeriodo,
+    int EmisoresTotal,
+    int EmisoresActivos,
+    int EmisoresRifSinVerificar,
+    string PeriodoEstado,
+    string PeriodoVence,
+    int PeriodoDiasRestantes,
+    int PeriodoCantidadReportada,
+    int PeriodosVencidosAnio);
+
 // Piezas comunes del modulo de Facturacion Electronica (requerimiento 32).
 //
 // Unico modulo del proyecto sobre PostgreSQL: usa GetFedConnection y el schema
@@ -314,6 +336,42 @@ public static class FacturacionElectronicaDb
         ORDER BY PERIODO DESC
         LIMIT @page_size OFFSET @row_offset;";
 
+    // Panel del modulo: una sola consulta, una sola fila.
+    //
+    // Cada subconsulta es un COUNT real sobre su tabla. Se hace en un viaje y no
+    // en siete porque los numeros se muestran juntos y tienen que ser coherentes
+    // entre si: contarlos en momentos distintos permitiria que la pantalla
+    // afirme que hay 30 documentos y 29 numeros asignados.
+    //
+    // PERIODOS_VENCIDOS_ANIO es el contador que importa de verdad: dos periodos
+    // omitidos en un ano calendario revocan la autorizacion sin sancion previa
+    // (Art. 34.3). Por eso se cuenta por ano, no por los ultimos doce meses.
+    //
+    // El LEFT JOIN sobre el periodo en curso no puede fallar por ausencia: las
+    // filas de periodo se crean por adelantado (ver D-18). Aun asi se protege con
+    // COALESCE, porque una base recien creada tiene la tabla vacia hasta el
+    // primer tick del job.
+    public const string SqlPanelResumen = @"
+        SELECT
+            (SELECT COUNT(*) FROM FED.FED_DOCUMENTO
+              WHERE TO_CHAR(EMITIDO_EN, 'YYYYMM') = @periodo)                     AS DOCUMENTOS_PERIODO,
+            (SELECT COUNT(*) FROM FED.FED_DOCUMENTO
+              WHERE TO_CHAR(EMITIDO_EN, 'YYYYMM') = @periodo AND ES_PRUEBA)       AS DOCUMENTOS_PRUEBA,
+            (SELECT COUNT(*) FROM FED.FED_NUM_CONTROL
+              WHERE TO_CHAR(FECHA_ASIGNACION, 'YYYYMM') = @periodo)               AS NUMEROS_PERIODO,
+            (SELECT COUNT(*) FROM FED.FED_EMISOR)                                 AS EMISORES_TOTAL,
+            (SELECT COUNT(*) FROM FED.FED_EMISOR WHERE ESTADO = 'activo')         AS EMISORES_ACTIVOS,
+            (SELECT COUNT(*) FROM FED.FED_EMISOR
+              WHERE RIF_VERIFICADO_ESTADO IS NULL)                                AS EMISORES_RIF_SIN_VERIFICAR,
+            (SELECT COUNT(*) FROM FED.FED_REPORTE_MENSUAL
+              WHERE ESTADO = 'vencido' AND SUBSTR(PERIODO, 1, 4) = @anio)         AS PERIODOS_VENCIDOS_ANIO,
+            COALESCE(r.ESTADO, '')                                                AS PERIODO_ESTADO,
+            r.FECHA_VENCE                                                         AS PERIODO_VENCE,
+            COALESCE(r.FECHA_VENCE - CURRENT_DATE, 0)                             AS PERIODO_DIAS_RESTANTES,
+            COALESCE(r.CANTIDAD_REPORTADA, 0)                                     AS PERIODO_CANTIDAD_REPORTADA
+        FROM (SELECT 1) AS unica
+        LEFT JOIN FED.FED_REPORTE_MENSUAL r ON r.PERIODO = @periodo;";
+
     // -----------------------------------------------------------------------
     // Reglas del numero de control
     // -----------------------------------------------------------------------
@@ -503,6 +561,24 @@ public static class FacturacionElectronicaDb
             reader.SafeGetString("ultimo_error"),
             estado == "vencido");
     }
+
+    // Los COUNT de PostgreSQL vuelven como bigint: se leen con SafeGetInt64 y se
+    // truncan a int. Ningun contador de este modulo puede acercarse al limite de
+    // int, y el frontend recibe numeros y no cadenas.
+    public static PanelResumenResponse MapPanelResumen(IDataReader reader, string periodo) =>
+        new(
+            periodo,
+            (int)reader.SafeGetInt64("documentos_periodo"),
+            (int)reader.SafeGetInt64("documentos_prueba"),
+            (int)reader.SafeGetInt64("numeros_periodo"),
+            (int)reader.SafeGetInt64("emisores_total"),
+            (int)reader.SafeGetInt64("emisores_activos"),
+            (int)reader.SafeGetInt64("emisores_rif_sin_verificar"),
+            reader.SafeGetString("periodo_estado"),
+            SafeGetFecha(reader, "periodo_vence", "dd/MM/yyyy"),
+            reader.SafeGetInt32("periodo_dias_restantes"),
+            reader.SafeGetInt32("periodo_cantidad_reportada"),
+            (int)reader.SafeGetInt64("periodos_vencidos_anio"));
 
     // Nulos via helper y no con "?? DBNull.Value" inline, como pide el estandar.
     public static object DbValue(string? valor) =>

@@ -32,8 +32,8 @@ PROMPT Registrando el modulo de Facturacion Electronica en el menu (SIS)
 --   3. Recargar el ERP: el menu se pide al montar el layout.
 --
 -- COMO SE REVIERTE
---   DELETE FROM OSS_ROL_MENU WHERE CODIGO_MENU IN (9000, 9010, 9020, 9030, 9040);
---   DELETE FROM OSS_MENU     WHERE CODIGO_MENU IN (9000, 9010, 9020, 9030, 9040);
+--   DELETE FROM OSS_ROL_MENU WHERE CODIGO_MENU IN (9000, 9010, 9020, 9030, 9040, 9050);
+--   DELETE FROM OSS_MENU     WHERE CODIGO_MENU IN (9000, 9010, 9020, 9030, 9040, 9050);
 --   DELETE FROM OSS_MOD      WHERE CODIGO_MOD = 9;
 --   DELETE FROM OSS_USUARIO_ROL WHERE UPPER(TRIM(DESCRIPCION)) = 'FED';
 --   y volver a regenerar el cache.
@@ -93,6 +93,7 @@ BEGIN
 
   -- Opciones. Cada path tiene que coincidir con una pagina real del frontend,
   -- bajo src/pages/apps/fed/.
+  up_menu(9050, 9, 9000, 'Panel', '/apps/fed/panel', 'mdi:view-dashboard-outline', 15);
   up_menu(9010, 9, 9000, 'Emisores', '/apps/fed', 'mdi:account-box-outline', 20);
   up_menu(9020, 9, 9000, 'Numeros de Control', '/apps/fed/numeros-control', 'mdi:numeric', 30);
   up_menu(9030, 9, 9000, 'Reporte Mensual', '/apps/fed/reporte-mensual', 'mdi:calendar-check-outline', 40);
@@ -106,6 +107,7 @@ BEGIN
       add_rm(r.CODIGO_ROL, 9020);
       add_rm(r.CODIGO_ROL, 9030);
       add_rm(r.CODIGO_ROL, 9040);
+      add_rm(r.CODIGO_ROL, 9050);
       v_otorgados := v_otorgados + 1;
     END LOOP;
 

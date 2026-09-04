@@ -2,9 +2,13 @@
 
 Requerimiento 32. Modulo de facturacion electronica sobre PostgreSQL (schema `FED`).
 
-**Estado: Fase 3.** Endpoint de salud, CRUD de emisores, nucleo de asignacion del numero de
-control y **registro del Art. 32 con su reporte mensual**. Los documentos fiscales llegan en
-las fases siguientes.
+**Estado: Fase 4 mas el panel.** Endpoint de salud, CRUD de emisores, nucleo de asignacion del
+numero de control, registro del Art. 32 con su reporte mensual, **emision y consulta de
+documentos fiscales**, y los contadores del panel. Las notas de debito y credito (Fase 5) y la
+nota de entrega (Fase 6) todavia no se emiten.
+
+**Ningun documento emitido tiene validez fiscal** hasta que el SENIAT autorice a Ossmmasoft como
+imprenta digital: todos vienen con `esPrueba: true` y su motivo.
 
 ## Base
 
@@ -585,3 +589,242 @@ POST /api/FacturacionElectronica/reporteMensualEjecutar
 `data` y `cantidadRegistros` = periodos generados en esta corrida. `total1` = periodos que
 **acaban de vencer**. **Es idempotente**: dos corridas seguidas devuelven cero en la segunda y
 no duplican nada.
+
+---
+
+# Documentos fiscales (Fase 4)
+
+## Lo que el frontend tiene que entender antes de consumirlo
+
+**Un documento lleva DOS numeraciones distintas y no son intercambiables.** La `numeracion`
+es la del emisor (Art. 7.2), consecutiva por emisor, tipo y serie. El `numeroControl` lo asigna
+la imprenta digital (Art. 7.4). La norma exige las dos, y exige que sean distintas: mostrar una
+en lugar de la otra es un incumplimiento, no un detalle de presentacion.
+
+**El frontend no manda la numeracion.** La genera el sistema. Solo un emisor declarado en modo
+`externa` puede traer la suya, en `numeracionExterna`, y el backend la rechaza si el emisor no
+esta en ese modo.
+
+**La emision es idempotente y el frontend es responsable de la clave.** `claveIdempotencia`
+debe generarse **una vez por formulario abierto**, no por envio. Sin ella, un doble clic produce
+dos documentos fiscales, y emitir dos ejemplares del mismo documento es causal de revocatoria de
+la autorizacion del emisor (Art. 21.2). Si la clave ya existe, la respuesta trae el documento
+original con `yaExistia: true` y **no se creo nada nuevo**: el mensaje al usuario tiene que
+distinguir los dos casos.
+
+**Todo documento sale marcado como prueba** mientras el SENIAT no autorice a Ossmmasoft:
+`esPrueba: true` y `motivoPrueba` con la razon. Falta el numeral 7.14 -nomenclatura y fecha de
+la providencia de autorizacion-, asi que ninguno tiene validez fiscal. Eso debe verse en
+pantalla, no quedar en el JSON.
+
+## Tipos de documento y su denominacion
+
+| `tipoDocumento` | `denominacion` que devuelve | Estado |
+|---|---|---|
+| `factura` | `FACTURA` | construido |
+| `debito` | `NOTA DE DÉBITO` | Fase 5, no construido |
+| `credito` | `NOTA DE CRÉDITO` | Fase 5, no construido |
+| `entrega` | `GUÍA DE DESPACHO` | Fase 6, no construido |
+
+La denominacion la fija la norma y viene armada del backend. **No se traduce ni se adorna en el
+frontend**: «guia de despacho» no es «nota de entrega».
+
+## facturaCreate
+
+Emite un documento fiscal. Todo-o-nada: la numeracion del documento y el numero de control se
+asignan en la misma transaccion, o no se asigna ninguno.
+
+```http
+POST /api/FacturacionElectronica/facturaCreate
+```
+
+### Request
+
+```json
+{
+  "emisorId": 12,
+  "tipoDocumento": "factura",
+  "serie": "",
+  "numeracionExterna": "",
+  "adqNombre": "COMERCIAL SABANA GRANDE, C.A.",
+  "adqRif": "J-31558240-6",
+  "adqDocumentoId": "",
+  "usuarioIns": "avanessa",
+  "claveIdempotencia": "ui-1788210656-a4f2c1",
+  "renglones": [
+    { "descripcion": "Servicio profesional", "cantidad": 2, "precio": 100, "alicuota": 16, "exento": false, "codigo": "SRV-01" },
+    { "descripcion": "Libro", "cantidad": 3, "precio": 10, "alicuota": 0, "exento": true, "codigo": "LIB-02" }
+  ]
+}
+```
+
+| Campo | Significado cuando viene vacio |
+|---|---|
+| `serie` | Sin serie. La unicidad es por emisor + tipo + serie + numeracion |
+| `numeracionExterna` | El sistema numera. **Solo** se admite con valor si el emisor esta en modo `externa` |
+| `adqRif` | Se admite `adqDocumentoId` -cedula o pasaporte- en su lugar, para personas naturales |
+| `claveIdempotencia` | **No dejarlo vacio.** Sin clave no hay proteccion contra el doble envio |
+
+Los renglones no llevan la alicuota a criterio del frontend: el porcentaje se valida contra las
+alicuotas que declara el ERP, y el valor aplicado queda guardado en el documento.
+
+### Response - exito
+
+```json
+{
+  "data": {
+    "documentoId": 41,
+    "numeracion": "1",
+    "numeracionConSerie": "1",
+    "serie": "",
+    "tipoDocumento": "factura",
+    "denominacion": "FACTURA",
+    "numeroControl": "00-00000001",
+    "numeroControlTexto": "N° de Control 00-00000001",
+    "rangoNumerosControl": "desde el N° 00-00000001 hasta el N° 00-00000001",
+    "fechaEmision8d": "04092026",
+    "horaEmision": "08.47.39 p.m.",
+    "fechaAsignacion8d": "04092026",
+    "totalExento": 30.00,
+    "totalBase": 250.00,
+    "totalIva": 36.00,
+    "totalGeneral": 316.00,
+    "esPrueba": true,
+    "motivoPrueba": "Falta la Providencia de autorización del SENIAT (Art. 7.14)",
+    "leyendaProvidencia": "Emitida conforme a lo dispuesto en la Providencia Administrativa SNAT/2024/000102",
+    "yaExistia": false
+  },
+  "isValid": true,
+  "message": "suscces"
+}
+```
+
+`fechaEmision8d` viene en ocho digitos `DDMMAAAA` y `horaEmision` como `HH.MM.SS` **con puntos**
+y con `a.m.`/`p.m.`, tal como exige el Art. 7.6. Vienen ya formateadas: no reformatear.
+
+### Response - la misma clave llega dos veces
+
+Identica a la anterior salvo `"yaExistia": true`, y con los datos del documento original. El
+`documentoId` es el mismo. **No se creo un documento nuevo**, y el mensaje al usuario debe
+decirlo.
+
+### Response - el documento no cumple el Art. 7
+
+```json
+{ "data": null, "isValid": false, "message": "El documento no cumple el Artículo 7: falta el numeral 7.7 (adquiriente). falta el numeral 7.8 (al menos un renglón)." }
+```
+
+HTTP 200 con `isValid: false`, como todo el proyecto. Devuelve **todos** los numerales
+incumplidos, no el primero: quien corrige necesita verlos juntos. El rechazo queda registrado en
+la bitacora.
+
+## facturaGetAll
+
+Listado de documentos emitidos, paginado.
+
+```http
+POST /api/FacturacionElectronica/facturaGetAll
+```
+
+### Request
+
+```json
+{ "emisorId": 0, "tipoDocumento": "", "pageSize": 10, "pageNumber": 1 }
+```
+
+| Campo | Significado cuando viene vacio |
+|---|---|
+| `emisorId` | `0` = todos los emisores |
+| `tipoDocumento` | `""` = los cuatro tipos |
+
+### Response
+
+```json
+{
+  "data": [
+    {
+      "id": 41, "emisorId": 12, "tipoDocumento": "factura", "denominacion": "FACTURA",
+      "serie": "", "numeracion": "1", "numeracionConSerie": "1",
+      "numeroControl": "00-00000001",
+      "emitidoEn": "04/09/2026 20:47", "fechaEmision8d": "04092026", "horaEmision": "08.47.39 p.m.",
+      "emisorRif": "J-77777777-7", "emisorRazonSocial": "PRUEBA EMISION FASE 4",
+      "adqNombre": "CLIENTE DEMO", "adqRif": "V-12345678-9",
+      "totalExento": 30.00, "totalBase": 250.00, "totalIva": 36.00, "totalGeneral": 316.00,
+      "esPrueba": true
+    }
+  ],
+  "isValid": true, "message": "suscces",
+  "page": 1, "totalPage": 1, "cantidadRegistros": 1, "total1": 1
+}
+```
+
+`total1` = **cuantos de los documentos listados son de prueba**, contados sobre la pagina
+traida. Sirve para el aviso de la grilla; **no es un total del conjunto** y no debe presentarse
+como tal.
+
+`numeroControl` llega por `LEFT JOIN`. Si viniera vacio hay una anomalia -la emision crea las
+dos cosas en una transaccion- y el frontend debe mostrarla, no esconderla en una celda en
+blanco.
+
+---
+
+# Panel
+
+## panelResumen
+
+Los contadores del modulo para un periodo, en una sola llamada y una sola fila.
+
+```http
+POST /api/FacturacionElectronica/panelResumen
+```
+
+Devuelve un objeto propio de contadores, **no** los campos `total1..total4` del wrapper: esos,
+en el resto del proyecto, acompanan a una lista.
+
+### Request
+
+```json
+{ "periodo": "" }
+```
+
+| Campo | Significado cuando viene vacio |
+|---|---|
+| `periodo` | El **mes en curso**. Con valor, debe ser `AAAAMM` -por ejemplo `202609`- o la respuesta es `isValid: false` |
+
+### Response
+
+```json
+{
+  "data": {
+    "periodo": "202609",
+    "documentosPeriodo": 4,
+    "documentosPrueba": 4,
+    "numerosAsignadosPeriodo": 36,
+    "emisoresTotal": 3,
+    "emisoresActivos": 3,
+    "emisoresRifSinVerificar": 2,
+    "periodoEstado": "pendiente",
+    "periodoVence": "10/10/2026",
+    "periodoDiasRestantes": 36,
+    "periodoCantidadReportada": 0,
+    "periodosVencidosAnio": 1
+  },
+  "isValid": true,
+  "message": "suscces"
+}
+```
+
+| Campo | Que significa |
+|---|---|
+| `documentosPeriodo` / `documentosPrueba` | Documentos emitidos en el periodo, y cuantos de ellos no tienen validez fiscal. Hoy los dos numeros coinciden, y coincidiran hasta que el SENIAT autorice |
+| `numerosAsignadosPeriodo` | Numeros de control asignados en el periodo. **Puede ser mayor** que `documentosPeriodo`: asignar sin documento es valido (Arts. 7.5 y 7.15) |
+| `emisoresRifSinVerificar` | Emisores cuyo RIF nunca se verifico. El Art. 29.2 obliga a exigir el comprobante **vigente**, no una sola vez al dar de alta |
+| `periodoDiasRestantes` | Dias hasta el vencimiento del reporte. **Negativo** si ya vencio |
+| `periodosVencidosAnio` | Periodos del **ano calendario** en estado `vencido`. **Es el numero critico: dos revocan la autorizacion, sin sancion previa (Art. 34.3).** Si es mayor que cero, la pantalla tiene que gritarlo |
+
+Los contadores salen de una sola consulta para que sean coherentes entre si: contarlos en
+momentos distintos permitiria que la pantalla afirme que hay 30 documentos y 29 numeros
+asignados.
+
+**Los ultimos documentos no vienen aca.** La pantalla los pide a `facturaGetAll` con
+`pageSize: 5`, que ya existe y trae el numero de control por join.
