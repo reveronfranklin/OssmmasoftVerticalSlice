@@ -28,13 +28,28 @@
 --   psql -h <host> -p 5432 -U postgres -d OSSMMASOFT -f 00_fed_bootstrap.sql
 -- =============================================================================
 
--- Rol de aplicacion del modulo. Reejecutable.
--- La clave de este script es la de desarrollo. En cualquier otro ambiente el DBA
--- la cambia al crear el rol y actualiza DefaultConnectionFed en appsettings.
+-- DOS ROLES, Y LA DIFERENCIA ES TODO EL PUNTO (decisiones D-10 y D-20).
+--
+--   fed      propietario del schema. Crea y migra. NO lo usa la aplicacion.
+--   fed_app  el que usa la aplicacion. Puede leer e insertar, y actualizar solo
+--            las columnas que de verdad cambian. Nunca borra.
+--
+-- Por que no alcanza con un rol: en PostgreSQL el propietario de una tabla
+-- SIEMPRE puede escribirla, sin importar que permisos se le revoquen. Mientras la
+-- aplicacion se conecte como dueno, el append-only que exige el Articulo 18.2 es
+-- una promesa del codigo y no una propiedad del sistema. Con dos roles pasa a ser
+-- verificable: se intenta el UPDATE y la base lo rechaza.
+--
+-- Las claves de este script son las de desarrollo. En cualquier otro ambiente el
+-- DBA las cambia al crear los roles y actualiza DefaultConnectionFed.
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fed') THEN
         CREATE ROLE fed WITH LOGIN PASSWORD 'fed';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fed_app') THEN
+        CREATE ROLE fed_app WITH LOGIN PASSWORD 'fed_app';
     END IF;
 END
 $$;
@@ -46,9 +61,21 @@ CREATE SCHEMA IF NOT EXISTS FED AUTHORIZATION fed;
 GRANT CONNECT ON DATABASE "OSSMMASOFT" TO fed;
 GRANT USAGE, CREATE ON SCHEMA FED TO fed;
 
+-- El rol de aplicacion entra al schema pero NO puede crear en el: no le toca
+-- migrar nada.
+GRANT CONNECT ON DATABASE "OSSMMASOFT" TO fed_app;
+GRANT USAGE ON SCHEMA FED TO fed_app;
+
+-- Lo que fed cree de aqui en mas nace legible e insertable para fed_app, sin que
+-- nadie tenga que acordarse. El UPDATE NO entra aca a proposito: es la excepcion
+-- y se otorga columna por columna en GRANTS_FED_APP.sql.
+ALTER DEFAULT PRIVILEGES FOR ROLE fed IN SCHEMA FED
+    GRANT SELECT, INSERT ON TABLES TO fed_app;
+
 -- Defensa contra un search_path inesperado: si un script olvidara calificar un
 -- objeto, cae en FED y no en public, que es de report-server.
 ALTER ROLE fed SET search_path = FED;
+ALTER ROLE fed_app SET search_path = FED;
 
 -- Nota deliberada: no se ejecuta REVOKE sobre public. Desde PostgreSQL 15 el
 -- schema public ya no concede CREATE a PUBLIC, asi que fed no puede crear ahi.
