@@ -20,6 +20,10 @@ CREATE OR REPLACE PROCEDURE BMC.SP_BM_CONT_DET_REC (
     v_KeySep2 NUMBER;
     v_Placa VARCHAR2(4000);
     v_IcpFisico NUMBER;
+    v_CodigoDirBien NUMBER;
+    v_CodigoIcp NUMBER;
+    v_UnidadTrabajo VARCHAR2(200);
+    v_CodigoDetalle NUMBER;
     v_CodigoConteo NUMBER;
     v_Conteo NUMBER;
     v_UltimoConteo NUMBER;
@@ -53,6 +57,7 @@ BEGIN
 
             v_Placa := TRIM(SUBSTR(v_Line, v_Sep1 + 1, v_Sep2 - v_Sep1 - 1));
             v_IcpFisico := TO_NUMBER(TRIM(SUBSTR(v_Line, v_Sep2 + 1, v_Sep3 - v_Sep2 - 1)));
+            v_CodigoDirBien := TO_NUMBER(TRIM(SUBSTR(v_Line, v_Sep3 + 1, v_Sep4 - v_Sep3 - 1)));
             v_Key := SUBSTR(v_Line, v_Sep4 + 1);
             v_KeySep1 := INSTR(v_Key, '-', 1, 1);
             v_KeySep2 := INSTR(v_Key, '-', 1, 2);
@@ -64,18 +69,56 @@ BEGIN
             v_CodigoConteo := TO_NUMBER(TRIM(SUBSTR(v_Key, 1, v_KeySep1 - 1)));
             v_Conteo := TO_NUMBER(TRIM(SUBSTR(v_Key, v_KeySep1 + 1, v_KeySep2 - v_KeySep1 - 1)));
 
+            SELECT U.CODIGO_ICP, U.UNIDAD_EJECUTORA
+              INTO v_CodigoIcp, v_UnidadTrabajo
+              FROM BMC.BM_V_UBICACIONES U
+             WHERE U.CODIGO_DIR_BIEN = v_CodigoDirBien
+               AND ROWNUM = 1;
+
             UPDATE BMC.BM_CONTEO_DETALLE
                SET CANTIDAD_CONTADA = 1,
                    DIFERENCIA = NVL(CANTIDAD, 0) - 1,
+                   CODIGO_ICP = v_CodigoIcp,
+                   UNIDAD_TRABAJO = v_UnidadTrabajo,
                    CODIGO_ICP_FISICO = v_IcpFisico,
                    FECHA_UPD = SYSDATE
              WHERE CODIGO_EMPRESA = p_CodigoEmpresa
                AND CODIGO_BM_CONTEO = v_CodigoConteo
                AND CONTEO = v_Conteo
+               AND CODIGO_ICP = v_CodigoIcp
                AND TRIM(NUMERO_PLACA) = v_Placa;
 
             IF SQL%ROWCOUNT = 0 THEN
-                RAISE_APPLICATION_ERROR(-20004, 'Placa no encontrada en el detalle: ' || v_Placa);
+                SELECT BMC.BM_S_CODIGO_CONTEO_DET.NEXTVAL
+                  INTO v_CodigoDetalle
+                  FROM DUAL;
+
+                INSERT INTO BMC.BM_CONTEO_DETALLE (
+                    CODIGO_BM_CONTEO_DETALLE, CODIGO_BM_CONTEO, CONTEO,
+                    CODIGO_ICP, UNIDAD_TRABAJO, CODIGO_GRUPO, CODIGO_NIVEL1,
+                    CODIGO_NIVEL2, NUMERO_LOTE, CANTIDAD, NUMERO_PLACA,
+                    VALOR_ACTUAL, ARTICULO, ESPECIFICACION, SERVICIO,
+                    RESPONSABLE_BIEN, FECHA_MOVIMIENTO, CODIGO_BIEN,
+                    CODIGO_MOV_BIEN, CANTIDAD_CONTADA, DIFERENCIA,
+                    CODIGO_EMPRESA, FECHA_INS, COMENTARIO,
+                    REPLICAR_COMENTARIO, CODIGO_ICP_FISICO
+                )
+                SELECT v_CodigoDetalle, v_CodigoConteo, v_Conteo,
+                       v_CodigoIcp, v_UnidadTrabajo, V.CODIGO_GRUPO,
+                       V.CODIGO_NIVEL1, V.CODIGO_NIVEL2, V.NUMERO_LOTE,
+                       V.CANTIDAD, V.NRO_PLACA, V.VALOR_ACTUAL, V.ARTICULO,
+                       V.ESPECIFICACION, V.SERVICIO, V.RESPONSABLE_BIEN,
+                       V.FECHA_MOVIMIENTO, V.CODIGO_BIEN, V.CODIGO_MOV_BIEN,
+                       1, NVL(V.CANTIDAD, 0) - 1, p_CodigoEmpresa,
+                       SYSDATE, NULL, 0, v_IcpFisico
+                  FROM BMC.BM_V_BM1 V
+                 WHERE V.CODIGO_EMPRESA = p_CodigoEmpresa
+                   AND TRIM(V.NRO_PLACA) = v_Placa
+                   AND ROWNUM = 1;
+
+                IF SQL%ROWCOUNT = 0 THEN
+                    RAISE_APPLICATION_ERROR(-20004, 'Placa no encontrada en BMC.BM_V_BM1: ' || v_Placa);
+                END IF;
             ELSIF SQL%ROWCOUNT > 1 THEN
                 RAISE_APPLICATION_ERROR(-20005, 'La placa esta duplicada en el detalle: ' || v_Placa);
             END IF;

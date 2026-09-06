@@ -201,6 +201,8 @@ BEGIN
   up_menu(7130, 7, 7000, 'Reportes BM', '/apps/Bm/BmReportes', NULL, 130);
   up_menu(7140, 7, 7000, 'Procesos Masivos', '/apps/Bm/BmProcesosMasivos', NULL, 140);
 
+  up_menu(7150, 7, 7000, 'Replica de datos', '/apps/Bm/BmReplicaConteo', 'mdi:database-sync-outline', 150);
+
   add_rp_key('BM_MENU', 'bm.menu.ver');
   add_rp_key('BM_USUARIO', 'bm.menu.ver');
 
@@ -219,6 +221,7 @@ BEGIN
   add_mp_key(7120, 'bm.menu.ver');
   add_mp_key(7130, 'bm.menu.ver');
   add_mp_key(7140, 'bm.menu.ver');
+  add_mp_key(7150, 'bm.menu.ver');
 
   grant_menu_key('BM_MENU');
   grant_menu_key('BM_USUARIO');
@@ -227,4 +230,4 @@ END;
 
 COMMIT;
 
-PROMPT Opciones de menu Bienes Municipales listas
+PROMPT Opciones de menu Bienes Municipales listas prueba

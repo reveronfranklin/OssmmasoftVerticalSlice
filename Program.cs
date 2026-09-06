@@ -11,6 +11,8 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 // Registrar nuestra clase de conexión
 builder.Services.AddScoped<ConnectionDB>();
+builder.Services.AddSingleton<OssmmasoftVerticalSlice.Features.BienesMunicipales.BmReplicaEstado>();
+builder.Services.AddHostedService<OssmmasoftVerticalSlice.Features.BienesMunicipales.BmReplicaManualWorker>();
 builder.Services.AddScoped<OssmmasoftVerticalSlice.Features.BienesMunicipales.BmReplicaConteoService>();
 builder.Services.AddHostedService<OssmmasoftVerticalSlice.Features.BienesMunicipales.BmReplicaConteoWorker>();
 
