@@ -8,18 +8,36 @@ namespace OssmmasoftVerticalSlice.Features.BienesMunicipales;
 
 [ApiController]
 [Route("api/BmReplicaConteo")]
-public class BmReplicaConteoController(BmReplicaConteoService service) : ControllerBase
+public class BmReplicaConteoController(BmReplicaConteoService service, BmReplicaEstado estado, IConfiguration config) : ControllerBase
 {
+    [HttpGet("Estado")]
+    public IActionResult Estado() => Ok(estado.Resultado());
+
+    [HttpPost("Iniciar")]
+    public IActionResult Iniciar()
+    {
+        if (config["settings:ReplicarConteo"] != "1")
+            return Ok(estado.Resultado(false, "La replica esta deshabilitada en la configuracion."));
+        if (!estado.Iniciar())
+            return Ok(estado.Resultado(false, "Ya hay una replica en curso."));
+        if (!estado.Solicitudes.Writer.TryWrite(true))
+        {
+            estado.Terminar(false, "No fue posible iniciar la replica.");
+            return Ok(estado.Resultado(false));
+        }
+        return Ok(estado.Resultado());
+    }
+
     [HttpPost("Replicar")]
     public async Task<IActionResult> Replicar() => Ok(await service.ReplicarAsync());
 }
 
-public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration config)
+public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration config, BmReplicaEstado estado)
 {
-    private static readonly SemaphoreSlim ReplicaLock = new(1, 1);
 
-    public async Task<ResultDto<List<BmReplicaConteoResponse>>> ReplicarAsync()
+    public async Task<ResultDto<List<BmReplicaConteoResponse>>> ReplicarAsync(bool reservada = false)
     {
+        if (!reservada && !estado.Iniciar()) return BmDb.InvalidList<BmReplicaConteoResponse>("Ya hay una replica en curso.");
         if (!string.Equals(config["settings:ReplicarConteo"], "1", StringComparison.OrdinalIgnoreCase))
         {
             return Invalid(
@@ -27,7 +45,6 @@ public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration co
             );
         }
 
-        await ReplicaLock.WaitAsync();
         try
         {
             if (!string.Equals(config["settings:ReplicarConteo"], "1", StringComparison.OrdinalIgnoreCase))
@@ -66,6 +83,7 @@ public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration co
                     await ReplaceTableAsync(rhc, rhcTx, "RHC.RH_PERSONAS", personas);
                     await VerifyRowCountAsync(rhc, rhcTx, "RHC.RH_PERSONAS", personas.Rows.Count);
                     rhcTx.Commit();
+                    estado.Tabla("RHC.RH_PERSONAS", "Confirmada");
                 }
                 catch
                 {
@@ -98,6 +116,8 @@ public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration co
                     clasificaciones.Rows.Count);
                 await VerifyRowCountAsync(bmc, tx, "BMC.BM_DESCRIPTIVAS", descriptivas.Rows.Count);
                 tx.Commit();
+                foreach (var tabla in estado.Leer().Tablas.Where(t => t.Tabla.StartsWith("BMC.")))
+                    estado.Tabla(tabla.Tabla, "Confirmada");
             }
             catch
             {
@@ -113,6 +133,7 @@ public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration co
                 clasificaciones.Rows.Count,
                 personas.Rows.Count);
 
+            estado.Terminar(true, "Replica completada correctamente.");
             return new ResultDto<List<BmReplicaConteoResponse>>(new List<BmReplicaConteoResponse> { response })
             {
                 IsValid = true,
@@ -126,30 +147,33 @@ public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration co
         {
             return Invalid($"Error tecnico al replicar datos: {ex.Message}");
         }
-        finally
-        {
-            ReplicaLock.Release();
-        }
     }
 
-    private static ResultDto<List<BmReplicaConteoResponse>> Invalid(string message) =>
-        BmDb.InvalidList<BmReplicaConteoResponse>(message);
-
-    private static async Task<DataTable> ReadTableAsync(OracleConnection cn, string tableName)
+    private ResultDto<List<BmReplicaConteoResponse>> Invalid(string message)
     {
+        estado.Terminar(false, message);
+        return BmDb.InvalidList<BmReplicaConteoResponse>(message);
+    }
+
+    private async Task<DataTable> ReadTableAsync(OracleConnection cn, string tableName)
+    {
+        var destino = tableName.Replace("BM.", "BMC.").Replace("RH.", "RHC.");
+        estado.Tabla(destino, "Leyendo");
         using var cmd = new OracleCommand($"SELECT * FROM {tableName}", cn) { BindByName = true };
         using var reader = await cmd.ExecuteReaderAsync();
         var table = new DataTable();
         table.Load(reader);
+        estado.Tabla(destino, "Leida", table.Rows.Count);
         return table;
     }
 
-    private static async Task ReplaceTableAsync(
+    private async Task ReplaceTableAsync(
         OracleConnection cn,
         OracleTransaction tx,
         string tableName,
         DataTable source)
     {
+        estado.Tabla(tableName, "Copiando", source.Rows.Count, 0);
         using (var delete = new OracleCommand($"DELETE FROM {tableName}", cn) { Transaction = tx })
         {
             await delete.ExecuteNonQueryAsync();
@@ -172,6 +196,7 @@ public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration co
             insert.Parameters.Add($"p{index}", MapOracleType(columns[index].DataType));
         }
 
+        var copiados = 0;
         foreach (DataRow row in source.Rows)
         {
             for (var index = 0; index < columns.Count; index++)
@@ -179,15 +204,19 @@ public class BmReplicaConteoService(ConnectionDB connectionDB, IConfiguration co
                 insert.Parameters[index].Value = row.IsNull(index) ? DBNull.Value : row[index];
             }
             await insert.ExecuteNonQueryAsync();
+            copiados++;
+            if (copiados % 100 == 0 || copiados == source.Rows.Count)
+                estado.Tabla(tableName, "Copiando", source.Rows.Count, copiados);
         }
     }
 
-    private static async Task VerifyRowCountAsync(
+    private async Task VerifyRowCountAsync(
         OracleConnection cn,
         OracleTransaction tx,
         string tableName,
         int expected)
     {
+        estado.Tabla(tableName, "Verificando");
         using var cmd = new OracleCommand($"SELECT COUNT(*) FROM {tableName}", cn)
         {
             Transaction = tx,
