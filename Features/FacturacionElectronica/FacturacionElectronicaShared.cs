@@ -216,11 +216,23 @@ public static class FacturacionElectronicaDb
             FECHA_UPD     = now()
         WHERE EMISOR_ID = @emisor_id;";
 
+    // ESTADO_CONCILIACION se calcula en el propio INSERT y no se deja al DEFAULT.
+    //
+    // Su comentario en 05_fed_num_control_art32.sql dice que "se deriva de si hay
+    // documento, pero se guarda explicito para poder filtrarlo e indexarlo": la
+    // derivacion faltaba. El DEFAULT es 'sin_documento', asi que toda asignacion
+    // hecha CON documento quedaba registrada como si no lo tuviera, y ese es el
+    // registro que se le remite al SENIAT por el Art. 29.7.
+    //
+    // Calcularlo aca y no en el codigo evita que las dos cosas se separen: la
+    // columna no puede contradecir a DOCUMENTO_ID porque sale de el.
     public const string SqlNumControlInsert = @"
         INSERT INTO FED.FED_NUM_CONTROL
-            (EMISOR_ID, DOCUMENTO_ID, IDENTIFICADOR, SECUENCIAL, TIPO_DOCUMENTO, USUARIO_INS)
+            (EMISOR_ID, DOCUMENTO_ID, IDENTIFICADOR, SECUENCIAL, TIPO_DOCUMENTO, USUARIO_INS,
+             ESTADO_CONCILIACION)
         VALUES
-            (@emisor_id, @documento_id, @identificador, @secuencial, @tipo_documento, @usuario_ins)
+            (@emisor_id, @documento_id, @identificador, @secuencial, @tipo_documento, @usuario_ins,
+             CASE WHEN @documento_id IS NULL THEN 'sin_documento' ELSE 'conciliado' END)
         RETURNING ID, FECHA_ASIGNACION;";
 
     // Listado del Art. 32: por emisor y por rango de fechas, que es como lo pide
@@ -380,6 +392,25 @@ public static class FacturacionElectronicaDb
     // la tabla; se valida antes para devolver un mensaje en espanol en vez de un
     // error tecnico del motor.
     public static readonly string[] TiposDocumento = ["factura", "debito", "credito", "entrega"];
+
+    // Que tipos puede emitir cada operacion, y por que no son los cuatro.
+    //
+    // Una nota de debito o de credito NO se puede emitir por la misma ruta que
+    // una factura, y no es una cuestion de orden: el Art. 23 de la Providencia
+    // SNAT/2011/00071 exige que la nota haga referencia a la fecha, numero y
+    // monto de la factura que soporto la operacion. Ese dato no existe en el
+    // comando de emision directa, asi que aceptar el tipo por esa via produce un
+    // documento fiscal inconforme.
+    //
+    // Y en este modulo eso no se puede reparar despues: no hay UPDATE ni DELETE
+    // sobre FED_DOCUMENTO (D-20). Una fila mal emitida queda mal para siempre.
+    //
+    // TiposDocumento NO se parte: la asignacion del numero de control admite los
+    // cuatro con razon, porque el Rol A tambien vende numeros de control a un
+    // emisor que emite las notas en su propio sistema.
+    public static readonly string[] TiposEmisionDirecta = ["factura", "entrega"];
+
+    public static readonly string[] TiposNota = ["debito", "credito"];
 
     public const int SecuencialMaximo = 99999999;
     public const int IdentificadorMaximo = 99;

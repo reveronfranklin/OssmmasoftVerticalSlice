@@ -33,6 +33,20 @@ public static class FacturaValidador
         {
             faltantes.Add("7.1: el tipo de documento debe ser factura, débito, crédito o entrega.");
         }
+        else if (FacturacionElectronicaDb.TiposNota.Contains(tipo))
+        {
+            // El tipo es valido, pero no por esta via. Una nota emitida aca
+            // quedaria sin la referencia a la factura que soporto la operacion
+            // que exige el Art. 23 de la SNAT/2011/00071, y en este modulo eso no
+            // se puede corregir despues: no hay UPDATE sobre FED_DOCUMENTO.
+            //
+            // El mensaje dice a donde ir. Un rechazo que no indica la alternativa
+            // obliga a quien integra a adivinarla.
+            faltantes.Add(
+                "23: una nota de débito o de crédito se emite por notaCreate, que exige la referencia a la "
+                + "fecha, número y monto de la factura que soportó la operación (Art. 23 de la Providencia "
+                + "SNAT/2011/00071).");
+        }
 
         // 7.2 - la numeracion consecutiva y unica la genera el sistema (D-21), asi
         // que aca no se exige. Lo que si se valida es la coherencia del modo: un

@@ -98,6 +98,24 @@ GRANT UPDATE (MODO_NUMERACION) ON FED.FED_EMISOR TO fed_app;
 -- Identificador del documento del emisor externo: se completa despues de asignar.
 GRANT UPDATE (DOCUMENTO_EXTERNO) ON FED.FED_NUM_CONTROL TO fed_app;
 
+-- El tipo de contribuyente es dato editable del emisor: una empresa puede pasar
+-- de contribuyente formal a ordinario, y de eso depende contra que articulo se
+-- valida su nota (D-31).
+GRANT UPDATE (TIPO_CONTRIBUYENTE) ON FED.FED_EMISOR TO fed_app;
+
+-- -----------------------------------------------------------------------------
+-- Fase 5 - notas de debito y credito
+--
+-- FED_NOTA se queda con SELECT + INSERT como el resto de lo que cuelga del
+-- documento: lo recibe del ALTER DEFAULT PRIVILEGES del script 00 y no se lista
+-- aca. Corregir una nota emitida seria enmendar un documento fiscal, que es
+-- justamente lo que el Art. 41 de la SNAT/2011/00071 prohibe.
+--
+-- La vista de estado solo necesita lectura. No es escribible ni podria serlo:
+-- tiene agregados.
+-- -----------------------------------------------------------------------------
+GRANT SELECT ON FED.FED_V_DOCUMENTO_ESTADO TO fed_app;
+
 -- -----------------------------------------------------------------------------
 -- LAS TABLAS DE DOCUMENTOS NO APARECEN AQUI, Y ESA ES LA IDEA.
 --
