@@ -11,7 +11,12 @@ public record FacturacionElectronicaEmisorCreateCommand(
     string RazonSocial,
     string DomicilioFiscal,
     string Correo,
-    string UsuarioIns);
+    string UsuarioIns,
+
+    // D-31. Por defecto 'ordinario', que es el conjunto MAS ESTRICTO: el Art. 13
+    // tiene dieciseis numerales y el 15 es el del no ordinario. Un emisor sin
+    // declarar queda sobre-validado, no sub-validado.
+    string TipoContribuyente = "ordinario");
 
 public class FacturacionElectronicaEmisorCreateHandler(ConnectionDB _connectionDB)
 {
@@ -55,6 +60,9 @@ public class FacturacionElectronicaEmisorCreateHandler(ConnectionDB _connectionD
             cmd.Parameters.AddWithValue("razon_social", command.RazonSocial.Trim());
             cmd.Parameters.AddWithValue("domicilio_fiscal", command.DomicilioFiscal.Trim());
             cmd.Parameters.AddWithValue("correo", FacturacionElectronicaDb.DbValue(command.Correo));
+            cmd.Parameters.AddWithValue("tipo_contribuyente",
+                FacturacionElectronicaDb.DbValue(
+                    string.IsNullOrWhiteSpace(command.TipoContribuyente) ? "ordinario" : command.TipoContribuyente));
             cmd.Parameters.AddWithValue("estado", "activo");
             cmd.Parameters.AddWithValue("usuario_ins", FacturacionElectronicaDb.DbValue(command.UsuarioIns));
 

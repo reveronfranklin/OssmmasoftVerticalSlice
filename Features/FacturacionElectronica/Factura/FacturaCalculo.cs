@@ -99,4 +99,19 @@ public static class FacturaCalculo
 
     private static decimal Redondear(decimal valor) =>
         Math.Round(valor, Decimales, MidpointRounding.AwayFromZero);
+
+    // Art. 13.14 de la SNAT/2011/00071: la operacion en moneda extranjera debe
+    // expresar AMBOS montos. Este es el segundo.
+    //
+    // Se redondea a dos decimales como todo monto del documento, y con el mismo
+    // criterio AwayFromZero que usa Calcular: dos redondeos distintos en el mismo
+    // documento serian dos verdades.
+    //
+    // Tasa cero o negativa devuelve cero en vez de lanzar: la validacion de que
+    // la tasa exista es del validador, y el CHECK de la tabla no deja entrar un
+    // documento en divisas sin ella. Aca no hay nada que decidir.
+    public static decimal ConvertirAMoneda(decimal montoEnBolivares, decimal tasaCambio) =>
+        tasaCambio <= 0
+            ? 0m
+            : Math.Round(montoEnBolivares / tasaCambio, 2, MidpointRounding.AwayFromZero);
 }

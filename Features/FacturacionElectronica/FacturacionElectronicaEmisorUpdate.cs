@@ -18,7 +18,8 @@ public record FacturacionElectronicaEmisorUpdateCommand(
     string Estado,
     DateTime? RifVerificadoEl,
     string RifVerificadoEstado,
-    string UsuarioUpd);
+    string UsuarioUpd,
+    string TipoContribuyente = "ordinario");
 
 public class FacturacionElectronicaEmisorUpdateHandler(ConnectionDB _connectionDB)
 {
@@ -69,6 +70,9 @@ public class FacturacionElectronicaEmisorUpdateHandler(ConnectionDB _connectionD
             cmd.Parameters.AddWithValue("estado", estado);
             cmd.Parameters.AddWithValue("rif_verificado_el", FacturacionElectronicaDb.DbValueFecha(command.RifVerificadoEl));
             cmd.Parameters.AddWithValue("rif_verificado_estado", FacturacionElectronicaDb.DbValue(command.RifVerificadoEstado));
+            cmd.Parameters.AddWithValue("tipo_contribuyente",
+                FacturacionElectronicaDb.DbValue(
+                    string.IsNullOrWhiteSpace(command.TipoContribuyente) ? "ordinario" : command.TipoContribuyente));
             cmd.Parameters.AddWithValue("usuario_upd", FacturacionElectronicaDb.DbValue(command.UsuarioUpd));
 
             int filas = await cmd.ExecuteNonQueryAsync();

@@ -39,7 +39,18 @@ public record FacturaListaResponse(
     decimal TotalBase,
     decimal TotalIva,
     decimal TotalGeneral,
-    bool EsPrueba);
+    bool EsPrueba,
+
+    // Fase 5. El estado es DERIVADO -de las notas que lo corrigen y de la
+    // bitacora-, nunca una columna del documento: los Arts. 41 y 36 de la
+    // SNAT/2011/00071 prohiben alterarlo y obligan a conservar el anulado.
+    //
+    // Saldo cero NO significa anulado: un documento con notas por su importe
+    // total sigue siendo "ajustado" si nadie declaro la anulacion (D-32).
+    string Moneda,
+    string Estado,
+    decimal Saldo,
+    int CantidadNotas);
 
 public class FacturacionElectronicaFacturaGetAllHandler(ConnectionDB _connectionDB)
 {
@@ -101,7 +112,11 @@ public class FacturacionElectronicaFacturaGetAllHandler(ConnectionDB _connection
                         reader.SafeGetDecimal("total_base"),
                         reader.SafeGetDecimal("total_iva"),
                         reader.SafeGetDecimal("total_general"),
-                        esPrueba));
+                        esPrueba,
+                        reader.SafeGetString("moneda"),
+                        reader.SafeGetString("estado"),
+                        reader.SafeGetDecimal("saldo"),
+                        reader.SafeGetInt32("cantidad_notas")));
 
                     totalRegistros = reader.SafeGetInt32("total_registros");
 

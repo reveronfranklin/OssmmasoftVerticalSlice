@@ -102,4 +102,27 @@ public static class FacturaFormato
         "entrega" => "GUÍA DE DESPACHO",
         _         => tipoDocumento.ToUpperInvariant()
     };
+
+    // Art. 23 de la SNAT/2011/00071: la nota "debe hacer referencia a la fecha,
+    // numero y monto de la factura que soporto la operacion".
+    //
+    // Va aca y no en el handler por la misma razon que RangoNumerosControl: es un
+    // texto que la norma fija, no un criterio de presentacion. Si manana se
+    // discute como se escribe, se discute en un solo lugar.
+    public static string ReferenciaOriginal(
+        string fechaOchoDigitos, string numeracionConSerie, decimal monto, string moneda) =>
+        $"Factura N° {numeracionConSerie} del {fechaOchoDigitos} por {monto:N2} {moneda}";
+
+    // Art. 15.6 de la SNAT/2011/00071. Solo aplica a quien NO es contribuyente
+    // ordinario del IVA, y es contenido obligatorio del documento: no es una
+    // validacion de la entrada, es algo que el documento tiene que decir.
+    //
+    // Cadena vacia para el contribuyente ordinario: el Art. 13 no pide ninguna
+    // leyenda de este tipo.
+    public static string LeyendaContribuyente(string tipoContribuyente) => tipoContribuyente switch
+    {
+        "formal"    => "Contribuyente Formal",
+        "no_sujeto" => "no sujeto al impuesto al valor agregado",
+        _           => string.Empty
+    };
 }

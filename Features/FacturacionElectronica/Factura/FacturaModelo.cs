@@ -45,16 +45,48 @@ public record FacturaEmitirCommand(
     string AdqRif = "",
     string AdqDocumentoId = "",
     string UsuarioIns = "",
-    string ClaveIdempotencia = "");
+    string ClaveIdempotencia = "",
+
+    // Moneda de la operacion (D-30). Vacio o "VES" es bolivares.
+    //
+    // Se guarda para CUALQUIER documento pero solo se EXIGE donde la norma lo
+    // exige: el Art. 13.14 de la 00071 obliga a expresar ambos montos y el tipo
+    // de cambio, y por el Art. 23 eso alcanza a las notas; el Art. 7 de la 102,
+    // que rige la factura, no lo pide. La asimetria es de la norma.
+    string Moneda = "",
+    decimal TasaCambio = 0,
+
+    // Propios de la nota (Arts. 22 y 23 de la SNAT/2011/00071). Van con valor por
+    // defecto para que la emision directa siga compilando y comportandose igual;
+    // notaCreate los exige.
+    long DocumentoOrigenId = 0,
+    string Motivo = "",
+    bool EsAnulacion = false);
+
+// Un numeral incumplido. El codigo va SEPARADO del texto y no soldado dentro
+// (D-35): es lo que permite validar el mismo contenido contra el Art. 7 de la 102
+// o contra el Art. 13 o el 15 de la 00071 sin duplicar la condicion.
+//
+// Numeral vacio significa que el articulo aplicable no lo enumera; el mensaje lo
+// omite en vez de escribir un ": " huerfano.
+public record FacturaFalta(string Numeral, string Texto)
+{
+    public override string ToString() =>
+        Numeral.Length > 0 ? $"{Numeral}: {Texto}" : Texto;
+}
 
 // Resultado de validar. Falla con la lista de numerales incumplidos, no con el
 // primero: quien corrige el documento necesita ver todo lo que le falta, no
 // descubrirlo de a uno por intento.
-public record FacturaValidacion(bool EsValida, List<string> Faltantes)
+//
+// Articulo dice contra QUE se valido. Antes estaba cableado en el texto del
+// mensaje, lo que hacia imposible reusar los chequeos para las notas.
+public record FacturaValidacion(bool EsValida, List<FacturaFalta> Faltantes, string Articulo = "7")
 {
     public string Mensaje => EsValida
         ? string.Empty
-        : "El documento no cumple el Artículo 7: " + string.Join(" ", Faltantes);
+        : $"El documento no cumple el Artículo {Articulo}: "
+          + string.Join(" ", Faltantes.Select(f => f.ToString()));
 }
 
 // Totales calculados, listos para persistir. Uno por alicuota mas los agregados.

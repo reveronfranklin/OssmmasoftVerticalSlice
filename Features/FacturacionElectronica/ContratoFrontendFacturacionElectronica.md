@@ -2,10 +2,10 @@
 
 Requerimiento 32. Modulo de facturacion electronica sobre PostgreSQL (schema `FED`).
 
-**Estado: Fase 4 mas el panel.** Endpoint de salud, CRUD de emisores, nucleo de asignacion del
-numero de control, registro del Art. 32 con su reporte mensual, **emision y consulta de
-documentos fiscales**, y los contadores del panel. Las notas de debito y credito (Fase 5) y la
-nota de entrega (Fase 6) todavia no se emiten.
+**Estado: Fase 5.** Endpoint de salud, CRUD de emisores, nucleo de asignacion del
+numero de control, registro del Art. 32 con su reporte mensual, emision y consulta de
+documentos fiscales, los contadores del panel, y **la emision de notas de debito y credito con
+el estado derivado del documento**. La nota de entrega (Fase 6) todavia no se emite.
 
 **Ningun documento emitido tiene validez fiscal** hasta que el SENIAT autorice a Ossmmasoft como
 imprenta digital: todos vienen con `esPrueba: true` y su motivo.
@@ -619,12 +619,17 @@ pantalla, no quedar en el JSON.
 
 ## Tipos de documento y su denominacion
 
-| `tipoDocumento` | `denominacion` que devuelve | Estado |
-|---|---|---|
-| `factura` | `FACTURA` | construido |
-| `debito` | `NOTA DE DÉBITO` | Fase 5, no construido |
-| `credito` | `NOTA DE CRÉDITO` | Fase 5, no construido |
-| `entrega` | `GUÍA DE DESPACHO` | Fase 6, no construido |
+| `tipoDocumento` | `denominacion` que devuelve | Se emite por | Estado |
+|---|---|---|---|
+| `factura` | `FACTURA` | `facturaCreate` | construido |
+| `debito` | `NOTA DE DÉBITO` | **`notaCreate`** | construido |
+| `credito` | `NOTA DE CRÉDITO` | **`notaCreate`** | construido |
+| `entrega` | `GUÍA DE DESPACHO` | `facturaCreate` | Fase 6, no construido |
+
+**`facturaCreate` RECHAZA `debito` y `credito`.** No es un olvido: el Art. 23 de la
+SNAT/2011/00071 exige que la nota haga referencia a la fecha, numero y monto de la factura que
+soporto la operacion, y ese dato no existe en esa solicitud. El mensaje de rechazo nombra
+`notaCreate`. Ver la seccion de notas al final.
 
 La denominacion la fija la norma y viene armada del backend. **No se traduce ni se adorna en el
 frontend**: «guia de despacho» no es «nota de entrega».
@@ -828,3 +833,174 @@ asignados.
 
 **Los ultimos documentos no vienen aca.** La pantalla los pide a `facturaGetAll` con
 `pageSize: 5`, que ya existe y trae el numero de control por join.
+
+---
+
+# Notas de debito y credito (Fase 5)
+
+## Lo que el frontend tiene que entender antes de consumirlo
+
+**`facturaCreate` NO emite notas.** Devuelve `isValid: false` si le llega
+`tipoDocumento` `debito` o `credito`, y el mensaje nombra `notaCreate`. No es una
+restriccion de la implementacion: el **Art. 23 de la Providencia SNAT/2011/00071**
+exige que la nota haga referencia a la fecha, numero y monto de la factura que
+soporto la operacion, y ese dato no existe si la emision no arranca desde un
+documento. En este modulo una nota mal emitida **no se puede reparar**: no hay
+`UPDATE` ni `DELETE` sobre las tablas de documentos.
+
+**La nota se emite DESDE un documento.** El formulario no se llena en blanco: la
+pantalla parte de la fila del documento que se corrige, y los tres datos del Art.
+23 se muestran de solo lectura.
+
+**Una nota es un documento fiscal completo.** Tiene su propia numeracion (Art.
+7.2), su propio **numero de control** (Art. 7.4) y sus propios totales. No hereda
+los de la factura.
+
+**Los montos de la nota son POSITIVOS.** El signo lo pone la denominacion
+-`NOTA DE CRÉDITO` o `NOTA DE DÉBITO`-, no el importe, igual que en papel. El
+sentido se aplica al calcular el saldo del documento corregido.
+
+**El estado del documento es DERIVADO, no una columna.** Sale de las notas que lo
+corrigen y de la bitacora. Y **saldo cero no significa anulado**: el Art. 22
+distingue operaciones que *quedaren sin efecto* de las que *originaren un ajuste*,
+asi que una nota por el importe total sigue siendo un ajuste si nadie declaro la
+anulacion. Son actos juridicos distintos con la misma aritmetica.
+
+**La anulacion es una intencion declarada**, no un endpoint aparte: se emite una
+nota de credito con `esAnulacion: true`. Un documento anulado no admite mas
+correcciones, y su original **se conserva intacto** -Art. 36 obliga a conservarlo,
+Art. 41 prohibe alterarlo-.
+
+## notaCreate
+
+```http
+POST /api/FacturacionElectronica/notaCreate
+```
+
+### Request
+
+```json
+{
+  "emisorId": 8,
+  "documentoOrigenId": 24,
+  "tipoDocumento": "credito",
+  "motivo": "Devolución parcial de mercancía",
+  "esAnulacion": false,
+  "adqNombre": "COMERCIAL SABANA GRANDE, C.A.",
+  "adqRif": "J-31558240-6",
+  "serie": "",
+  "moneda": "",
+  "tasaCambio": 0,
+  "usuarioIns": "avanessa",
+  "claveIdempotencia": "ui-nota-1788210656-a4f2c1",
+  "renglones": [
+    { "descripcion": "Devolución de mercancía", "cantidad": 1, "precio": 200, "alicuota": 16 }
+  ]
+}
+```
+
+| Campo | Obligatorio | Nota |
+|---|---|---|
+| `documentoOrigenId` | **si** | El documento que se corrige. Art. 23 |
+| `tipoDocumento` | **si** | `debito` o `credito`. Cualquier otro se rechaza |
+| `motivo` | **si** | Art. 22: la norma admite *cualquier causa*, pero no la ausencia de causa |
+| `esAnulacion` | no | Solo valido en una nota de **credito**. Declara que la operacion queda sin efecto |
+| `moneda` | no | Vacio es `VES`. **Debe coincidir con la del documento corregido** |
+| `tasaCambio` | condicional | Obligatorio cuando la moneda no es `VES` (Art. 13.14) |
+| `claveIdempotencia` | **no dejarlo vacio** | Sin ella, un doble clic acredita dos veces la misma devolucion |
+
+### Response - exito
+
+Es el **mismo objeto** que devuelve `facturaCreate`, con tres campos mas que en
+una factura vienen vacios:
+
+```json
+{
+  "data": {
+    "documentoId": 25,
+    "numeracion": "1",
+    "numeracionConSerie": "1",
+    "tipoDocumento": "credito",
+    "denominacion": "NOTA DE CRÉDITO",
+    "numeroControl": "00-00000002",
+    "numeroControlTexto": "N° de Control 00-00000002",
+    "rangoNumerosControl": "desde el N° 00-00000002 hasta el N° 00-00000002",
+    "fechaEmision8d": "07092026",
+    "horaEmision": "01.50.31 p.m.",
+    "fechaAsignacion8d": "07092026",
+    "totalExento": 0.00,
+    "totalBase": 200.00,
+    "totalIva": 32.00,
+    "totalGeneral": 232.00,
+    "esPrueba": true,
+    "motivoPrueba": "Falta la Providencia de autorización del SENIAT (Art. 7.14)",
+    "leyendaProvidencia": "Emitida conforme a lo dispuesto en la Providencia Administrativa SNAT/2024/000102",
+    "yaExistia": false,
+    "documentoOrigenId": 24,
+    "referenciaOriginal": "Factura N° 1 del 07092026 por 1.160,00 VES",
+    "motivo": "Devolución parcial de mercancía",
+    "leyendaContribuyente": ""
+  },
+  "isValid": true,
+  "message": "suscces"
+}
+```
+
+| Campo | Que es |
+|---|---|
+| `numeroControl` | **El de la nota, no el de la factura.** Cada documento consume el suyo |
+| `referenciaOriginal` | La frase del Art. 23, **ya armada por el backend**. El texto lo fija la norma: no se rearma en la pantalla |
+| `leyendaContribuyente` | Art. 15.6. `Contribuyente Formal` o `no sujeto al impuesto al valor agregado` cuando el emisor **no** es contribuyente ordinario. Vacio si lo es |
+
+### Response - la misma clave llega dos veces
+
+Identica salvo `"yaExistia": true`, con los datos de la nota original y el mismo
+`documentoId`. **No se acredito dos veces.** El mensaje al usuario tiene que
+distinguirlo.
+
+### Response - fallas de negocio
+
+Todas con HTTP 200 y `isValid: false`. Cada una sale de un articulo:
+
+| Caso | Mensaje, abreviado |
+|---|---|
+| Sin motivo | *El Articulo 22 admite cualquier causa, pero no la ausencia de causa* |
+| Sin documento origen | *El Articulo 23 exige la referencia a la fecha, numero y monto...* |
+| Origen inexistente | *No existe un documento con el identificador N* |
+| Origen de otro emisor | *El documento que se intenta corregir pertenece a otro emisor* |
+| Origen que no es factura | *Solo se corrige una factura... el Articulo 22 habla de operaciones por las cuales se otorgaron facturas* |
+| Origen ya anulado | *El documento que se intenta corregir ya esta anulado* |
+| Moneda distinta a la del origen | *Deben coincidir para que la referencia al monto del Articulo 23 signifique algo* |
+| **Credito que excede el saldo** | *La nota de credito es por X y al documento le queda un saldo pendiente de Y* |
+| Nota de debito que declara anulacion | *El Articulo 22 la reserva para operaciones que quedan sin efecto, y una nota de debito aumenta el monto* |
+
+El rechazo de contenido -numerales del Art. 13 o del 15- queda registrado en la
+bitacora como `rechazo`, igual que en la emision directa.
+
+## Lo que cambio en facturaGetAll
+
+El listado suma cuatro campos:
+
+| Campo | Que es |
+|---|---|
+| `moneda` | `VES` o el codigo de la divisa |
+| `estado` | `emitido`, `ajustado` o `anulado`. **Derivado**, ver arriba |
+| `saldo` | Lo que queda por corregir. Total menos creditos mas debitos |
+| `cantidadNotas` | Cuantas notas afectan a este documento |
+
+Llegan por `LEFT JOIN` a la vista de estado. Si `estado` viniera vacio hay una
+anomalia y la pantalla debe mostrarla, no esconderla.
+
+**La accion de emitir nota se deshabilita, no se oculta**, cuando la fila no es
+una factura o ya esta anulada, con el motivo en el tooltip: que no se pueda
+corregir un documento es informacion util.
+
+## Lo que cambio en el emisor
+
+`create`, `update`, `GetAll` y `getById` suman **`tipoContribuyente`**:
+`ordinario`, `formal` o `no_sujeto`.
+
+De ese dato depende contra que articulo se valida una nota de ese emisor -el 13 o
+el 15 de la 00071, *"segun sea el caso"* del Art. 23- y si el documento lleva la
+leyenda del Art. 15.6. Por defecto `ordinario`, que es el conjunto **mas
+estricto**: un emisor sin declarar queda sobre-validado y no sub-validado.

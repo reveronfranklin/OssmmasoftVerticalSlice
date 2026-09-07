@@ -14,6 +14,11 @@ public record EmisorResponse(
     string Estado,
     string RifVerificadoEl,
     string RifVerificadoEstado,
+
+    // D-31. De este dato depende contra que articulo de la SNAT/2011/00071 se
+    // valida una nota de este emisor -el 13 o el 15, "segun sea el caso" del
+    // Art. 23- y si el documento lleva la leyenda del Art. 15.6.
+    string TipoContribuyente,
     string UsuarioIns,
     string FechaIns,
     string UsuarioUpd,
@@ -134,14 +139,16 @@ public static class FacturacionElectronicaDb
 
     private const string ColumnasEmisor = @"
         ID, RIF, RAZON_SOCIAL, DOMICILIO_FISCAL, CORREO, ESTADO,
-        RIF_VERIFICADO_EL, RIF_VERIFICADO_ESTADO,
+        RIF_VERIFICADO_EL, RIF_VERIFICADO_ESTADO, TIPO_CONTRIBUYENTE,
         USUARIO_INS, FECHA_INS, USUARIO_UPD, FECHA_UPD";
 
     public const string SqlEmisorCreate = @"
         INSERT INTO FED.FED_EMISOR
-            (RIF, RAZON_SOCIAL, DOMICILIO_FISCAL, CORREO, ESTADO, USUARIO_INS)
+            (RIF, RAZON_SOCIAL, DOMICILIO_FISCAL, CORREO, ESTADO, USUARIO_INS,
+             TIPO_CONTRIBUYENTE)
         VALUES
-            (@rif, @razon_social, @domicilio_fiscal, @correo, @estado, @usuario_ins)
+            (@rif, @razon_social, @domicilio_fiscal, @correo, @estado, @usuario_ins,
+             @tipo_contribuyente)
         RETURNING ID;";
 
     public static readonly string SqlEmisorGetAll = $@"
@@ -168,6 +175,7 @@ public static class FacturacionElectronicaDb
             ESTADO                = @estado,
             RIF_VERIFICADO_EL     = @rif_verificado_el,
             RIF_VERIFICADO_ESTADO = @rif_verificado_estado,
+            TIPO_CONTRIBUYENTE    = @tipo_contribuyente,
             USUARIO_UPD           = @usuario_upd,
             FECHA_UPD             = now()
         WHERE ID = @id;";
@@ -513,6 +521,7 @@ public static class FacturacionElectronicaDb
         reader.SafeGetString("estado"),
         SafeGetFecha(reader, "rif_verificado_el", "dd/MM/yyyy"),
         reader.SafeGetString("rif_verificado_estado"),
+        reader.SafeGetString("tipo_contribuyente"),
         reader.SafeGetString("usuario_ins"),
         SafeGetFecha(reader, "fecha_ins", "dd/MM/yyyy HH:mm"),
         reader.SafeGetString("usuario_upd"),

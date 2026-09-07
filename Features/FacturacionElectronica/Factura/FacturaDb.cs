@@ -33,7 +33,18 @@ public record FacturaEmitidaResponse(
     bool EsPrueba,
     string MotivoPrueba,
     string LeyendaProvidencia,
-    bool YaExistia);
+    bool YaExistia,
+
+    // Propios de la nota. Cero y cadena vacia en una factura, con el mismo
+    // criterio con que este record ya devuelve NumeroControl vacio en la
+    // respuesta idempotente: un solo record para las dos operaciones evita
+    // duplicar Armar, el mapeo y la interfaz del frontend.
+    long DocumentoOrigenId = 0,
+    string ReferenciaOriginal = "",
+    string Motivo = "",
+
+    // Art. 15.6: vacio cuando el emisor es contribuyente ordinario.
+    string LeyendaContribuyente = "");
 
 // Instantanea del emisor, leida al emitir. Art. 29.3: la imprenta estampa estos
 // datos en el documento, y lo estampado es un hecho historico.
@@ -43,7 +54,11 @@ public record FacturaEmisorDatos(
     string RazonSocial,
     string Domicilio,
     string Estado,
-    string ModoNumeracion);
+    string ModoNumeracion,
+
+    // D-31. Decide si la nota valida contra el Art. 13 o el 15 de la 00071, y si
+    // el documento lleva la leyenda del Art. 15.6.
+    string TipoContribuyente);
 
 public static class FacturaDb
 {
@@ -52,7 +67,8 @@ public static class FacturaDb
     // ------------------------------------------------------------------
 
     public const string SqlEmisorParaEmitir = @"
-        SELECT ID, RIF, RAZON_SOCIAL, DOMICILIO_FISCAL, ESTADO, MODO_NUMERACION
+        SELECT ID, RIF, RAZON_SOCIAL, DOMICILIO_FISCAL, ESTADO, MODO_NUMERACION,
+               TIPO_CONTRIBUYENTE
         FROM FED.FED_EMISOR
         WHERE ID = @emisor_id;";
 
@@ -99,14 +115,16 @@ public static class FacturaDb
              ADQ_NOMBRE, ADQ_RIF, ADQ_DOCUMENTO_ID,
              TOTAL_EXENTO, TOTAL_BASE, TOTAL_IVA, TOTAL_GENERAL,
              IMPRENTA_RIF, IMPRENTA_RAZON_SOCIAL, IMPRENTA_PROVIDENCIA, ES_PRUEBA,
-             CLAVE_IDEMPOTENCIA, USUARIO_INS)
+             CLAVE_IDEMPOTENCIA, USUARIO_INS,
+             MONEDA, TASA_CAMBIO, TOTAL_MONEDA)
         VALUES
             (@emisor_id, @tipo_documento, @serie, @numeracion,
              @emisor_rif, @emisor_razon_social, @emisor_domicilio,
              @adq_nombre, @adq_rif, @adq_documento_id,
              @total_exento, @total_base, @total_iva, @total_general,
              @imprenta_rif, @imprenta_razon_social, @imprenta_providencia, @es_prueba,
-             @clave_idempotencia, @usuario_ins)
+             @clave_idempotencia, @usuario_ins,
+             @moneda, @tasa_cambio, @total_moneda)
         RETURNING ID, EMITIDO_EN;";
 
     public const string SqlDetalleInsert = @"
@@ -138,9 +156,17 @@ public static class FacturaDb
             d.ADQ_NOMBRE, d.ADQ_RIF, d.ADQ_DOCUMENTO_ID,
             d.TOTAL_EXENTO, d.TOTAL_BASE, d.TOTAL_IVA, d.TOTAL_GENERAL, d.ES_PRUEBA,
             COALESCE(nc.IDENTIFICADOR || '-' || LPAD(nc.SECUENCIAL::text, 8, '0'), '') AS NUMERO_CONTROL,
+            d.MONEDA,
+            COALESCE(est.ESTADO, '')     AS ESTADO,
+            COALESCE(est.SALDO, 0)       AS SALDO,
+            COALESCE(est.CANTIDAD_NOTAS, 0) AS CANTIDAD_NOTAS,
             COUNT(*) OVER() AS TOTAL_REGISTROS
         FROM FED.FED_DOCUMENTO d
         LEFT JOIN FED.FED_NUM_CONTROL nc ON nc.DOCUMENTO_ID = d.ID
+        -- LEFT y no INNER, mismo criterio que el numero de control: un documento
+        -- que no apareciera en la vista de estado es la anomalia que hay que ver,
+        -- no esconderla detras de un INNER que lo saca del listado.
+        LEFT JOIN FED.FED_V_DOCUMENTO_ESTADO est ON est.DOCUMENTO_ID = d.ID
         WHERE (@emisor_id = 0 OR d.EMISOR_ID = @emisor_id)
           AND (@tipo_documento = '' OR d.TIPO_DOCUMENTO = @tipo_documento)
         ORDER BY d.EMITIDO_EN DESC, d.ID DESC
@@ -156,7 +182,8 @@ public static class FacturaDb
         reader.SafeGetString("razon_social"),
         reader.SafeGetString("domicilio_fiscal"),
         reader.SafeGetString("estado"),
-        reader.SafeGetString("modo_numeracion"));
+        reader.SafeGetString("modo_numeracion"),
+        reader.SafeGetString("tipo_contribuyente"));
 
     // El siguiente numero del documento. Igual que en el numero de control, nunca
     // sale de un MAX(): sale de la fila del contador ya bloqueada.
