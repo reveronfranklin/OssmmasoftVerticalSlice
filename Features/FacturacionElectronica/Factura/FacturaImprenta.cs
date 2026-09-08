@@ -35,7 +35,13 @@ public static class FacturaImprenta
 
     // Explica en una frase por que un documento salio de prueba. Va al usuario y a
     // la bitacora: "de prueba" sin motivo es un estado que nadie sabe como salir.
-    public static string MotivoDePrueba(FacturaImprentaDatos datos)
+    //
+    // El numeral es parametro con el 7.14 por defecto porque los datos de la
+    // imprenta los exige un numeral distinto en cada documento: el 7.14 en la
+    // factura y la nota, y el 11.9 en el comprobante de retencion. El motivo es el
+    // mismo -no hay providencia todavia-, pero decirle al usuario que le falta un
+    // numeral que su documento no tiene lo manda a buscar donde no es.
+    public static string MotivoDePrueba(FacturaImprentaDatos datos, string numeral = "7.14")
     {
         if (datos.EsDefinitivo)
         {
@@ -59,7 +65,7 @@ public static class FacturaImprenta
             faltan.Add("la nomenclatura y fecha de la Providencia de autorización del SENIAT");
         }
 
-        return "El documento se emite como PRUEBA porque el numeral 7.14 exige datos que aún no están configurados: "
+        return $"El documento se emite como PRUEBA porque el numeral {numeral} exige datos que aún no están configurados: "
                + string.Join(", ", faltan)
                + ". Hasta obtener la autorización del SENIAT, ningún documento es legalmente válido.";
     }

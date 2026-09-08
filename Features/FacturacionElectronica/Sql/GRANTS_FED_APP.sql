@@ -117,6 +117,27 @@ GRANT UPDATE (TIPO_CONTRIBUYENTE) ON FED.FED_EMISOR TO fed_app;
 GRANT SELECT ON FED.FED_V_DOCUMENTO_ESTADO TO fed_app;
 
 -- -----------------------------------------------------------------------------
+-- Fase 6B - comprobantes de retencion
+--
+-- FED_RETENCION y su detalle reciben SELECT + INSERT del ALTER DEFAULT
+-- PRIVILEGES del script 00, como todo documento fiscal: append-only.
+--
+-- El contador SI necesita UPDATE, igual que los otros dos del modulo. Sin el no
+-- se puede emitir un solo comprobante. EMISOR_ID y PERIODO quedan fuera porque
+-- son la clave primaria: mover un contador de agente o de mes seria reescribir a
+-- quien pertenece una numeracion ya usada.
+--
+-- ENTREGADO_EN es la unica columna actualizable de un comprobante emitido, y no
+-- contradice el append-only: el Art. 11.3 pide la fecha de emision Y la de
+-- entrega, y la segunda no existe cuando el documento se emite. Es completar un
+-- dato previsto, no enmendar uno escrito.
+-- -----------------------------------------------------------------------------
+GRANT UPDATE (ULTIMO_NUMERO, FECHA_UPD)
+    ON FED.FED_RETENCION_CONTADOR TO fed_app;
+
+GRANT UPDATE (ENTREGADO_EN) ON FED.FED_RETENCION TO fed_app;
+
+-- -----------------------------------------------------------------------------
 -- LAS TABLAS DE DOCUMENTOS NO APARECEN AQUI, Y ESA ES LA IDEA.
 --
 -- FED_DOCUMENTO, FED_DOCUMENTO_DETALLE, FED_DOC_IMPUESTO y FED_BITACORA se

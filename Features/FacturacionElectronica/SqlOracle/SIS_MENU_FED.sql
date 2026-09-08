@@ -98,6 +98,7 @@ BEGIN
   up_menu(9020, 9, 9000, 'Numeros de Control', '/apps/fed/numeros-control', 'mdi:numeric', 30);
   up_menu(9030, 9, 9000, 'Reporte Mensual', '/apps/fed/reporte-mensual', 'mdi:calendar-check-outline', 40);
   up_menu(9040, 9, 9000, 'Documentos Fiscales', '/apps/fed/facturas', 'mdi:file-document-outline', 50);
+  up_menu(9060, 9, 9000, 'Comprobantes de Retencion', '/apps/fed/retenciones', 'mdi:cash-minus', 60);
 
   -- Otorgamiento al rol, solo si se indico una clave arriba.
   IF v_rol_clave IS NOT NULL AND LENGTH(TRIM(v_rol_clave)) > 0 THEN
@@ -108,6 +109,7 @@ BEGIN
       add_rm(r.CODIGO_ROL, 9030);
       add_rm(r.CODIGO_ROL, 9040);
       add_rm(r.CODIGO_ROL, 9050);
+      add_rm(r.CODIGO_ROL, 9060);
       v_otorgados := v_otorgados + 1;
     END LOOP;
 

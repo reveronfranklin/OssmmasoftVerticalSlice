@@ -1004,3 +1004,185 @@ De ese dato depende contra que articulo se valida una nota de ese emisor -el 13 
 el 15 de la 00071, *"segun sea el caso"* del Art. 23- y si el documento lleva la
 leyenda del Art. 15.6. Por defecto `ordinario`, que es el conjunto **mas
 estricto**: un emisor sin declarar queda sobre-validado y no sub-validado.
+
+
+---
+
+# Fase 6B - Comprobante de retencion (Art. 11)
+
+## Lo PRIMERO que hay que entender antes de integrarlo
+
+**Este documento NO lleva numero de control.** No hay campo `numeroControl` en el
+request ni en la respuesta, y no es una omision del contrato: es como esta
+definido el documento.
+
+El Art. 11 de la SNAT/2024/000102 **no remite a los numerales 4 y 5 del Art. 7**,
+que son los que crean el numero de control -a diferencia del Art. 10.2, que si lo
+hace para la guia de despacho-. Su numeral 5 pide el numero de control **de la
+factura que se esta reteniendo**, no uno propio del comprobante. La unica
+identificacion del comprobante es la numeracion de catorce caracteres del 11.1.
+
+Comprobado contra la base: emitir un comprobante **no mueve** `FED_NUM_CONTROL`
+ni `FED_DOCUMENTO`. Solo crece `FED_RETENCION`.
+
+Pero **la imprenta digital interviene igual**: el numeral 11.9 exige sus datos.
+Aporta identidad sin aportar numeracion, y es el unico documento del alcance con
+esa forma (`D-39`).
+
+Segunda cosa que sorprende: **el comprobante no cuelga de un documento del
+sistema**. El agente de retencion retiene las facturas que le emiten **sus
+proveedores**, y esos proveedores no son emisores de esta imprenta: sus facturas
+no viven en `FED_DOCUMENTO`. Por eso el desglose se escribe, no se referencia, y
+por eso no hay `documentoId` en ninguna parte del request.
+
+## retencionCreate
+
+```http
+POST /api/FacturacionElectronica/retencionCreate
+```
+
+### Request
+
+```json
+{
+  "emisorId": 9,
+  "periodo": "202609",
+  "proveedorRif": "J-30111222-3",
+  "proveedorRazonSocial": "SUMINISTROS DEMO, C.A.",
+  "proveedorDomicilio": "Caracas",
+  "proveedorCorreo": "pagos@demo.com",
+  "usuarioIns": "avanessa",
+  "claveIdempotencia": "ui-ret-1788210656-a4f2c1",
+  "documentos": [
+    {
+      "documentoNumero": "00012345",
+      "documentoControl": "00-00000777",
+      "documentoFecha": "2026-09-01",
+      "montoTotal": 1160,
+      "baseImponible": 1000,
+      "impuestoCausado": 160,
+      "montoRetenido": 120,
+      "porcentaje": 75
+    }
+  ]
+}
+```
+
+| Campo | Obligatorio | Nota |
+|---|---|---|
+| `emisorId` | **si** | El **agente de retencion**. De el salen nombre, RIF y domicilio del 11.2 |
+| `periodo` | **si** | `AAAAMM`. Art. 11.7. De aca sale el prefijo de la numeracion |
+| `proveedorRif` | **si** | Art. 11.4 |
+| `proveedorRazonSocial` | **si** | Art. 11.4 |
+| `proveedorCorreo` | **si** | Art. 11.4. **El numeral lo nombra expresamente**, asi que no es opcional |
+| `proveedorDomicilio` | no | Art. 11.4 |
+| `documentos` | **si**, al menos uno | Arts. 11.5, 11.6 y 11.8. Un comprobante sin documentos no retiene nada |
+| `claveIdempotencia` | **no dejarlo vacio** | Sin ella un doble clic emite dos comprobantes por un solo hecho |
+
+**Los totales de la cabecera no se envian.** El backend los suma del desglose.
+Pedirlos seria dejar que quien llama declare un total que no cierra contra sus
+propias lineas.
+
+Cada elemento de `documentos`:
+
+| Campo | Numeral | Nota |
+|---|---|---|
+| `documentoNumero` | 11.6 | Numero de la factura o nota de debito retenida |
+| `documentoControl` | 11.5 | Su numero de **control**, el de la factura del proveedor |
+| `documentoFecha` | - | No lo pide un numeral con ese nombre, pero sin el el periodo del 11.7 no se sustenta |
+| `montoTotal`, `baseImponible`, `impuestoCausado`, `montoRetenido` | 11.8 | Los cuatro montos, por documento |
+| `porcentaje` | - | No lo pide el Art. 11. Sin el no se puede auditar como se llego al monto retenido (Art. 18.2) |
+
+### Response - exito
+
+```json
+{
+  "data": {
+    "retencionId": 24,
+    "numeracion": "20260900000001",
+    "periodo": "202609",
+    "fechaEmision8d": "07092026",
+    "horaEmision": "07.04.29 p.m.",
+    "agenteRif": "J-66666666-6",
+    "agenteRazonSocial": "ALCALDIA DE PRUEBA",
+    "proveedorRif": "J-30111222-3",
+    "proveedorRazonSocial": "SUMINISTROS DEMO, C.A.",
+    "totalDocumentos": 1740,
+    "totalBase": 1500,
+    "totalImpuesto": 240,
+    "totalRetenido": 180,
+    "cantidadDocumentos": 2,
+    "esPrueba": true,
+    "motivoPrueba": "Sin providencia de autorizacion del SENIAT...",
+    "yaExistia": false
+  },
+  "isValid": true,
+  "message": "suscces"
+}
+```
+
+**No busque `numeroControl` en esta respuesta.** No esta, y arriba esta explicado
+por que.
+
+`numeracion` son **catorce caracteres**: `AAAAMMSSSSSSSS`. El secuencial
+**reinicia cada mes** -el primero de octubre vuelve a `00000001` con el prefijo
+`202610`-. Es una interpretacion del 11.1 y esta declarada como tal en `D-38`.
+
+### Response - la misma clave llega dos veces
+
+`yaExistia: true` y **el mismo `retencionId`**. No se emite un comprobante nuevo.
+
+### Response - el documento no cumple el Art. 11
+
+```json
+{
+  "data": null,
+  "isValid": false,
+  "message": "El documento no cumple el Articulo 11: 11.4: falta el correo electronico del proveedor, que el numeral nombra expresamente."
+}
+```
+
+El mensaje **cita el numeral**, igual que el validador de la factura cita los del
+Art. 7. Los rechazos verificados: sin correo (11.4), sin RIF (11.4), periodo mal
+formado (11.7), mes inexistente (11.7), sin documentos (11.6), retener mas que el
+impuesto causado (11.8) y documento sin su numero de control (11.5).
+
+## retencionGetAll
+
+```http
+POST /api/FacturacionElectronica/retencionGetAll
+```
+
+### Request
+
+```json
+{ "emisorId": 0, "periodo": "", "pageSize": 10, "pageNumber": 1 }
+```
+
+`emisorId` en 0 son todos los agentes; `periodo` vacio, todos los periodos. El
+periodo va en `AAAAMM`.
+
+### Response
+
+Lista de comprobantes, sin `numeroControl` por lo ya dicho. Trae ademas
+`periodoFormato` -`09/2026`, para mostrar- y `cantidadDocumentos`.
+
+En el `ResultDto`:
+
+| Campo | Que es |
+|---|---|
+| `total1` | Cuantos de esta pagina son de **prueba** |
+| `total2` | Lo **retenido** en la pagina |
+
+## Lo que el comprobante viejo del ERP no cumple
+
+`Features/ReporteComprobanteIva/` ya emite un comprobante de retencion hoy, y
+**no lo reemplaza automaticamente**. Contrastado numeral por numeral, cumple el
+11.2, el 11.5, el 11.6 y el 11.8; **no cumple** el 11.1 -su
+`ADM_ORDEN_PAGO.NUMERO_COMPROBANTE` es un `decimal`, un numero corrido sin
+prefijo `AAAAMM`-, el 11.3 -tiene fecha de emision pero no de **entrega**-, el
+11.4 -el proveedor va sin domicilio y sin correo- y el 11.9, que no podia cumplir
+porque hasta ahora no habia imprenta.
+
+Los dos documentos conviven. Migrar al cliente de uno al otro es un tema de la
+Fase 9, no de esta.

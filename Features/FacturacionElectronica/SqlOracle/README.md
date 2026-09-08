@@ -52,6 +52,10 @@ El bloque a insertar, como **nuevo elemento raíz** del arreglo:
     {
       "title": "Documentos Fiscales",
       "path": "/apps/fed/facturas"
+    },
+    {
+      "title": "Comprobantes de Retencion",
+      "path": "/apps/fed/retenciones"
     }
   ]
 }
