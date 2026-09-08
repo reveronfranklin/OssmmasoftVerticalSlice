@@ -138,6 +138,20 @@ GRANT UPDATE (ULTIMO_NUMERO, FECHA_UPD)
 GRANT UPDATE (ENTREGADO_EN) ON FED.FED_RETENCION TO fed_app;
 
 -- -----------------------------------------------------------------------------
+-- Fase 6 - guia de despacho
+--
+-- NO HAY NADA QUE OTORGAR, y comprobarlo vale mas que suponerlo. FED_GUIA_DESPACHO
+-- recibio SELECT + INSERT del ALTER DEFAULT PRIVILEGES del script 00, como
+-- cualquier tabla nueva del esquema, y las tres columnas de medida del Art. 10.4
+-- quedan cubiertas por el INSERT de tabla que FED_DOCUMENTO_DETALLE ya tenia: un
+-- grant de tabla alcanza a las columnas que se agreguen despues.
+--
+-- Que no necesite una linea es el diseno funcionando: la guia es append-only como
+-- todo documento fiscal, y no hay ningun contador que actualizar porque comparte
+-- la numeracion y el numero de control del documento.
+-- -----------------------------------------------------------------------------
+
+-- -----------------------------------------------------------------------------
 -- LAS TABLAS DE DOCUMENTOS NO APARECEN AQUI, Y ESA ES LA IDEA.
 --
 -- FED_DOCUMENTO, FED_DOCUMENTO_DETALLE, FED_DOC_IMPUESTO y FED_BITACORA se

@@ -64,6 +64,21 @@ public static class FacturaValidador
                 + "SNAT/2011/00071)."));
         }
 
+        // Lo mismo para la guia de despacho (T6.3). El tipo es valido y esta via
+        // no lo es: el Art. 10 le exige el motivo del traslado, el receptor con
+        // RIF y la medida de los bienes, que este comando no sabe pedir, y le
+        // prohibe el precio y el IVA, que si sabe mandar.
+        //
+        // El mensaje cita el Art. 10 y dice a donde ir, igual que el de la nota.
+        if (FacturacionElectronicaDb.TiposGuia.Contains(tipo))
+        {
+            return Invalida("10", new FacturaFalta(string.Empty,
+                "una guía de despacho se emite por guiaCreate, que exige el motivo del traslado, el RIF del "
+                + "receptor (Art. 10.5) y la capacidad, peso o volumen de cada bien (Art. 10.4), y que no "
+                + "admite precio ni IVA porque el Art. 10.2 no remite a los numerales 8, 11, 12 ni 13 del "
+                + "Artículo 7."));
+        }
+
         var faltantes = ValidarContenido(comando, tipo, FacturaNumerales.Art7);
 
         return new FacturaValidacion(faltantes.Count == 0, faltantes, FacturaNumerales.Art7);

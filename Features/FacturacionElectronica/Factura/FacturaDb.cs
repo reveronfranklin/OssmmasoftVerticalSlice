@@ -74,11 +74,24 @@ public static class FacturaDb
 
     // Idempotencia (T4.9), camino rapido: si esta solicitud ya produjo un
     // documento, se devuelve ese y no se abre nada.
+    // EL NUMERO DE CONTROL VIENE EN ESTA CONSULTA, y hasta la Fase 6 no venia.
+    //
+    // El comentario que estaba en su lugar decia que "para la respuesta
+    // idempotente alcanza con lo que el documento tiene". No alcanza: quien
+    // reintenta una emision -que es exactamente para lo que existe la clave de
+    // idempotencia- recibia el documento SIN su numero de control, sin el rango
+    // del 7.5 y sin la fecha de asignacion del 7.15. Con eso no se puede imprimir
+    // un documento conforme, y es la unica cosa que la imprenta digital aporta.
+    //
+    // Se compone igual que en el listado: identificador, guion y ocho digitos.
     public const string SqlDocumentoPorClave = @"
-        SELECT ID, TIPO_DOCUMENTO, SERIE, NUMERACION, EMITIDO_EN,
-               TOTAL_EXENTO, TOTAL_BASE, TOTAL_IVA, TOTAL_GENERAL, ES_PRUEBA
-        FROM FED.FED_DOCUMENTO
-        WHERE EMISOR_ID = @emisor_id AND CLAVE_IDEMPOTENCIA = @clave;";
+        SELECT d.ID, d.TIPO_DOCUMENTO, d.SERIE, d.NUMERACION, d.EMITIDO_EN,
+               d.TOTAL_EXENTO, d.TOTAL_BASE, d.TOTAL_IVA, d.TOTAL_GENERAL, d.ES_PRUEBA,
+               COALESCE(nc.IDENTIFICADOR || '-' || LPAD(nc.SECUENCIAL::text, 8, '0'), '') AS NUMERO_CONTROL,
+               nc.FECHA_ASIGNACION
+        FROM FED.FED_DOCUMENTO d
+        LEFT JOIN FED.FED_NUM_CONTROL nc ON nc.DOCUMENTO_ID = d.ID
+        WHERE d.EMISOR_ID = @emisor_id AND d.CLAVE_IDEMPOTENCIA = @clave;";
 
     // ------------------------------------------------------------------
     // Numeracion del documento (Art. 7.2, decision D-21)
@@ -130,10 +143,12 @@ public static class FacturaDb
     public const string SqlDetalleInsert = @"
         INSERT INTO FED.FED_DOCUMENTO_DETALLE
             (DOCUMENTO_ID, ORDEN, DESCRIPCION, CODIGO, CANTIDAD, PRECIO, ALICUOTA, EXENTO,
-             BIENES_ENTREGADOS, AJUSTE_DESCRIPCION, AJUSTE_VALOR, TOTAL_RENGLON)
+             BIENES_ENTREGADOS, AJUSTE_DESCRIPCION, AJUSTE_VALOR, TOTAL_RENGLON,
+             MEDIDA_TIPO, MEDIDA_VALOR, MEDIDA_UNIDAD)
         VALUES
             (@documento_id, @orden, @descripcion, @codigo, @cantidad, @precio, @alicuota, @exento,
-             @bienes_entregados, @ajuste_descripcion, @ajuste_valor, @total_renglon);";
+             @bienes_entregados, @ajuste_descripcion, @ajuste_valor, @total_renglon,
+             @medida_tipo, @medida_valor, @medida_unidad);";
 
     public const string SqlImpuestoInsert = @"
         INSERT INTO FED.FED_DOC_IMPUESTO (DOCUMENTO_ID, ALICUOTA, BASE_IMPONIBLE, MONTO_IVA)

@@ -197,6 +197,14 @@ public static class FacturaEmision
             cmd.Parameters.AddWithValue("ajuste_valor", renglon.AjusteValor);
             cmd.Parameters.AddWithValue("total_renglon", totales.RenglonTotales[i]);
 
+            // Art. 10.4. Las tres van juntas o no va ninguna: el CHECK de la
+            // tabla no admite una medida a medias, porque una unidad sin valor no
+            // senala nada.
+            bool conMedida = renglon.MedidaTipo.Trim().Length > 0;
+            cmd.Parameters.AddWithValue("medida_tipo", conMedida ? renglon.MedidaTipo.Trim().ToLowerInvariant() : DBNull.Value);
+            cmd.Parameters.AddWithValue("medida_valor", conMedida ? renglon.MedidaValor : DBNull.Value);
+            cmd.Parameters.AddWithValue("medida_unidad", conMedida ? renglon.MedidaUnidad.Trim() : DBNull.Value);
+
             await cmd.ExecuteNonQueryAsync();
         }
     }
@@ -306,10 +314,23 @@ public static class FacturaEmision
             reader.SafeGetDecimal("total_general"),
             [], []);
 
-        // El numero de control ya asignado se recupera del listado; para la
-        // respuesta idempotente alcanza con lo que el documento tiene.
+        // El numero de control que el documento YA tiene. La respuesta de un
+        // reintento tiene que traerlo: sin el no se puede imprimir un documento
+        // conforme, y es lo unico que la imprenta digital aporta.
+        //
+        // Sale vacio solo si el documento no tiene numero asignado, y eso seria
+        // una anomalia: la emision los crea juntos en una transaccion. Cuando
+        // pasa, la fecha de asignacion cae a la de emision, que es lo mas cercano
+        // a la verdad que hay.
+        string numeroControl = reader.SafeGetString("numero_control");
+        int ordinalFecha = reader.GetOrdinal("fecha_asignacion");
+
+        DateTime fechaAsignacion = reader.IsDBNull(ordinalFecha)
+            ? emitidoEn
+            : reader.GetDateTime(ordinalFecha);
+
         return Armar(documentoId, tipo, serie, numeracion, emitidoEn, totales,
-            numeroControl: string.Empty, fechaAsignacion: emitidoEn, imprenta, yaExistia: true);
+            numeroControl, fechaAsignacion, imprenta, yaExistia: true);
     }
 
     // El catch del UNIQUE. ESTE es el camino que garantiza INV-3 -la consulta

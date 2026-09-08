@@ -1186,3 +1186,157 @@ porque hasta ahora no habia imprenta.
 
 Los dos documentos conviven. Migrar al cliente de uno al otro es un tema de la
 Fase 9, no de esta.
+
+
+---
+
+# Fase 6 - Guia de despacho (Art. 10)
+
+## Lo PRIMERO que hay que entender antes de integrarlo
+
+**Este documento no lleva montos. Ninguno.** Ni precio por renglon, ni ajustes,
+ni base imponible, ni IVA, ni valor total.
+
+El Art. 10.2 remite a los numerales **2, 3, 4, 5, 6 y 14** del Art. 7, y a
+ninguno mas. El precio vive en el 7.8; la base, el IVA y el total viven en el
+7.11, 7.12 y 7.13. Ninguno esta remitido. El numeral 10.4 **no completa** al 7.8:
+lo reemplaza por *"la descripcion de los bienes que se trasladan, senalando su
+capacidad, peso o volumen"*.
+
+Asi que una guia con montos no es un documento incompleto: es un documento que
+dice algo que la norma no admite que diga. `guiaCreate` la **rechaza** en vez de
+poner ceros en silencio.
+
+Segunda cosa: **no se llama "nota de entrega"**. El Art. 10.1 admite `orden de
+entrega` o `guia de despacho` y ninguna otra. El tipo en base sigue siendo
+`entrega` -contrato desde la Fase 4- pero la denominacion que sale impresa es
+`GUIA DE DESPACHO`.
+
+Tercera: **si lleva numero de control**, a diferencia del comprobante de
+retencion, porque el 10.2 remite a los numerales 4 y 5 expresamente.
+
+## `facturaCreate` ya NO acepta el tipo `entrega`
+
+Cambio de contrato de esta fase. La razon es la misma que dejo fuera a las notas
+en la Fase 5: el Art. 10 le exige tres datos que la emision directa no sabe pedir
+-el motivo del traslado, el receptor **con RIF** por el 10.5, y la medida por
+renglon del 10.4- y le prohibe cuatro que si sabe mandar.
+
+El rechazo cita el Art. 10 y dice a donde ir:
+
+```json
+{
+  "data": null,
+  "isValid": false,
+  "message": "El documento no cumple el Articulo 10: una guia de despacho se emite por guiaCreate, que exige el motivo del traslado, el RIF del receptor (Art. 10.5) y la capacidad, peso o volumen de cada bien (Art. 10.4), y que no admite precio ni IVA porque el Art. 10.2 no remite a los numerales 8, 11, 12 ni 13 del Articulo 7."
+}
+```
+
+## guiaCreate
+
+```http
+POST /api/FacturacionElectronica/guiaCreate
+```
+
+### Request
+
+```json
+{
+  "emisorId": 16,
+  "motivoTraslado": "Traslado a taller de mantenimiento. No representa venta.",
+  "destino": "Taller Municipal, Av. Bolivar",
+  "receptorNombre": "TALLER MUNICIPAL DE PRUEBA, C.A.",
+  "receptorRif": "J-31200500-7",
+  "serie": "",
+  "usuarioIns": "avanessa",
+  "claveIdempotencia": "ui-guia-1788210656-a4f2c1",
+  "renglones": [
+    {
+      "descripcion": "Motobomba centrifuga 3 HP",
+      "cantidad": 3,
+      "medidaTipo": "peso",
+      "medidaValor": 62.5,
+      "medidaUnidad": "kg"
+    }
+  ]
+}
+```
+
+| Campo | Obligatorio | Nota |
+|---|---|---|
+| `emisorId` | **si** | Sus datos van al documento por el Art. 7.3, remitido por el 10.2 |
+| `motivoTraslado` | **si** | **No sale de un numeral.** Lo pide el encabezado del Art. 10, que solo admite este documento para traslados que **no representen ventas** |
+| `receptorNombre` | **si** | Art. 10.5 |
+| `receptorRif` | **si** | Art. 10.5. **No admite cedula ni pasaporte en su lugar**, a diferencia del 7.7 para el adquiriente |
+| `destino` | no | Ningun numeral lo pide. Se guarda porque el Art. 18.2 exige poder auditar |
+| `renglones` | **si**, al menos uno | Art. 10.4 |
+| `claveIdempotencia` | **no dejarlo vacio** | Sin ella, un doble clic ampara el mismo traslado con dos guias |
+
+**No hay campo de precio, alicuota ni exento**, y no es que se ignoren: no
+existen en el request.
+
+Cada renglon:
+
+| Campo | Numeral | Nota |
+|---|---|---|
+| `descripcion` | 10.4 | Que bien se traslada |
+| `cantidad` | 10.4 | Cuantos |
+| `medidaTipo` | 10.4 | `capacidad`, `peso` o `volumen`. **Solo esos tres**: son los que el numeral nombra |
+| `medidaValor` | 10.4 | Mayor que cero |
+| `medidaUnidad` | 10.4 | `kg`, `litros`, `m3`, la que corresponda |
+
+Los tres campos de medida son opcionales **en el enlazado** y obligatorios **en
+la validacion**, y la diferencia es a proposito: si fueran obligatorios en el
+enlazado, un renglon sin medida lo rechazaria ASP.NET con un RFC 9110 en vez del
+mensaje que cita el numeral.
+
+### Response - exito
+
+```json
+{
+  "data": {
+    "documentoId": 67,
+    "numeracion": "2",
+    "numeracionConSerie": "2",
+    "numeroControl": "00-00000002",
+    "numeroControlTexto": "N. de Control 00-00000002",
+    "rangoNumerosControl": "desde el N. 00-00000002 hasta el N. 00-00000002",
+    "denominacion": "GUIA DE DESPACHO",
+    "fechaEmision8d": "08092026",
+    "horaEmision": "01.22.41 a.m.",
+    "fechaAsignacion8d": "08092026",
+    "receptorNombre": "TALLER MUNICIPAL DE PRUEBA, C.A.",
+    "receptorRif": "J-31200500-7",
+    "motivoTraslado": "Traslado a taller de mantenimiento. No representa venta.",
+    "destino": "Taller Municipal, Av. Bolivar",
+    "cantidadRenglones": 1,
+    "leyendaSinCreditoFiscal": "sin derecho a Credito Fiscal",
+    "leyendaProvidencia": "Emitida conforme a lo dispuesto en la Providencia Administrativa SNAT/2024/000102",
+    "esPrueba": true,
+    "motivoPrueba": "...",
+    "yaExistia": false
+  },
+  "isValid": true,
+  "message": "suscces"
+}
+```
+
+**No busque `totalBase`, `totalIva` ni `totalGeneral`.** No estan, y arriba esta
+explicado por que. En la base quedan en cero y `FED_DOC_IMPUESTO` no recibe una
+sola fila: escribir filas en cero seria afirmar que el documento discrimina un
+impuesto que no causa.
+
+`leyendaSinCreditoFiscal` llega armada del backend. Es el literal del Art. 10.3 y
+la pantalla no lo reescribe, igual que no reescribe la denominacion.
+
+### Response - la misma clave llega dos veces
+
+`yaExistia: true` y **el mismo `documentoId`**, con su motivo y su destino.
+
+### Response - el documento no cumple el Art. 10
+
+El mensaje cita el numeral. Los rechazos verificados: sin motivo del traslado
+-que cita el **encabezado** del articulo y no un numeral, por eso el mensaje no
+lleva prefijo-, sin RIF del receptor (10.5), sin nombre del receptor (10.5), sin
+bienes (10.4), sin medida (10.4), medida que la norma no nombra (10.4), medida
+sin valor (10.4), medida sin unidad (10.4) y bien sin descripcion (10.4).

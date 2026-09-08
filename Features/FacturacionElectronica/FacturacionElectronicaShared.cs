@@ -416,9 +416,25 @@ public static class FacturacionElectronicaDb
     // TiposDocumento NO se parte: la asignacion del numero de control admite los
     // cuatro con razon, porque el Rol A tambien vende numeros de control a un
     // emisor que emite las notas en su propio sistema.
-    public static readonly string[] TiposEmisionDirecta = ["factura", "entrega"];
+    //
+    // LA GUIA DE DESPACHO SALIO DE ESTA LISTA EN LA FASE 6, por la misma razon
+    // que la nota nunca estuvo. El Art. 10 le pide tres cosas que la emision
+    // directa no sabe pedir -el motivo del traslado, el receptor CON RIF por el
+    // 10.5, y la medida por renglon del 10.4- y le prohibe cuatro que si sabe
+    // mandar: precio, ajustes, base imponible e IVA, porque el 10.2 no remite a
+    // los numerales 8, 10, 11, 12 ni 13 del Art. 7.
+    //
+    // Mientras estuvo aca el hueco fue real y no teorico: el documento 30 se
+    // emitio el 2026-09-07 con precio 2.000, alicuota 16 %, base 4.000 e IVA 640,
+    // y sin ninguno de los tres datos que el Art. 10 le exige. Queda como dato de
+    // prueba: no hay UPDATE sobre FED_DOCUMENTO con que arreglarlo.
+    public static readonly string[] TiposEmisionDirecta = ["factura"];
 
     public static readonly string[] TiposNota = ["debito", "credito"];
+
+    // El tipo que se emite por guiaCreate. Uno solo, pero nombrado igual que los
+    // otros dos grupos para que el validador no compare contra un literal suelto.
+    public static readonly string[] TiposGuia = ["entrega"];
 
     public const int SecuencialMaximo = 99999999;
     public const int IdentificadorMaximo = 99;

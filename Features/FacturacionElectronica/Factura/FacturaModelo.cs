@@ -24,7 +24,19 @@ public record FacturaRenglonCommand(
     string Codigo = "",
     string BienesEntregados = "",
     string AjusteDescripcion = "",
-    decimal AjusteValor = 0);
+    decimal AjusteValor = 0,
+
+    // Art. 10.4 - la medida de los bienes que se trasladan. Solo la guia de
+    // despacho la usa; en los demas documentos queda nula, igual que
+    // BienesEntregados queda nulo cuando no hay entrega de bienes.
+    //
+    // Va aca y no en un renglon aparte porque el renglon de una guia es un
+    // renglon del mismo detalle: partirlo obligaria a leer dos tablas para
+    // imprimir una linea. Estructurada y no texto libre, para que el numeral sea
+    // comprobable (D-42).
+    string MedidaTipo = "",
+    decimal MedidaValor = 0,
+    string MedidaUnidad = "");
 
 // La solicitud de emision.
 //
