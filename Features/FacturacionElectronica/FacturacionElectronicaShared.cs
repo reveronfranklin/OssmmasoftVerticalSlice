@@ -78,6 +78,40 @@ public record RegistroArt32Response(
     long ReporteId,
     string Periodo);
 
+// Notificacion de contingencia (Art. 16, D-4). Fase 8.
+//
+// DocumentoId y UsuarioConcilia llegan vacios/cero mientras no se concilie: es
+// el mismo criterio de "0 o cadena vacia es un estado valido" que ya usa
+// NumeroControlResponse para "asignado sin documento todavia".
+public record ContingenciaResponse(
+    long Id,
+    long EmisorId,
+    string NumeracionFisica,
+    string FechaEmisionFisica,
+    string Escenario,
+    string NotificadoEn,
+    string ConciliadoEn,
+    long DocumentoId,
+    string UsuarioConcilia,
+    bool Conciliado);
+
+// Fila del listado de la bandeja. Trae los datos del emisor por join, igual
+// que NumeroControlListaResponse: el listado los necesita y la notificacion no.
+public record ContingenciaListaResponse(
+    long Id,
+    long EmisorId,
+    string EmisorRif,
+    string EmisorRazonSocial,
+    string NumeracionFisica,
+    string FechaEmisionFisica,
+    string Escenario,
+    string NotificadoEn,
+    string ConciliadoEn,
+    long DocumentoId,
+    string UsuarioConcilia,
+    string UsuarioIns,
+    bool Conciliado);
+
 // Un periodo mensual del Art. 29.7. La fila existe desde antes de que haya algo
 // que reportar: eso es lo que convierte un periodo omitido en algo visible.
 public record ReporteMensualResponse(
@@ -667,4 +701,70 @@ public static class FacturacionElectronicaDb
     // En minuscula: PostgreSQL pliega los identificadores sin comillas, asi que la
     // restriccion escrita FED_NUM_CONTROL_DOC_UK existe como fed_num_control_doc_uk.
     public const string RestriccionDocumentoUnico = "fed_num_control_doc_uk";
+
+    // -----------------------------------------------------------------------
+    // Contingencia (Art. 16, D-4) - Fase 8
+    // -----------------------------------------------------------------------
+
+    // La misma numeracion fisica notificada dos veces para el mismo emisor
+    // seria la misma contingencia contada por duplicado. Correccion
+    // (Fase 8): el indice es insensible a mayusculas/minusculas
+    // (FED_CONTING_UK_CI, ver Sql/23_fed_contingencia_uk_ci.sql) - la version
+    // original, FED_CONTING_UK, no distinguia "Contingencia-1" de
+    // "contingencia-1" y dejaba pasar el duplicado.
+    public const string RestriccionContingenciaUnica = "fed_conting_uk_ci";
+
+    public const string SqlContingenciaInsert = @"
+        INSERT INTO FED.FED_CONTINGENCIA
+            (EMISOR_ID, NUMERACION_FISICA, FECHA_EMISION_FISICA, ESCENARIO, USUARIO_INS)
+        VALUES (@emisor_id, @numeracion_fisica, @fecha_emision_fisica, @escenario, @usuario_ins)
+        RETURNING ID, NOTIFICADO_EN;";
+
+    public const string SqlContingenciaPorId = @"
+        SELECT ID, EMISOR_ID, CONCILIADO_EN FROM FED.FED_CONTINGENCIA WHERE ID = @id;";
+
+    public const string SqlContingenciaGetAll = @"
+        SELECT
+            c.ID, c.EMISOR_ID, e.RIF AS EMISOR_RIF, e.RAZON_SOCIAL AS EMISOR_RAZON_SOCIAL,
+            c.NUMERACION_FISICA, c.FECHA_EMISION_FISICA, c.ESCENARIO, c.NOTIFICADO_EN,
+            c.CONCILIADO_EN, c.DOCUMENTO_ID, c.USUARIO_CONCILIA, c.USUARIO_INS,
+            COUNT(*) OVER() AS TOTAL_REGISTROS
+        FROM FED.FED_CONTINGENCIA c
+        JOIN FED.FED_EMISOR e ON e.ID = c.EMISOR_ID
+        WHERE (@emisor_id = 0 OR c.EMISOR_ID = @emisor_id)
+          AND (NOT @solo_pendientes OR c.CONCILIADO_EN IS NULL)
+        ORDER BY c.NOTIFICADO_EN DESC
+        LIMIT @page_size OFFSET @row_offset;";
+
+    // El documento que regulariza tiene que existir y ser del mismo emisor: una
+    // contingencia de un emisor no se concilia con el documento de otro (mismo
+    // criterio de FacturacionElectronicaNotaCreate para el documento origen).
+    public const string SqlContingenciaDocumentoDeEmisor = @"
+        SELECT ID FROM FED.FED_DOCUMENTO WHERE ID = @documento_id AND EMISOR_ID = @emisor_id;";
+
+    public const string SqlContingenciaConciliar = @"
+        UPDATE FED.FED_CONTINGENCIA
+           SET CONCILIADO_EN = now(), DOCUMENTO_ID = @documento_id, USUARIO_CONCILIA = @usuario_concilia
+         WHERE ID = @id AND CONCILIADO_EN IS NULL
+        RETURNING EMISOR_ID, NUMERACION_FISICA;";
+
+    public static ContingenciaListaResponse MapContingenciaLista(IDataReader reader)
+    {
+        string conciliadoEn = SafeGetFecha(reader, "conciliado_en", "dd/MM/yyyy HH:mm");
+
+        return new ContingenciaListaResponse(
+            reader.SafeGetInt64("id"),
+            reader.SafeGetInt64("emisor_id"),
+            reader.SafeGetString("emisor_rif"),
+            reader.SafeGetString("emisor_razon_social"),
+            reader.SafeGetString("numeracion_fisica"),
+            SafeGetFecha(reader, "fecha_emision_fisica", "dd/MM/yyyy"),
+            reader.SafeGetString("escenario"),
+            SafeGetFecha(reader, "notificado_en", "dd/MM/yyyy HH:mm"),
+            conciliadoEn,
+            reader.SafeGetInt64("documento_id"),
+            reader.SafeGetString("usuario_concilia"),
+            reader.SafeGetString("usuario_ins"),
+            conciliadoEn.Length > 0);
+    }
 }

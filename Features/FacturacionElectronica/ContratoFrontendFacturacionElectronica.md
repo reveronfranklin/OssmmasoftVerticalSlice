@@ -1340,3 +1340,128 @@ El mensaje cita el numeral. Los rechazos verificados: sin motivo del traslado
 lleva prefijo-, sin RIF del receptor (10.5), sin nombre del receptor (10.5), sin
 bienes (10.4), sin medida (10.4), medida que la norma no nombra (10.4), medida
 sin valor (10.4), medida sin unidad (10.4) y bien sin descripcion (10.4).
+
+---
+
+# Fase 8 - Bandeja de contingencia (Art. 16)
+
+## Lo PRIMERO que hay que entender antes de integrarlo
+
+**Esto no emite nada.** El Art. 16 dice que los sujetos pasivos "podran
+utilizar" medidas de contingencia -son opcionales para el emisor- en tres
+escenarios: falla de internet, del dispositivo movil o del servicio electrico.
+Estos tres endpoints son la parte que **no** es opcional: la obligacion del Rol
+A de recibir y conciliar lo que el emisor notifica despues de una caida.
+
+`contingenciaNotificar` no toca `FED_NUM_CONTROL` ni `FED_EMISOR_CONTADOR`: el
+numero que se notifica ya lo asigno el talonario fisico, no este modulo.
+`contingenciaConciliar` no crea ningun `FED_DOCUMENTO`: asocia la notificacion
+con un documento que el emisor ya registro por su propia via -`facturaCreate`,
+`guiaCreate`, etc.-, si decide reconstruirlo digitalmente. Conciliar es
+**asociar**, no emitir.
+
+## contingenciaNotificar
+
+```http
+POST /api/FacturacionElectronica/contingenciaNotificar
+```
+
+### Request
+
+```json
+{
+  "emisorId": 16,
+  "numeracionFisica": "contingencia-000045",
+  "fechaEmisionFisica": "2026-08-20",
+  "escenario": "electrico",
+  "usuarioIns": "avanessa"
+}
+```
+
+| Campo | Obligatorio | Nota |
+|---|---|---|
+| `emisorId` | **si** | Debe existir |
+| `numeracionFisica` | **si** | Art. 16.3: debe empezar por la palabra `contingencia` (sin distinguir mayusculas), seguida de lo que el emisor use para identificar y diferenciar su talonario fisico |
+| `fechaEmisionFisica` | **si** | La fecha en que se emitio el documento fisico, no la de la notificacion |
+| `escenario` | **si** | Uno de `internet`, `dispositivo` o `electrico` - los tres del Art. 16 |
+
+### Response - exito
+
+```json
+{
+  "data": {
+    "id": 12,
+    "emisorId": 16,
+    "numeracionFisica": "contingencia-000045",
+    "fechaEmisionFisica": "20082026",
+    "escenario": "electrico",
+    "notificadoEn": "09/09/2026 13:05",
+    "conciliadoEn": "",
+    "documentoId": 0,
+    "usuarioConcilia": "",
+    "conciliado": false
+  },
+  "isValid": true,
+  "message": "suscces"
+}
+```
+
+`documentoId` en `0` y `conciliadoEn`/`usuarioConcilia` vacios significan "sin
+conciliar todavia": mismo criterio que `numeroControlGetAll` para "asignado sin
+documento".
+
+### Response - rechazos verificados
+
+Emisor inexistente, numeracion sin el prefijo `contingencia` (cita el Art.
+16.3), escenario fuera de los tres validos, y la misma numeracion notificada
+dos veces para el mismo emisor (`23505` sobre `fed_conting_uk`, defendido por el
+`UNIQUE` de la tabla y no por una consulta previa).
+
+## contingenciaGetAll
+
+```http
+POST /api/FacturacionElectronica/contingenciaGetAll
+```
+
+### Request
+
+```json
+{ "emisorId": 0, "soloPendientes": true, "pageSize": 10, "pageNumber": 1 }
+```
+
+`emisorId` en `0` son todos los emisores (D-53: no hay control de acceso por
+emisor que aplicar aqui, el operador de Ossmmasoft administra la cartera
+completa). `soloPendientes` en `true` filtra lo que todavia no se concilio -es
+la vista natural de la bandeja-.
+
+### Response
+
+Lista ordenada por fecha de notificacion, mas reciente primero. Cada fila trae
+el RIF y la razon social del emisor por join, igual que `numeroControlGetAll`.
+
+## contingenciaConciliar
+
+```http
+POST /api/FacturacionElectronica/contingenciaConciliar
+```
+
+### Request
+
+```json
+{ "contingenciaId": 12, "documentoId": 67, "usuarioConcilia": "avanessa" }
+```
+
+### Response - exito
+
+```json
+{ "data": true, "isValid": true, "message": "suscces" }
+```
+
+### Response - rechazos verificados
+
+Notificacion inexistente; notificacion ya conciliada (incluida la carrera entre
+dos conciliaciones simultaneas: el `UPDATE` exige `CONCILIADO_EN IS NULL` y la
+segunda no encuentra fila que actualizar); y **el documento indicado pertenece
+a otro emisor** -mismo mensaje y mismo criterio que `notaCreate` para el
+documento origen-, medido con el documento de un emisor distinto al de la
+notificacion.

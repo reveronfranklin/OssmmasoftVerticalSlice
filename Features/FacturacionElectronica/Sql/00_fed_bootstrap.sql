@@ -28,20 +28,27 @@
 --   psql -h <host> -p 5432 -U postgres -d OSSMMASOFT -f 00_fed_bootstrap.sql
 -- =============================================================================
 
--- DOS ROLES, Y LA DIFERENCIA ES TODO EL PUNTO (decisiones D-10 y D-20).
+-- TRES ROLES (decisiones D-10, D-20 y D-51).
 --
---   fed      propietario del schema. Crea y migra. NO lo usa la aplicacion.
---   fed_app  el que usa la aplicacion. Puede leer e insertar, y actualizar solo
---            las columnas que de verdad cambian. Nunca borra.
+--   fed          propietario del schema. Crea y migra. NO lo usa la aplicacion.
+--   fed_app      el que usa la aplicacion. Puede leer e insertar, y actualizar
+--                solo las columnas que de verdad cambian. Nunca borra.
+--   fed_auditor  SELECT unicamente. Es la credencial de acceso del SENIAT
+--                (Art. 19.3: "claves de acceso a la base de datos"; Art. 29.5:
+--                acceso permanente, 365 dias al ano). Fase 8, D-51. No hay
+--                endpoint ni esquema de autenticacion nuevo para esto: el
+--                SENIAT se conecta directo a Postgres con este rol.
 --
 -- Por que no alcanza con un rol: en PostgreSQL el propietario de una tabla
 -- SIEMPRE puede escribirla, sin importar que permisos se le revoquen. Mientras la
 -- aplicacion se conecte como dueno, el append-only que exige el Articulo 18.2 es
 -- una promesa del codigo y no una propiedad del sistema. Con dos roles pasa a ser
--- verificable: se intenta el UPDATE y la base lo rechaza.
+-- verificable: se intenta el UPDATE y la base lo rechaza. fed_auditor lleva el
+-- mismo razonamiento un paso mas: ni siquiera INSERT, solo lectura.
 --
 -- Las claves de este script son las de desarrollo. En cualquier otro ambiente el
--- DBA las cambia al crear los roles y actualiza DefaultConnectionFed.
+-- DBA las cambia al crear los roles; la de fed_auditor es la que se entrega al
+-- SENIAT en la solicitud del Art. 26.
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fed') THEN
@@ -50,6 +57,10 @@ BEGIN
 
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fed_app') THEN
         CREATE ROLE fed_app WITH LOGIN PASSWORD 'fed_app';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fed_auditor') THEN
+        CREATE ROLE fed_auditor WITH LOGIN PASSWORD 'fed_auditor';
     END IF;
 END
 $$;
@@ -66,16 +77,26 @@ GRANT USAGE, CREATE ON SCHEMA FED TO fed;
 GRANT CONNECT ON DATABASE "OSSMMASOFT" TO fed_app;
 GRANT USAGE ON SCHEMA FED TO fed_app;
 
--- Lo que fed cree de aqui en mas nace legible e insertable para fed_app, sin que
--- nadie tenga que acordarse. El UPDATE NO entra aca a proposito: es la excepcion
--- y se otorga columna por columna en GRANTS_FED_APP.sql.
+-- El rol de auditoria entra al schema y a nada mas: sin CREATE, sin INSERT,
+-- sin el resto de la base (no tiene GRANT sobre public, que es de report-server).
+GRANT CONNECT ON DATABASE "OSSMMASOFT" TO fed_auditor;
+GRANT USAGE ON SCHEMA FED TO fed_auditor;
+
+-- Lo que fed cree de aqui en mas nace legible e insertable para fed_app, y
+-- legible para fed_auditor, sin que nadie tenga que acordarse. El UPDATE NO
+-- entra aca a proposito: es la excepcion y se otorga columna por columna en
+-- GRANTS_FED_APP.sql. fed_auditor nunca recibe UPDATE ni INSERT, ni columna por
+-- columna: es de solo lectura por diseno.
 ALTER DEFAULT PRIVILEGES FOR ROLE fed IN SCHEMA FED
     GRANT SELECT, INSERT ON TABLES TO fed_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE fed IN SCHEMA FED
+    GRANT SELECT ON TABLES TO fed_auditor;
 
 -- Defensa contra un search_path inesperado: si un script olvidara calificar un
 -- objeto, cae en FED y no en public, que es de report-server.
 ALTER ROLE fed SET search_path = FED;
 ALTER ROLE fed_app SET search_path = FED;
+ALTER ROLE fed_auditor SET search_path = FED;
 
 -- Nota deliberada: no se ejecuta REVOKE sobre public. Desde PostgreSQL 15 el
 -- schema public ya no concede CREATE a PUBLIC, asi que fed no puede crear ahi.

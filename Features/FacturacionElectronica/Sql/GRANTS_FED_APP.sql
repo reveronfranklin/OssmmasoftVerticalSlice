@@ -152,6 +152,22 @@ GRANT UPDATE (ENTREGADO_EN) ON FED.FED_RETENCION TO fed_app;
 -- -----------------------------------------------------------------------------
 
 -- -----------------------------------------------------------------------------
+-- Fase 8 - bandeja de contingencia (T8.4)
+--
+-- FED_CONTINGENCIA recibe SELECT + INSERT del ALTER DEFAULT PRIVILEGES del
+-- script 00, como cualquier tabla nueva. Solo la conciliacion necesita UPDATE,
+-- mismo criterio que ENTREGADO_EN en FED_RETENCION: completar un dato
+-- pendiente no es enmendar el registro de notificacion, que es lo que el
+-- Art. 16 exige conservar intacto.
+--
+-- EMISOR_ID, NUMERACION_FISICA, FECHA_EMISION_FISICA, ESCENARIO y NOTIFICADO_EN
+-- quedan fuera a proposito: son el hecho que el emisor notifico, y no se
+-- reescribe.
+-- -----------------------------------------------------------------------------
+GRANT UPDATE (CONCILIADO_EN, DOCUMENTO_ID, USUARIO_CONCILIA)
+    ON FED.FED_CONTINGENCIA TO fed_app;
+
+-- -----------------------------------------------------------------------------
 -- LAS TABLAS DE DOCUMENTOS NO APARECEN AQUI, Y ESA ES LA IDEA.
 --
 -- FED_DOCUMENTO, FED_DOCUMENTO_DETALLE, FED_DOC_IMPUESTO y FED_BITACORA se
