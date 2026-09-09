@@ -142,11 +142,20 @@ public class FacturacionElectronicaContingenciaNotificarHandler(ConnectionDB _co
             return "La numeración física es obligatoria.";
         }
 
+        // Tope de columna (VARCHAR(50)). Sin este chequeo, un valor mas largo
+        // llega a la base y el "value too long" de Postgres se cuela por el
+        // catch generico como un error tecnico crudo en vez de un mensaje de
+        // negocio.
+        if (numeracion.Length > 50)
+        {
+            return "La numeración física no puede superar los 50 caracteres.";
+        }
+
         // Art. 16.3: precedida de "contingencia" mas caracteres que la
         // identifiquen y diferencien. El CHECK de la base lo repite (y la
-        // unicidad, D-XX, lo hace sin distinguir mayusculas de minusculas);
-        // se valida antes para devolver un mensaje de negocio y no un error
-        // de SQL.
+        // unicidad la aplica sin distinguir mayusculas de minusculas, ver
+        // Sql/23_fed_contingencia_uk_ci.sql); se valida antes para devolver
+        // un mensaje de negocio y no un error de SQL.
         if (!numeracion.StartsWith("contingencia", StringComparison.OrdinalIgnoreCase))
         {
             return "La numeración física debe estar precedida de la palabra \"contingencia\", "
@@ -156,6 +165,20 @@ public class FacturacionElectronicaContingenciaNotificarHandler(ConnectionDB _co
         if (!EscenariosValidos.Contains(escenario))
         {
             return "El escenario debe ser uno de: internet, dispositivo o eléctrico (Artículo 16).";
+        }
+
+        // Igual que UsuarioConcilia en contingenciaConciliar: sin este dato el
+        // INSERT viola el NOT NULL de USUARIO_INS y el error crudo de
+        // Postgres (23502) se filtraria al llamador en vez de un mensaje de
+        // negocio.
+        if (string.IsNullOrWhiteSpace(command.UsuarioIns))
+        {
+            return "El usuario que notifica es obligatorio.";
+        }
+
+        if (command.UsuarioIns.Trim().Length > 50)
+        {
+            return "El usuario no puede superar los 50 caracteres.";
         }
 
         return null;

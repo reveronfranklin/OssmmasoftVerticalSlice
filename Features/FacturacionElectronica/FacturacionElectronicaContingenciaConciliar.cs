@@ -43,6 +43,12 @@ public class FacturacionElectronicaContingenciaConciliarHandler(ConnectionDB _co
             return Falla("El usuario que concilia es obligatorio.");
         }
 
+        // Tope de columna (VARCHAR(50)): igual criterio que en Notificar.
+        if (command.UsuarioConcilia.Trim().Length > 50)
+        {
+            return Falla("El usuario no puede superar los 50 caracteres.");
+        }
+
         using var cn = _connectionDB.GetFedConnection();
 
         // Nivel 2 - apertura de conexion.
