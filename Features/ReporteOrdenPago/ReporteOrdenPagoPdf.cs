@@ -12,6 +12,11 @@ public record ReporteOrdenPagoPdfQuery(int CodigoOrdenPago, string? Usuario);
 
 public static class ReporteOrdenPagoPdfGenerator
 {
+    // Reserve the printed form's writing areas even when there are few records.
+    // Minimum heights allow unusually long values to flow onto additional pages.
+    private const float FondosBodyHeight = 180;
+    private const float RetencionesBodyHeight = 64;
+
     public static byte[] Generate(
         ReporteOrdenPagoResponse data,
         IWebHostEnvironment environment,
@@ -126,6 +131,7 @@ public static class ReporteOrdenPagoPdfGenerator
 
     private static void BuildFondos(IContainer container, IReadOnlyCollection<ReporteOrdenPagoFondoResponse> fondos, decimal totalOrden, CultureInfo culture)
     {
+        var rowHeight = FondosBodyHeight / Math.Max(1, fondos.Count);
         container.Table(table =>
         {
             table.ColumnsDefinition(columns =>
@@ -147,22 +153,22 @@ public static class ReporteOrdenPagoPdfGenerator
 
             foreach (var item in fondos)
             {
-                BodyCell(table, item.Ano == 0 ? string.Empty : item.Ano.ToString(CultureInfo.InvariantCulture));
-                BodyCell(table, item.DescripcionFinanciado);
-                BodyCell(table, item.CodigoIcpConcat);
-                BodyCell(table, item.CodigoPucConcat);
-                BodyCell(table, FormatAmount(item.Monto, culture), alignRight: true);
-                BodyCell(table, FormatAmount(item.Monto, culture), alignRight: true);
+                BodyCell(table, item.Ano == 0 ? string.Empty : item.Ano.ToString(CultureInfo.InvariantCulture), minHeight: rowHeight);
+                BodyCell(table, item.DescripcionFinanciado, minHeight: rowHeight);
+                BodyCell(table, item.CodigoIcpConcat, minHeight: rowHeight);
+                BodyCell(table, item.CodigoPucConcat, minHeight: rowHeight);
+                BodyCell(table, FormatAmount(item.Monto, culture), alignRight: true, minHeight: rowHeight);
+                BodyCell(table, FormatAmount(item.Monto, culture), alignRight: true, minHeight: rowHeight);
             }
 
             if (fondos.Count == 0)
             {
-                BodyCell(table, string.Empty);
-                BodyCell(table, "Sin imputaciones registradas");
-                BodyCell(table, string.Empty);
-                BodyCell(table, string.Empty);
-                BodyCell(table, string.Empty);
-                BodyCell(table, string.Empty);
+                BodyCell(table, string.Empty, minHeight: rowHeight);
+                BodyCell(table, "Sin imputaciones registradas", minHeight: rowHeight);
+                BodyCell(table, string.Empty, minHeight: rowHeight);
+                BodyCell(table, string.Empty, minHeight: rowHeight);
+                BodyCell(table, string.Empty, minHeight: rowHeight);
+                BodyCell(table, string.Empty, minHeight: rowHeight);
             }
 
             TotalCell(table, "TOTAL", colSpan: 4);
@@ -177,7 +183,7 @@ public static class ReporteOrdenPagoPdfGenerator
 
     private static void BuildMotivo(IContainer container, string motivo)
     {
-        container.Border(1).Padding(4).Column(column =>
+        container.Border(1).MinHeight(40).Padding(4).Column(column =>
         {
             column.Item().Text("MOTIVO").Bold();
             column.Item().PaddingTop(2).Text(motivo);
@@ -192,6 +198,7 @@ public static class ReporteOrdenPagoPdfGenerator
         decimal montoPagar,
         CultureInfo culture)
     {
+        var rowHeight = RetencionesBodyHeight / Math.Max(1, retenciones.Count);
         container.Table(table =>
         {
             table.ColumnsDefinition(columns =>
@@ -209,20 +216,20 @@ public static class ReporteOrdenPagoPdfGenerator
 
             if (retenciones.Count == 0)
             {
-                BodyCell(table, FormatAmount(totalOrden, culture), alignRight: true);
-                BodyCell(table, "Sin retenciones");
-                BodyCell(table, FormatAmount(0, culture), alignRight: true);
-                BodyCell(table, FormatAmount(montoPagar, culture), alignRight: true);
+                BodyCell(table, FormatAmount(totalOrden, culture), alignRight: true, minHeight: rowHeight);
+                BodyCell(table, "Sin retenciones", minHeight: rowHeight);
+                BodyCell(table, FormatAmount(0, culture), alignRight: true, minHeight: rowHeight);
+                BodyCell(table, FormatAmount(montoPagar, culture), alignRight: true, minHeight: rowHeight);
             }
             else
             {
                 var first = true;
                 foreach (var item in retenciones)
                 {
-                    BodyCell(table, first ? FormatAmount(totalOrden, culture) : string.Empty, alignRight: true);
-                    BodyCell(table, $"{FormatDecimal(item.PorRetencion)}% {item.Descripcion}".Trim());
-                    BodyCell(table, FormatAmount(item.MontoRetencion, culture), alignRight: true);
-                    BodyCell(table, first ? FormatAmount(montoPagar, culture) : string.Empty, alignRight: true);
+                    BodyCell(table, first ? FormatAmount(totalOrden, culture) : string.Empty, alignRight: true, minHeight: rowHeight);
+                    BodyCell(table, $"{FormatDecimal(item.PorRetencion)}% {item.Descripcion}".Trim(), minHeight: rowHeight);
+                    BodyCell(table, FormatAmount(item.MontoRetencion, culture), alignRight: true, minHeight: rowHeight);
+                    BodyCell(table, first ? FormatAmount(montoPagar, culture) : string.Empty, alignRight: true, minHeight: rowHeight);
                     first = false;
                 }
             }
@@ -263,9 +270,9 @@ public static class ReporteOrdenPagoPdfGenerator
         table.Cell().Background(Colors.Grey.Lighten2).Border(1).Padding(3).AlignCenter().Text(text).Bold().FontSize(6.5f);
     }
 
-    private static void BodyCell(TableDescriptor table, string text, bool alignRight = false)
+    private static void BodyCell(TableDescriptor table, string text, bool alignRight = false, float minHeight = 0)
     {
-        var cell = table.Cell().Border(1).Padding(3);
+        var cell = table.Cell().Border(1).MinHeight(minHeight).Padding(3);
         if (alignRight)
         {
             cell = cell.AlignRight();
