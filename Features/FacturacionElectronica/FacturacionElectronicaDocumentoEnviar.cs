@@ -220,6 +220,12 @@ public class FacturacionElectronicaDocumentoEnviarHandler(ConnectionDB _connecti
     // El cuerpo. Dice QUE documento es y COMO verlo; no repite el documento.
     // ------------------------------------------------------------------
 
+    // Los datos del documento (receptor, emisor, numeracion) salen de columnas
+    // que carga quien emite -no son un literal fijo de la norma como
+    // Denominacion-, asi que se escapan antes de entrar al HTML del correo. Sin
+    // esto, un nombre o razon social con marcado (`<img onerror=...>`, tags que
+    // rompen el maquetado) llegaria intacto al cliente de correo del receptor.
+    // El enlace no se escapa: es HMAC en base64url, sin `&`/`<`/`>` posibles.
     private static string CuerpoHtml(DocumentoParaCorreo d, string url)
     {
         string aviso = d.EsPrueba
@@ -227,18 +233,27 @@ public class FacturacionElectronicaDocumentoEnviarHandler(ConnectionDB _connecti
               + "sin validez fiscal.</b> Falta la autorización del SENIAT.</p>"
             : string.Empty;
 
+        string numeroControl = System.Net.WebUtility.HtmlEncode(d.NumeroControl);
+
         string control = d.NumeroControl.Length > 0
-            ? $"<tr><td style=\"padding:2px 8px 2px 0\">N° de Control</td><td><b>{d.NumeroControl}</b></td></tr>"
+            ? $"<tr><td style=\"padding:2px 8px 2px 0\">N° de Control</td><td><b>{numeroControl}</b></td></tr>"
             : string.Empty;
 
+        string receptorNombre = System.Net.WebUtility.HtmlEncode(d.ReceptorNombre);
+        string emisorRazonSocial = System.Net.WebUtility.HtmlEncode(d.EmisorRazonSocial);
+        string emisorRif = System.Net.WebUtility.HtmlEncode(d.EmisorRif);
+        string denominacion = System.Net.WebUtility.HtmlEncode(d.Denominacion);
+        string numeracion = System.Net.WebUtility.HtmlEncode(d.Numeracion);
+        string fechaEmision8d = System.Net.WebUtility.HtmlEncode(d.FechaEmision8d);
+
         return $@"<div style=""font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222"">
-  <p>Estimado(a) {d.ReceptorNombre},</p>
-  <p>{d.EmisorRazonSocial} (RIF {d.EmisorRif}) ha emitido a su nombre el siguiente documento:</p>
+  <p>Estimado(a) {receptorNombre},</p>
+  <p>{emisorRazonSocial} (RIF {emisorRif}) ha emitido a su nombre el siguiente documento:</p>
   <table style=""font-size:14px"">
-    <tr><td style=""padding:2px 8px 2px 0"">Documento</td><td><b>{d.Denominacion}</b></td></tr>
-    <tr><td style=""padding:2px 8px 2px 0"">Numeración</td><td><b>{d.Numeracion}</b></td></tr>
+    <tr><td style=""padding:2px 8px 2px 0"">Documento</td><td><b>{denominacion}</b></td></tr>
+    <tr><td style=""padding:2px 8px 2px 0"">Numeración</td><td><b>{numeracion}</b></td></tr>
     {control}
-    <tr><td style=""padding:2px 8px 2px 0"">Fecha de emisión</td><td>{d.FechaEmision8d}</td></tr>
+    <tr><td style=""padding:2px 8px 2px 0"">Fecha de emisión</td><td>{fechaEmision8d}</td></tr>
   </table>
   <p><a href=""{url}"" style=""display:inline-block;padding:10px 16px;background:#5a3fc0;color:#fff;
      text-decoration:none;border-radius:4px"">Ver y descargar el documento</a></p>

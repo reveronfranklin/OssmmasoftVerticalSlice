@@ -222,9 +222,77 @@ public static class FacturaValidador
                     FacturaNumerales.Numeral(Concepto.AjusteSinDescripcion, articulo),
                     $"el renglón {numero} tiene un ajuste al precio sin descripción."));
             }
+
+            // La medida (Art. 10.4) es de la guia de despacho, pero el renglon es
+            // el mismo para los tres documentos (D-42): si alguien la manda por
+            // facturaCreate o notaCreate con un valor fuera de 'capacidad',
+            // 'peso' o 'volumen', o solo a medias, el CHECK de la tabla la
+            // rechaza igual que a la guia -aca se valida antes para no filtrar
+            // ese SQLSTATE crudo.
+            string medida = (renglon.MedidaTipo ?? string.Empty).Trim().ToLowerInvariant();
+
+            if (medida.Length > 0 && !GuiaDb.MedidasValidas.Contains(medida))
+            {
+                faltantes.Add(new FacturaFalta(string.Empty,
+                    $"el renglón {numero} declara la medida «{renglon.MedidaTipo}», y solo se admite "
+                    + "capacidad, peso o volumen."));
+            }
+            else if (medida.Length == 0
+                     && (renglon.MedidaValor != 0 || !string.IsNullOrWhiteSpace(renglon.MedidaUnidad)))
+            {
+                faltantes.Add(new FacturaFalta(string.Empty,
+                    $"el renglón {numero} trae valor o unidad de medida sin decir de qué medida se trata."));
+            }
+            else if (medida.Length > 0 && (renglon.MedidaValor <= 0 || string.IsNullOrWhiteSpace(renglon.MedidaUnidad)))
+            {
+                faltantes.Add(new FacturaFalta(string.Empty,
+                    $"el renglón {numero} señala {medida} sin un valor mayor que cero y su unidad."));
+            }
         }
 
         return faltantes;
+    }
+
+    // ------------------------------------------------------------------
+    // Longitudes contra cada columna (mismo criterio que EmisorCreate/Update):
+    // sin esto, un texto mas largo que su VARCHAR(n) llegaba intacto al INSERT y
+    // el SQLSTATE de Postgres se filtraba crudo por el catch generico.
+    // ------------------------------------------------------------------
+    public static string? ValidarLongitudes(FacturaEmitirCommand comando)
+    {
+        string? error =
+            FacturacionElectronicaDb.ValidarTexto(comando.UsuarioIns, "El usuario", 50)
+            ?? FacturacionElectronicaDb.ValidarTexto(comando.Serie, "La serie", 20, obligatorio: false)
+            ?? FacturacionElectronicaDb.ValidarTexto(comando.NumeracionExterna, "La numeración externa", 20, obligatorio: false)
+            ?? FacturacionElectronicaDb.ValidarTexto(comando.ClaveIdempotencia, "La clave de idempotencia", 80, obligatorio: false)
+            ?? FacturacionElectronicaDb.ValidarTexto(comando.AdqNombre, "El nombre del adquiriente", 200, obligatorio: false)
+            ?? FacturacionElectronicaDb.ValidarTexto(comando.AdqRif, "El RIF del adquiriente", 20, obligatorio: false)
+            ?? FacturacionElectronicaDb.ValidarTexto(comando.AdqDocumentoId, "La cédula o pasaporte del adquiriente", 30, obligatorio: false);
+
+        if (error is not null || comando.Renglones is null)
+        {
+            return error;
+        }
+
+        for (int i = 0; i < comando.Renglones.Count; i++)
+        {
+            var renglon = comando.Renglones[i];
+            int numero = i + 1;
+
+            error =
+                FacturacionElectronicaDb.ValidarTexto(renglon.Descripcion, $"La descripción del renglón {numero}", 500)
+                ?? FacturacionElectronicaDb.ValidarTexto(renglon.Codigo, $"El código del renglón {numero}", 60, obligatorio: false)
+                ?? FacturacionElectronicaDb.ValidarTexto(renglon.BienesEntregados, $"Los bienes entregados del renglón {numero}", 500, obligatorio: false)
+                ?? FacturacionElectronicaDb.ValidarTexto(renglon.AjusteDescripcion, $"La descripción del ajuste del renglón {numero}", 200, obligatorio: false)
+                ?? FacturacionElectronicaDb.ValidarTexto(renglon.MedidaUnidad, $"La unidad de medida del renglón {numero}", 20, obligatorio: false);
+
+            if (error is not null)
+            {
+                return error;
+            }
+        }
+
+        return null;
     }
 
     private static FacturaValidacion Invalida(string articulo, FacturaFalta falta) =>

@@ -59,6 +59,16 @@ public class FacturacionElectronicaRetencionCreateHandler(ConnectionDB _connecti
             return Falla(validacion.Mensaje);
         }
 
+        string? errorLongitud = RetencionValidador.ValidarLongitudes(command);
+
+        if (errorLongitud is not null)
+        {
+            await FacturaEmision.RegistrarRechazoAsync(
+                _connectionDB, command.EmisorId, "retencion", command.UsuarioIns, errorLongitud);
+
+            return Falla(errorLongitud);
+        }
+
         string periodo = command.Periodo.Trim();
         string clave = (command.ClaveIdempotencia ?? string.Empty).Trim();
 

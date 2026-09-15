@@ -670,6 +670,31 @@ public static class FacturacionElectronicaDb
             reader.SafeGetInt32("periodo_cantidad_reportada"),
             (int)reader.SafeGetInt64("periodos_vencidos_anio"));
 
+    // Nivel 1 comun a todo el modulo: campo de texto contra su tope de columna
+    // (VARCHAR(n)) y, si aplica, su obligatoriedad. Sin esto, un valor vacio en
+    // una columna NOT NULL o mas largo que su VARCHAR(n) llega intacto al
+    // INSERT/UPDATE, y el SQLSTATE de Postgres (23502, 22001) se filtra crudo
+    // por el catch generico de cada handler -exactamente el defecto que la
+    // revision de seguridad previa al SENIAT encontro repetido en Factura,
+    // Nota, Guia, Retencion, Emisor y NumeroControlAsignar. Devuelve el
+    // mensaje de negocio si falla, o null si esta bien.
+    public static string? ValidarTexto(string? valor, string etiqueta, int maxLength, bool obligatorio = true)
+    {
+        string v = (valor ?? string.Empty).Trim();
+
+        if (obligatorio && v.Length == 0)
+        {
+            return $"{etiqueta} es obligatorio.";
+        }
+
+        if (v.Length > maxLength)
+        {
+            return $"{etiqueta} no puede superar los {maxLength} caracteres.";
+        }
+
+        return null;
+    }
+
     // Nulos via helper y no con "?? DBNull.Value" inline, como pide el estandar.
     public static object DbValue(string? valor) =>
         string.IsNullOrWhiteSpace(valor) ? DBNull.Value : valor.Trim();

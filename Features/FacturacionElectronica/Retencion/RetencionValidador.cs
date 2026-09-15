@@ -132,4 +132,43 @@ public static class RetencionValidador
 
         return new FacturaValidacion(faltantes.Count == 0, faltantes, "11");
     }
+
+    // ------------------------------------------------------------------
+    // Longitudes contra cada columna (mismo criterio que EmisorCreate/Update y
+    // FacturaValidador.ValidarLongitudes): sin esto, un texto mas largo que su
+    // VARCHAR(n) llegaba intacto al INSERT y el SQLSTATE de Postgres se filtraba
+    // crudo por el catch generico.
+    // ------------------------------------------------------------------
+    public static string? ValidarLongitudes(RetencionEmitirCommand comando)
+    {
+        string? error =
+            FacturacionElectronicaDb.ValidarTexto(comando.ProveedorRif, "El RIF del proveedor", 20)
+            ?? FacturacionElectronicaDb.ValidarTexto(comando.ProveedorRazonSocial, "La razón social del proveedor", 200)
+            ?? FacturacionElectronicaDb.ValidarTexto(comando.ProveedorDomicilio, "El domicilio del proveedor", 300, obligatorio: false)
+            ?? FacturacionElectronicaDb.ValidarTexto(comando.ProveedorCorreo, "El correo del proveedor", 150, obligatorio: false)
+            ?? FacturacionElectronicaDb.ValidarTexto(comando.UsuarioIns, "El usuario", 50)
+            ?? FacturacionElectronicaDb.ValidarTexto(comando.ClaveIdempotencia, "La clave de idempotencia", 80, obligatorio: false);
+
+        if (error is not null || comando.Documentos is null)
+        {
+            return error;
+        }
+
+        for (int i = 0; i < comando.Documentos.Count; i++)
+        {
+            var doc = comando.Documentos[i];
+            int numero = i + 1;
+
+            error =
+                FacturacionElectronicaDb.ValidarTexto(doc.DocumentoNumero, $"El número del documento {numero}", 40)
+                ?? FacturacionElectronicaDb.ValidarTexto(doc.DocumentoControl, $"El número de control del documento {numero}", 20);
+
+            if (error is not null)
+            {
+                return error;
+            }
+        }
+
+        return null;
+    }
 }

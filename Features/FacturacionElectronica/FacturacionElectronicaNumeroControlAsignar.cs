@@ -35,6 +35,13 @@ public class FacturacionElectronicaNumeroControlAsignarHandler(ConnectionDB _con
             return Falla("El tipo de documento debe ser factura, débito, crédito o entrega.");
         }
 
+        string? error = FacturacionElectronicaDb.ValidarTexto(command.UsuarioIns, "El usuario", 50);
+
+        if (error is not null)
+        {
+            return Falla(error);
+        }
+
         using var cn = _connectionDB.GetFedConnection();
 
         // Nivel 2 - apertura de conexion.

@@ -56,6 +56,16 @@ public class FacturacionElectronicaFacturaCreateHandler(ConnectionDB _connection
             return FacturaEmision.Falla(validacion.Mensaje);
         }
 
+        string? errorLongitud = FacturaValidador.ValidarLongitudes(command);
+
+        if (errorLongitud is not null)
+        {
+            await FacturaEmision.RegistrarRechazoAsync(
+                _connectionDB, command.EmisorId, command.TipoDocumento, command.UsuarioIns, errorLongitud);
+
+            return FacturaEmision.Falla(errorLongitud);
+        }
+
         string tipo = command.TipoDocumento.Trim().ToLowerInvariant();
         string serie = (command.Serie ?? string.Empty).Trim();
         string clave = (command.ClaveIdempotencia ?? string.Empty).Trim();

@@ -55,6 +55,21 @@ public class FacturacionElectronicaGuiaCreateHandler(ConnectionDB _connectionDB,
             return Falla(validacion.Mensaje);
         }
 
+        // Longitudes contra columna: MOTIVO_TRASLADO y DESTINO son propios de
+        // FED_GUIA_DESPACHO y no pasan por FacturaValidador.ValidarLongitudes,
+        // que valida el resto una vez armado el comando equivalente mas abajo.
+        string? errorLongitud =
+            FacturacionElectronicaDb.ValidarTexto(motivo, "El motivo del traslado", 500)
+            ?? FacturacionElectronicaDb.ValidarTexto(destino, "El destino", 400, obligatorio: false);
+
+        if (errorLongitud is not null)
+        {
+            await FacturaEmision.RegistrarRechazoAsync(
+                _connectionDB, command.EmisorId, Tipo, command.UsuarioIns, errorLongitud);
+
+            return Falla(errorLongitud);
+        }
+
         using var cn = _connectionDB.GetFedConnection();
 
         try
@@ -101,6 +116,13 @@ public class FacturacionElectronicaGuiaCreateHandler(ConnectionDB _connectionDB,
             var totales = FacturaCalculo.Calcular(renglones);
 
             var comando = ComandoEquivalente(command, renglones, serie, clave);
+
+            string? errorLongitudComando = FacturaValidador.ValidarLongitudes(comando);
+
+            if (errorLongitudComando is not null)
+            {
+                return await FallaEnTxAsync(tx, errorLongitudComando);
+            }
 
             var (numeracion, fallaNumeracion) = await FacturaEmision.ResolverNumeracionAsync(
                 cn, tx, emisor, command.EmisorId, Tipo, serie, command.NumeracionExterna);

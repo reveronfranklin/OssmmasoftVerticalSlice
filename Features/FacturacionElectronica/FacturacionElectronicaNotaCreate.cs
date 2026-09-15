@@ -71,6 +71,11 @@ public class FacturacionElectronicaNotaCreateHandler(ConnectionDB _connectionDB,
                 + "admite cualquier causa, pero no la ausencia de causa.");
         }
 
+        if (motivo.Length > 500)
+        {
+            return FacturaEmision.Falla("El motivo no puede superar los 500 caracteres.");
+        }
+
         if (command.DocumentoOrigenId <= 0)
         {
             return FacturaEmision.Falla(
@@ -158,6 +163,16 @@ public class FacturacionElectronicaNotaCreateHandler(ConnectionDB _connectionDB,
                     _connectionDB, command.EmisorId, tipo, command.UsuarioIns, validacion.Mensaje);
 
                 return await FacturaEmision.FallaEnTxAsync(tx, validacion.Mensaje);
+            }
+
+            string? errorLongitud = FacturaValidador.ValidarLongitudes(comando);
+
+            if (errorLongitud is not null)
+            {
+                await FacturaEmision.RegistrarRechazoAsync(
+                    _connectionDB, command.EmisorId, tipo, command.UsuarioIns, errorLongitud);
+
+                return await FacturaEmision.FallaEnTxAsync(tx, errorLongitud);
             }
 
             var totales = FacturaCalculo.Calcular(command.Renglones);

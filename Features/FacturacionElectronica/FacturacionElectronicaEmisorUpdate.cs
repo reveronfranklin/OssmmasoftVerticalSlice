@@ -24,6 +24,8 @@ public record FacturacionElectronicaEmisorUpdateCommand(
 public class FacturacionElectronicaEmisorUpdateHandler(ConnectionDB _connectionDB)
 {
     private static readonly string[] EstadosValidos = ["activo", "inactivo"];
+    private static readonly string[] TiposContribuyenteValidos = ["ordinario", "formal", "no_sujeto"];
+    private static readonly string[] RifVerificadoEstadosValidos = ["vigente", "no_vigente", "sin_verificar"];
 
     public async Task<ResultDto<string>> HandleAsync(FacturacionElectronicaEmisorUpdateCommand command)
     {
@@ -32,14 +34,18 @@ public class FacturacionElectronicaEmisorUpdateHandler(ConnectionDB _connectionD
             return Falla("El identificador del emisor no es válido.");
         }
 
-        if (string.IsNullOrWhiteSpace(command.RazonSocial))
-        {
-            return Falla("La razón social es obligatoria.");
-        }
+        // Cada campo contra su columna real, mismo criterio que EmisorCreate:
+        // sin esto, un valor mas largo que su VARCHAR(n) filtraba un SQLSTATE
+        // crudo por el catch generico.
+        string? error =
+            FacturacionElectronicaDb.ValidarTexto(command.RazonSocial, "La razón social", 200)
+            ?? FacturacionElectronicaDb.ValidarTexto(command.DomicilioFiscal, "El domicilio fiscal", 300)
+            ?? FacturacionElectronicaDb.ValidarTexto(command.Correo, "El correo", 150, obligatorio: false)
+            ?? FacturacionElectronicaDb.ValidarTexto(command.UsuarioUpd, "El usuario", 50, obligatorio: false);
 
-        if (string.IsNullOrWhiteSpace(command.DomicilioFiscal))
+        if (error is not null)
         {
-            return Falla("El domicilio fiscal es obligatorio.");
+            return Falla(error);
         }
 
         string estado = string.IsNullOrWhiteSpace(command.Estado) ? "activo" : command.Estado.Trim().ToLowerInvariant();
@@ -47,6 +53,22 @@ public class FacturacionElectronicaEmisorUpdateHandler(ConnectionDB _connectionD
         if (!EstadosValidos.Contains(estado))
         {
             return Falla("El estado del emisor debe ser activo o inactivo.");
+        }
+
+        string tipoContribuyente = string.IsNullOrWhiteSpace(command.TipoContribuyente)
+            ? "ordinario"
+            : command.TipoContribuyente.Trim();
+
+        if (!TiposContribuyenteValidos.Contains(tipoContribuyente))
+        {
+            return Falla("El tipo de contribuyente debe ser ordinario, formal o no_sujeto.");
+        }
+
+        string rifVerificadoEstado = (command.RifVerificadoEstado ?? string.Empty).Trim();
+
+        if (rifVerificadoEstado.Length > 0 && !RifVerificadoEstadosValidos.Contains(rifVerificadoEstado))
+        {
+            return Falla("El estado de verificación del RIF debe ser vigente, no_vigente o sin_verificar.");
         }
 
         using var cn = _connectionDB.GetFedConnection();
@@ -69,10 +91,8 @@ public class FacturacionElectronicaEmisorUpdateHandler(ConnectionDB _connectionD
             cmd.Parameters.AddWithValue("correo", FacturacionElectronicaDb.DbValue(command.Correo));
             cmd.Parameters.AddWithValue("estado", estado);
             cmd.Parameters.AddWithValue("rif_verificado_el", FacturacionElectronicaDb.DbValueFecha(command.RifVerificadoEl));
-            cmd.Parameters.AddWithValue("rif_verificado_estado", FacturacionElectronicaDb.DbValue(command.RifVerificadoEstado));
-            cmd.Parameters.AddWithValue("tipo_contribuyente",
-                FacturacionElectronicaDb.DbValue(
-                    string.IsNullOrWhiteSpace(command.TipoContribuyente) ? "ordinario" : command.TipoContribuyente));
+            cmd.Parameters.AddWithValue("rif_verificado_estado", FacturacionElectronicaDb.DbValue(rifVerificadoEstado));
+            cmd.Parameters.AddWithValue("tipo_contribuyente", tipoContribuyente);
             cmd.Parameters.AddWithValue("usuario_upd", FacturacionElectronicaDb.DbValue(command.UsuarioUpd));
 
             int filas = await cmd.ExecuteNonQueryAsync();

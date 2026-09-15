@@ -47,7 +47,8 @@ public record ConsultaPublicaResponse(
     string ContenidoBase64);
 
 public class FacturacionElectronicaConsultaPublicaHandler(
-    ConnectionDB _connectionDB, IConfiguration _config, IWebHostEnvironment _environment)
+    ConnectionDB _connectionDB, IConfiguration _config, IWebHostEnvironment _environment,
+    ILogger<FacturacionElectronicaConsultaPublicaHandler> _logger)
 {
     // Un solo mensaje para las tres formas de fallar: codigo mal formado, firma
     // invalida y documento inexistente.
@@ -76,7 +77,14 @@ public class FacturacionElectronicaConsultaPublicaHandler(
         }
         catch (Exception ex)
         {
-            return Falla($"Error técnico al abrir conexión FED: {ex.Message}");
+            // Endpoint SIN AUTENTICACION: a diferencia del resto del modulo,
+            // ex.Message nunca llega al llamador. Un fallo tecnico real (pool
+            // agotado, red) no puede convertirse en una fuga hacia cualquier
+            // persona de internet con un enlace -o sin el, si la firma nunca
+            // se llega a verificar-. El detalle queda en el log del servidor.
+            _logger.LogError(ex, "consultaPublica: fallo al abrir la conexion FED.");
+
+            return Falla(NoDisponible);
         }
 
         try
@@ -89,7 +97,9 @@ public class FacturacionElectronicaConsultaPublicaHandler(
         }
         catch (Exception ex)
         {
-            return Falla($"Error técnico al generar el documento: {ex.Message}");
+            _logger.LogError(ex, "consultaPublica: fallo al generar el documento para id {Id}, tipo {Tipo}.", id, tipo);
+
+            return Falla(NoDisponible);
         }
     }
 
@@ -197,7 +207,8 @@ public record EnlacePublicoResponse(string Codigo, string Url, bool Habilitado);
 [ApiController]
 [Route("api/FacturacionElectronica")]
 public class FacturacionElectronicaConsultaPublicaController(
-    ConnectionDB _connectionDB, IConfiguration _config, IWebHostEnvironment _environment) : ControllerBase
+    ConnectionDB _connectionDB, IConfiguration _config, IWebHostEnvironment _environment,
+    ILogger<FacturacionElectronicaConsultaPublicaHandler> _logger) : ControllerBase
 {
     // SIN [Authorize], y es el unico del modulo. Ver la cabecera del handler.
     [AllowAnonymous]
@@ -205,7 +216,7 @@ public class FacturacionElectronicaConsultaPublicaController(
     [Route("consultaPublica")]
     public async Task<IActionResult> ConsultaPublica(ConsultaPublicaQuery value)
     {
-        var handler = new FacturacionElectronicaConsultaPublicaHandler(_connectionDB, _config, _environment);
+        var handler = new FacturacionElectronicaConsultaPublicaHandler(_connectionDB, _config, _environment, _logger);
         var result = await handler.HandleAsync(value);
 
         return Ok(result);
