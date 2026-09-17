@@ -268,13 +268,20 @@ public static class FacturacionElectronicaDb
     //
     // Calcularlo aca y no en el codigo evita que las dos cosas se separen: la
     // columna no puede contradecir a DOCUMENTO_ID porque sale de el.
+    //
+    // El cast a bigint del CASE no es decorativo: sin el, la asignacion falla
+    // entera con 42P08 "could not determine data type of parameter". Es el mismo
+    // motivo que el de las fechas de SqlNumControlGetAll, mas abajo. En la lista
+    // de VALUES el parametro toma el tipo de su columna, pero dentro del CASE
+    // solo aparece en un IS NULL, que no aporta tipo, y PostgreSQL resuelve un
+    // unico tipo por parametro: si un uso no lo determina, falla la sentencia.
     public const string SqlNumControlInsert = @"
         INSERT INTO FED.FED_NUM_CONTROL
             (EMISOR_ID, DOCUMENTO_ID, IDENTIFICADOR, SECUENCIAL, TIPO_DOCUMENTO, USUARIO_INS,
              ESTADO_CONCILIACION)
         VALUES
             (@emisor_id, @documento_id, @identificador, @secuencial, @tipo_documento, @usuario_ins,
-             CASE WHEN @documento_id IS NULL THEN 'sin_documento' ELSE 'conciliado' END)
+             CASE WHEN @documento_id::bigint IS NULL THEN 'sin_documento' ELSE 'conciliado' END)
         RETURNING ID, FECHA_ASIGNACION;";
 
     // Listado del Art. 32: por emisor y por rango de fechas, que es como lo pide
