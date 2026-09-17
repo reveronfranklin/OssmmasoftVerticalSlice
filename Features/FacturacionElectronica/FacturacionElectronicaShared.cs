@@ -185,11 +185,14 @@ public static class FacturacionElectronicaDb
              @tipo_contribuyente)
         RETURNING ID;";
 
+    // El mas reciente primero: quien acaba de dar de alta un emisor lo busca en
+    // la primera fila, no al final del alfabeto. Para encontrar uno concreto
+    // esta @search, que es el camino que la pantalla ofrece.
     public static readonly string SqlEmisorGetAll = $@"
         SELECT {ColumnasEmisor}, COUNT(*) OVER() AS TOTAL_REGISTROS
         FROM FED.FED_EMISOR
         WHERE (@search = '' OR RIF ILIKE @like OR RAZON_SOCIAL ILIKE @like)
-        ORDER BY RAZON_SOCIAL
+        ORDER BY ID DESC
         LIMIT @page_size OFFSET @row_offset;";
 
     public static readonly string SqlEmisorGetById = $@"
@@ -284,8 +287,13 @@ public static class FacturacionElectronicaDb
              CASE WHEN @documento_id::bigint IS NULL THEN 'sin_documento' ELSE 'conciliado' END)
         RETURNING ID, FECHA_ASIGNACION;";
 
-    // Listado del Art. 32: por emisor y por rango de fechas, que es como lo pide
-    // el reporte mensual del Art. 29.7 y la vista de consulta de T2.9.
+    // Listado de PANTALLA: por emisor y por rango de fechas, que es como lo pide
+    // la vista de consulta de T2.9.
+    //
+    // Ordena por fecha descendente porque es lo que el operador necesita: ver lo
+    // que acaba de asignar. NO CONFUNDIR con SqlRegistroArt32GetAll, mas abajo,
+    // que se ve en la misma pantalla y es otra cosa: ese es el registro que se le
+    // remite al SENIAT y va por numeracion consecutiva. Ver el comentario de alla.
     //
     // Los parametros de fecha llevan cast explicito a date: sin el, Npgsql no
     // puede inferir el tipo de un parametro que solo aparece en un IS NULL.
@@ -300,13 +308,22 @@ public static class FacturacionElectronicaDb
         WHERE (@emisor_id = 0 OR nc.EMISOR_ID = @emisor_id)
           AND (@fecha_desde::date IS NULL OR nc.FECHA_ASIGNACION >= @fecha_desde::date)
           AND (@fecha_hasta::date IS NULL OR nc.FECHA_ASIGNACION < @fecha_hasta::date + INTERVAL '1 day')
-        ORDER BY nc.EMISOR_ID, nc.IDENTIFICADOR, nc.SECUENCIAL
+        ORDER BY nc.FECHA_ASIGNACION DESC, nc.ID DESC
         LIMIT @page_size OFFSET @row_offset;";
 
     // -----------------------------------------------------------------------
     // Registro del Art. 32 y reporte mensual del Art. 29.7 - Fase 3
     // -----------------------------------------------------------------------
 
+    // EL ORDEN DE ESTA CONSULTA NO SE CAMBIA A "MAS RECIENTE PRIMERO".
+    //
+    // No es un listado de pantalla aunque se vea en una: es el registro que el
+    // Art. 29.7 obliga a remitirle al SENIAT, y el Art. 32.4 pide la "numeracion
+    // de control consecutiva asignada". Un registro consecutivo ordenado por
+    // fecha descendente deja de ser consecutivo.
+    //
+    // El listado de pantalla es SqlNumControlGetAll, mas arriba, y ese si va
+    // descendente. Son dos consultas a proposito.
     public const string SqlRegistroArt32GetAll = @"
         SELECT
             NUM_CONTROL_ID, EMISOR_RIF, EMISOR_RAZON_SOCIAL, FECHA_ASIGNACION, FECHA_ASIGNACION_8D,
