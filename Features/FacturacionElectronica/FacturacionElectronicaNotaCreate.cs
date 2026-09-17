@@ -44,9 +44,9 @@ public record NotaEmitirCommand(
     bool EsAnulacion = false,
     string Serie = "",
     string NumeracionExterna = "",
-    string AdqNombre = "",
-    string AdqRif = "",
-    string AdqDocumentoId = "",
+
+    // NO lleva datos del adquiriente. Se heredan del documento origen, igual que
+    // la moneda: ver el comentario de NotaOrigenDatos y el Art. 23.
     string Moneda = "",
     decimal TasaCambio = 0,
     string UsuarioIns = "",
@@ -152,9 +152,14 @@ public class FacturacionElectronicaNotaCreateHandler(ConnectionDB _connectionDB,
                 return await FacturaEmision.FallaEnTxAsync(tx, fallaOrigen);
             }
 
+            // ValidarOrigen ya rechazo el caso nulo, pero el compilador no puede
+            // saberlo. Se fija aca una sola vez, en vez de repetir el `!` en cada
+            // uso de mas abajo.
+            NotaOrigenDatos documentoOrigen = origen!;
+
             // Validacion de contenido contra el Art. 13 o el 15 segun el tipo de
             // contribuyente del emisor (Art. 23, "segun sea el caso", D-31).
-            var comando = ComandoEquivalente(command, tipo, serie, clave, origen!.Moneda);
+            var comando = ComandoEquivalente(command, documentoOrigen, tipo, serie, clave);
             var validacion = FacturaValidador.ValidarNota(comando, imprenta, emisor.TipoContribuyente);
 
             if (!validacion.EsValida)
@@ -182,11 +187,11 @@ public class FacturacionElectronicaNotaCreateHandler(ConnectionDB _connectionDB,
             // Sin esto se pueden emitir diez notas de credito por el total de la
             // misma factura y dejar el saldo en negativo. En una tabla sin DELETE
             // ni UPDATE eso no deja un dato mal: lo deja mal para siempre.
-            if (tipo == "credito" && totales.TotalGeneral > origen.Saldo)
+            if (tipo == "credito" && totales.TotalGeneral > documentoOrigen.Saldo)
             {
                 return await FacturaEmision.FallaEnTxAsync(tx,
                     $"La nota de crédito es por {totales.TotalGeneral:N2} y al documento le queda un saldo "
-                    + $"pendiente de {origen.Saldo:N2}. Una nota no puede exceder lo que queda por corregir.");
+                    + $"pendiente de {documentoOrigen.Saldo:N2}. Una nota no puede exceder lo que queda por corregir.");
             }
 
             var (numeracion, fallaNumeracion) = await FacturaEmision.ResolverNumeracionAsync(
@@ -204,19 +209,19 @@ public class FacturacionElectronicaNotaCreateHandler(ConnectionDB _connectionDB,
             await FacturaEmision.InsertarImpuestosAsync(cn, tx, documentoId, totales);
 
             // El vinculo y la instantanea del Art. 23, en la MISMA transaccion.
-            string origenNumeracion = FacturaFormato.NumeracionConSerie(origen.Serie, origen.Numeracion);
-            string origenFecha8d = FacturaFormato.FechaOchoDigitos(origen.EmitidoEn);
+            string origenNumeracion = FacturaFormato.NumeracionConSerie(documentoOrigen.Serie, documentoOrigen.Numeracion);
+            string origenFecha8d = FacturaFormato.FechaOchoDigitos(documentoOrigen.EmitidoEn);
 
             using (var cmd = new NpgsqlCommand(NotaDb.SqlNotaInsert, cn, tx))
             {
                 cmd.Parameters.AddWithValue("documento_id", documentoId);
-                cmd.Parameters.AddWithValue("documento_origen_id", origen.Id);
+                cmd.Parameters.AddWithValue("documento_origen_id", documentoOrigen.Id);
                 cmd.Parameters.AddWithValue("motivo", motivo);
                 cmd.Parameters.AddWithValue("es_anulacion", command.EsAnulacion);
                 cmd.Parameters.AddWithValue("origen_numeracion", origenNumeracion);
                 cmd.Parameters.AddWithValue("origen_fecha_8d", origenFecha8d);
-                cmd.Parameters.AddWithValue("origen_total", origen.TotalGeneral);
-                cmd.Parameters.AddWithValue("origen_moneda", origen.Moneda);
+                cmd.Parameters.AddWithValue("origen_total", documentoOrigen.TotalGeneral);
+                cmd.Parameters.AddWithValue("origen_moneda", documentoOrigen.Moneda);
                 cmd.Parameters.AddWithValue("usuario_ins", FacturacionElectronicaDb.DbValue(command.UsuarioIns));
 
                 await cmd.ExecuteNonQueryAsync();
@@ -240,7 +245,7 @@ public class FacturacionElectronicaNotaCreateHandler(ConnectionDB _connectionDB,
                     serie,
                     numeroControl = numeroControl.Value.Numero,
                     totalGeneral = totales.TotalGeneral,
-                    documentoOrigenId = origen.Id,
+                    documentoOrigenId = documentoOrigen.Id,
                     esAnulacion = command.EsAnulacion,
                     esPrueba = !imprenta.EsDefinitivo
                 });
@@ -254,7 +259,7 @@ public class FacturacionElectronicaNotaCreateHandler(ConnectionDB _connectionDB,
             // -sin tachaduras ni enmendaduras- y Art. 36 -el anulado se conserva-.
             if (command.EsAnulacion)
             {
-                await FacturaEmision.RegistrarAsync(cn, tx, origen.Id, command.EmisorId, "anulacion", command.UsuarioIns,
+                await FacturaEmision.RegistrarAsync(cn, tx, documentoOrigen.Id, command.EmisorId, "anulacion", command.UsuarioIns,
                     new
                     {
                         notaId = documentoId,
@@ -271,9 +276,9 @@ public class FacturacionElectronicaNotaCreateHandler(ConnectionDB _connectionDB,
                 numeroControl.Value.Numero, numeroControl.Value.Fecha, imprenta, yaExistia: false)
                 with
             {
-                DocumentoOrigenId = origen.Id,
+                DocumentoOrigenId = documentoOrigen.Id,
                 ReferenciaOriginal = FacturaFormato.ReferenciaOriginal(
-                    origenFecha8d, origenNumeracion, origen.TotalGeneral, origen.Moneda),
+                    origenFecha8d, origenNumeracion, documentoOrigen.TotalGeneral, documentoOrigen.Moneda),
                 Motivo = motivo,
                 LeyendaContribuyente = FacturaFormato.LeyendaContribuyente(emisor.TipoContribuyente)
             };
@@ -355,19 +360,25 @@ public class FacturacionElectronicaNotaCreateHandler(ConnectionDB _connectionDB,
 
     // La nota reusa el motor de emision, que habla en FacturaEmitirCommand. Se
     // traduce aca en vez de duplicar el motor.
+    //
+    // La moneda Y EL ADQUIRIENTE salen del documento origen, no del request. Son
+    // los dos datos que la nota no elige: el Art. 23 la ata a una factura
+    // concreta, asi que a quien se le emitio esa factura es a quien se le emite
+    // la nota. Sin esto, los numerales 13.7 llegaban vacios y ninguna nota se
+    // podia emitir desde la pantalla.
     private static FacturaEmitirCommand ComandoEquivalente(
-        NotaEmitirCommand command, string tipo, string serie, string clave, string moneda) => new(
+        NotaEmitirCommand command, NotaOrigenDatos origen, string tipo, string serie, string clave) => new(
             command.EmisorId,
             tipo,
             command.Renglones,
             serie,
             command.NumeracionExterna,
-            command.AdqNombre,
-            command.AdqRif,
-            command.AdqDocumentoId,
+            origen.AdqNombre,
+            origen.AdqRif,
+            origen.AdqDocumentoId,
             command.UsuarioIns,
             clave,
-            moneda,
+            origen.Moneda,
             command.TasaCambio,
             command.DocumentoOrigenId,
             command.Motivo,

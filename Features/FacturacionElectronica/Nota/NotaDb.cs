@@ -4,9 +4,16 @@ using System.Data;
 namespace OssmmasoftVerticalSlice.Features.FacturacionElectronica;
 
 // El documento que una nota corrige, leido dentro de la transaccion de la
-// emision. Trae lo que el Art. 23 obliga a referenciar -fecha, numero y monto- y
-// lo que hace falta para validar: de quien es, de que tipo, en que moneda y
-// cuanto saldo le queda.
+// emision. Trae lo que el Art. 23 obliga a referenciar -fecha, numero y monto-,
+// lo que hace falta para validar -de quien es, de que tipo, en que moneda y
+// cuanto saldo le queda- y el ADQUIRIENTE, que la nota hereda.
+//
+// El adquiriente esta aca y no en el request por el Art. 23: la nota se emite
+// "por las cuales se otorgaron facturas", asi que su adquiriente no es un dato
+// que alguien elija, es una consecuencia de cual factura corrige. Cuando se
+// podia mandar por peticion, se podia emitir una nota a nombre de un tercero
+// contra la factura de otro, y ocurrio: la nota 145 quedo con adquiriente
+// J-30111222-3 sobre un original de V-1-1.
 public record NotaOrigenDatos(
     long Id,
     long EmisorId,
@@ -17,7 +24,10 @@ public record NotaOrigenDatos(
     decimal TotalGeneral,
     string Moneda,
     decimal Saldo,
-    string Estado);
+    string Estado,
+    string AdqNombre,
+    string AdqRif,
+    string AdqDocumentoId);
 
 // SQL del subdominio de notas de debito y credito. Fase 5.
 public static class NotaDb
@@ -32,7 +42,8 @@ public static class NotaDb
         SELECT
             e.DOCUMENTO_ID, e.EMISOR_ID, e.TIPO_DOCUMENTO, e.NUMERACION,
             e.MONEDA, e.TOTAL_GENERAL, e.SALDO, e.ESTADO,
-            d.SERIE, d.EMITIDO_EN
+            d.SERIE, d.EMITIDO_EN,
+            d.ADQ_NOMBRE, d.ADQ_RIF, d.ADQ_DOCUMENTO_ID
         FROM FED.FED_V_DOCUMENTO_ESTADO e
         JOIN FED.FED_DOCUMENTO d ON d.ID = e.DOCUMENTO_ID
         WHERE e.DOCUMENTO_ID = @documento_id;";
@@ -82,5 +93,8 @@ public static class NotaDb
         reader.SafeGetDecimal("total_general"),
         reader.SafeGetString("moneda"),
         reader.SafeGetDecimal("saldo"),
-        reader.SafeGetString("estado"));
+        reader.SafeGetString("estado"),
+        reader.SafeGetString("adq_nombre"),
+        reader.SafeGetString("adq_rif"),
+        reader.SafeGetString("adq_documento_id"));
 }

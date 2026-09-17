@@ -886,8 +886,6 @@ POST /api/FacturacionElectronica/notaCreate
   "tipoDocumento": "credito",
   "motivo": "Devolución parcial de mercancía",
   "esAnulacion": false,
-  "adqNombre": "COMERCIAL SABANA GRANDE, C.A.",
-  "adqRif": "J-31558240-6",
   "serie": "",
   "moneda": "",
   "tasaCambio": 0,
@@ -908,6 +906,21 @@ POST /api/FacturacionElectronica/notaCreate
 | `moneda` | no | Vacio es `VES`. **Debe coincidir con la del documento corregido** |
 | `tasaCambio` | condicional | Obligatorio cuando la moneda no es `VES` (Art. 13.14) |
 | `claveIdempotencia` | **no dejarlo vacio** | Sin ella, un doble clic acredita dos veces la misma devolucion |
+
+**NO se mandan los datos del adquiriente.** `adqNombre`, `adqRif` y
+`adqDocumentoId` **ya no existen en este request** -se aceptaban hasta el
+2026-09-16 y se quitaron-. La nota los **hereda del documento que corrige**,
+igual que la moneda.
+
+No es una comodidad, es una regla: el Art. 23 emite la nota sobre *las
+operaciones por las cuales se otorgaron facturas*, asi que a quien se le emitio
+la factura es a quien se le emite la nota. Mientras se pudieron mandar por
+peticion, se podia emitir una nota a nombre de un tercero contra la factura de
+otro, y paso: la nota 145 de pruebas quedo con adquiriente `J-30111222-3`
+sobre un original de `V-1-1`.
+
+Si los mandas igual, el modelo los ignora: no estan en el contrato y el binder
+los descarta.
 
 ### Response - exito
 
