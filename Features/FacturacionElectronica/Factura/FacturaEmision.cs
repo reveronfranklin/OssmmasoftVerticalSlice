@@ -5,6 +5,9 @@ using OssmmasoftVerticalSlice.Helpers;
 
 namespace OssmmasoftVerticalSlice.Features.FacturacionElectronica;
 
+// Numero de control recien asignado dentro de la transaccion de emision.
+public record NumeroControlAsignado(string Numero, DateTime Fecha);
+
 // T5.8 - el motor de emision de un documento fiscal, compartido por las dos
 // operaciones que emiten: facturaCreate y notaCreate.
 //
@@ -229,9 +232,11 @@ public static class FacturaEmision
     // Numero de control (Art. 7.4), en la MISMA transaccion
     // ------------------------------------------------------------------
 
-    // Devuelve null si la secuencia del emisor se agoto -99 identificadores por
-    // 99.999.999 secuenciales-.
-    public static async Task<(string Numero, DateTime Fecha)?> AsignarNumeroControlAsync(
+    // Asignado en null = no se pudo asignar, y Falla dice por que: la secuencia
+    // del emisor se agoto -99 identificadores por 99.999.999 secuenciales- o se
+    // agoto su cupo de documentos (TM.4). El motivo se decide aqui y no en cada
+    // llamador, para que un documento nuevo no pueda olvidarse de ninguno.
+    public static async Task<(NumeroControlAsignado? Asignado, string? Falla)> AsignarNumeroControlAsync(
         NpgsqlConnection cn, NpgsqlTransaction tx, long emisorId, string tipo, long documentoId, string usuario)
     {
         string identificadorActual;
@@ -248,10 +253,18 @@ public static class FacturaEmision
             secuencialActual = reader.SafeGetInt32("secuencial");
         }
 
+        // Despues del bloqueo, con los valores que devolvio: ver EmisorCupoDb.
+        string? faltaCupo = await EmisorCupoDb.VerificarAsync(cn, tx, emisorId, identificadorActual, secuencialActual);
+
+        if (faltaCupo is not null)
+        {
+            return (null, faltaCupo);
+        }
+
         if (!FacturacionElectronicaDb.CalcularSiguiente(
                 identificadorActual, secuencialActual, out string identificador, out int secuencial))
         {
-            return null;
+            return (null, SecuenciaAgotada);
         }
 
         using (var cmd = new NpgsqlCommand(FacturacionElectronicaDb.SqlContadorActualizar, cn, tx))
@@ -280,8 +293,13 @@ public static class FacturaEmision
             fechaAsignacion = reader.GetDateTime(reader.GetOrdinal("fecha_asignacion"));
         }
 
-        return (FacturacionElectronicaDb.FormatearNumeroControl(identificador, secuencial), fechaAsignacion);
+        return (new NumeroControlAsignado(
+            FacturacionElectronicaDb.FormatearNumeroControl(identificador, secuencial), fechaAsignacion), null);
     }
+
+    public const string SecuenciaAgotada =
+        "La secuencia de números de control del emisor se agotó: se consumieron "
+        + "los 99 identificadores de dos dígitos.";
 
     // ------------------------------------------------------------------
     // Idempotencia

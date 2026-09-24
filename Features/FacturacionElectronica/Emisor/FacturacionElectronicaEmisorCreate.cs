@@ -16,7 +16,11 @@ public record FacturacionElectronicaEmisorCreateCommand(
     // D-31. Por defecto 'ordinario', que es el conjunto MAS ESTRICTO: el Art. 13
     // tiene dieciseis numerales y el 15 es el del no ordinario. Un emisor sin
     // declarar queda sobre-validado, no sub-validado.
-    string TipoContribuyente = "ordinario");
+    string TipoContribuyente = "ordinario",
+
+    // TM.4, D-54. Cupo de documentos con el que nace el emisor. null o 0 = sin
+    // cupo, es decir sin limite, que es como funcionaban todos hasta ahora.
+    int? CupoInicial = null);
 
 public class FacturacionElectronicaEmisorCreateHandler(ConnectionDB _connectionDB)
 {
@@ -54,6 +58,13 @@ public class FacturacionElectronicaEmisorCreateHandler(ConnectionDB _connectionD
             return Falla("El tipo de contribuyente debe ser ordinario, formal o no_sujeto.");
         }
 
+        int cupoInicial = command.CupoInicial ?? 0;
+
+        if (cupoInicial is < 0 or > FacturacionElectronicaDb.SecuencialMaximo)
+        {
+            return Falla($"El cupo inicial debe estar entre 1 y {EmisorCupoDb.CantidadMaximaTexto}, o vacío para no limitar.");
+        }
+
         using var cn = _connectionDB.GetFedConnection();
 
         // Nivel 2 - apertura de conexion.
@@ -69,16 +80,40 @@ public class FacturacionElectronicaEmisorCreateHandler(ConnectionDB _connectionD
         // Nivel 3 - ejecucion.
         try
         {
-            using var cmd = new NpgsqlCommand(FacturacionElectronicaDb.SqlEmisorCreate, cn);
-            cmd.Parameters.AddWithValue("rif", command.Rif.Trim());
-            cmd.Parameters.AddWithValue("razon_social", command.RazonSocial.Trim());
-            cmd.Parameters.AddWithValue("domicilio_fiscal", command.DomicilioFiscal.Trim());
-            cmd.Parameters.AddWithValue("correo", FacturacionElectronicaDb.DbValue(command.Correo));
-            cmd.Parameters.AddWithValue("tipo_contribuyente", tipoContribuyente);
-            cmd.Parameters.AddWithValue("estado", "activo");
-            cmd.Parameters.AddWithValue("usuario_ins", FacturacionElectronicaDb.DbValue(command.UsuarioIns));
+            // El emisor y su primer cupo van juntos o no va ninguno: un emisor
+            // que nace sin el cupo pedido quedaria sin limite sin que nadie lo
+            // note.
+            using var tx = await cn.BeginTransactionAsync();
 
-            object? id = await cmd.ExecuteScalarAsync();
+            object? id;
+
+            using (var cmd = new NpgsqlCommand(FacturacionElectronicaDb.SqlEmisorCreate, cn, tx))
+            {
+                cmd.Parameters.AddWithValue("rif", command.Rif.Trim());
+                cmd.Parameters.AddWithValue("razon_social", command.RazonSocial.Trim());
+                cmd.Parameters.AddWithValue("domicilio_fiscal", command.DomicilioFiscal.Trim());
+                cmd.Parameters.AddWithValue("correo", FacturacionElectronicaDb.DbValue(command.Correo));
+                cmd.Parameters.AddWithValue("tipo_contribuyente", tipoContribuyente);
+                cmd.Parameters.AddWithValue("estado", "activo");
+                cmd.Parameters.AddWithValue("usuario_ins", FacturacionElectronicaDb.DbValue(command.UsuarioIns));
+
+                id = await cmd.ExecuteScalarAsync();
+            }
+
+            if (cupoInicial > 0)
+            {
+                // Consumido 0: el emisor recien creado todavia no recibio ningun
+                // numero, y nadie mas lo ve hasta el commit.
+                using var cmdCupo = new NpgsqlCommand(EmisorCupoDb.SqlInsertar, cn, tx);
+                cmdCupo.Parameters.AddWithValue("emisor_id", Convert.ToInt64(id));
+                cmdCupo.Parameters.AddWithValue("cantidad", cupoInicial);
+                cmdCupo.Parameters.AddWithValue("consumido", 0L);
+                cmdCupo.Parameters.AddWithValue("usuario_ins", command.UsuarioIns.Trim());
+
+                await cmdCupo.ExecuteNonQueryAsync();
+            }
+
+            await tx.CommitAsync();
 
             return new ResultDto<int>(Convert.ToInt32(id))
             {

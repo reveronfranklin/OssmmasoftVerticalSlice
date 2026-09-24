@@ -127,7 +127,9 @@ clave de negocio**: el Articulo 30 ata la secuencia de numero de control a ese R
   "usuarioIns": "arivas",
   "fechaIns": "03/09/2026 11:14",
   "usuarioUpd": "",
-  "fechaUpd": ""
+  "fechaUpd": "",
+  "cupoTotal": 20,
+  "cupoDisponible": 7
 }
 ```
 
@@ -137,6 +139,8 @@ clave de negocio**: el Articulo 30 ata la secuencia de numero de control a ese R
 | `estado` | `string` | `activo` o `inactivo`. No hay borrado: un emisor se desactiva |
 | `rifVerificadoEl` | `string` | `dd/MM/yyyy`. Vacio si nunca se verifico |
 | `rifVerificadoEstado` | `string` | `vigente`, `no_vigente` o `sin_verificar`. Art. 29.2 |
+| `cupoTotal` | `number \| null` | Suma de todas las cargas de cupo. **`null` = el emisor no tiene cupo: sin limite.** Ver [Cupo de documentos](#cupo-de-documentos) |
+| `cupoDisponible` | `number \| null` | Numeros de control que le quedan. `null` junto con `cupoTotal` |
 
 Las fechas viajan **ya formateadas como texto**, no como ISO: es lo que hace el resto del
 proyecto y lo que la tabla del frontend consume directo.
@@ -222,11 +226,16 @@ POST /api/FacturacionElectronica/create
   "razonSocial": "Servicios Integrales Aramendi, C.A.",
   "domicilioFiscal": "Av. Francisco de Miranda, Caracas",
   "correo": "facturacion@aramendi.com",
-  "usuarioIns": "arivas"
+  "usuarioIns": "arivas",
+  "cupoInicial": 20
 }
 ```
 
 `estado` no viaja: todo emisor nace `activo`.
+
+`cupoInicial` es **opcional**. Omitido, `null` o `0` = el emisor nace sin cupo, es decir sin
+limite. Si viene, el emisor y su primera carga de cupo se graban en la misma transaccion.
+Fuera de rango (negativo o mayor que 99.999.999) responde `isValid = false`.
 
 ### Response
 
@@ -259,6 +268,13 @@ POST /api/FacturacionElectronica/update
 
 **Sin `rif`.** Ver validaciones de negocio.
 
+**El `update` reescribe TODAS las columnas editables.** Quien cambia un solo dato -por ejemplo
+el `estado` desde la grilla- tiene que mandar el resto tal como estaba, o lo pisa con vacio. En
+el frontend lo resuelve `comandoActualizarEmisor` (`src/fed/facturacion/utils/mappers.ts`).
+
+**`rifVerificadoEl` viaja en ISO (`yyyy-MM-dd`), no como lo devuelve el listado (`dd/MM/yyyy`).**
+Mandarlo en `null` lo borra: ese era el defecto que corrigio `TM.3`.
+
 ### Response
 
 ```json
@@ -267,6 +283,75 @@ POST /api/FacturacionElectronica/update
 
 Si el id no existe, `isValid = false` con
 `No se encontró el emisor que se intenta actualizar.`
+
+## Cupo de documentos
+
+`TM.4`, decision `D-54`. Cuantos numeros de control puede consumir un emisor hasta que renueve.
+**Es una regla comercial de la imprenta, no de la Providencia:** ningun articulo la pide ni la
+prohibe.
+
+- **Descuenta todo numero de control**: factura, notas, guia y la asignacion manual sin
+  documento. La retencion no, porque no lleva numero de control.
+- **Sin ninguna carga, el emisor no tiene limite.** Es como siguen funcionando los emisores que
+  ya existian.
+- **Renovar suma, no reemplaza.** Cada carga queda registrada con su cantidad, fecha y usuario.
+- **Lo consumido antes del primer cupo no cuenta.** Si un emisor que ya emitia recibe su primer
+  cupo de 20, tiene 20 disponibles.
+- **Sin cupo, no se asigna numero.** `facturaCreate`, `notaCreate`, `guiaCreate` y
+  `asignarNumeroControl` responden `isValid = false` con:
+  `El emisor agotó su cupo de documentos: ya usó los <N> autorizados. Debe renovarse el cupo para seguir asignando números de control.`
+  El documento no se crea: la emision es una sola transaccion.
+
+### cupoRenovar
+
+```http
+POST /api/FacturacionElectronica/cupoRenovar
+```
+
+```json
+{ "emisorId": 1, "cantidad": 20, "usuarioIns": "arivas" }
+```
+
+`cantidad` entre 1 y 99.999.999. Se puede renovar a un emisor inactivo: el cupo queda listo para
+cuando se reactive.
+
+```json
+{
+  "data": { "emisorId": 1, "cupoTotal": 40, "cupoDisponible": 27, "cargas": [] },
+  "isValid": true,
+  "message": "suscces"
+}
+```
+
+### cupoGetAll
+
+```http
+POST /api/FacturacionElectronica/cupoGetAll
+```
+
+```json
+{ "emisorId": 1 }
+```
+
+```json
+{
+  "data": {
+    "emisorId": 1,
+    "cupoTotal": 40,
+    "cupoDisponible": 27,
+    "cargas": [
+      { "id": 2, "cantidad": 20, "usuarioIns": "arivas", "fechaIns": "24/09/2026 18:05" },
+      { "id": 1, "cantidad": 20, "usuarioIns": "arivas", "fechaIns": "03/09/2026 11:14" }
+    ]
+  },
+  "isValid": true,
+  "message": "suscces",
+  "cantidadRegistros": 2
+}
+```
+
+`cargas` va de la mas reciente a la mas vieja. El total y el disponible tambien vienen en cada
+emisor de `GetAll`; esta ruta agrega el historial.
 
 
 ---
@@ -381,6 +466,7 @@ error**: es la idempotencia funcionando.
 | Emisor inactivo | `El emisor está inactivo: no se le pueden asignar números de control.` |
 | Tipo fuera de alcance | `El tipo de documento debe ser factura, débito, crédito o entrega.` |
 | Secuencia agotada | `La secuencia de números de control del emisor se agotó: se consumieron los 99 identificadores de dos dígitos.` |
+| Cupo agotado (`TM.4`) | `El emisor agotó su cupo de documentos: ya usó los <N> autorizados. Debe renovarse el cupo para seguir asignando números de control.` |
 
 Todas HTTP 200 con `isValid = false`.
 

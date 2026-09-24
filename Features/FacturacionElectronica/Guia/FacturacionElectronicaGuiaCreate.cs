@@ -155,14 +155,12 @@ public class FacturacionElectronicaGuiaCreateHandler(ConnectionDB _connectionDB,
                 await cmd.ExecuteNonQueryAsync();
             }
 
-            var numeroControl = await FacturaEmision.AsignarNumeroControlAsync(
+            var (numeroControl, faltaNumero) = await FacturaEmision.AsignarNumeroControlAsync(
                 cn, tx, command.EmisorId, Tipo, documentoId, command.UsuarioIns);
 
             if (numeroControl is null)
             {
-                return await FallaEnTxAsync(tx,
-                    "La secuencia de números de control del emisor se agotó: se consumieron "
-                    + "los 99 identificadores de dos dígitos.");
+                return await FallaEnTxAsync(tx, faltaNumero ?? FacturaEmision.SecuenciaAgotada);
             }
 
             await FacturaEmision.RegistrarAsync(cn, tx, documentoId, command.EmisorId, "emision", command.UsuarioIns,
@@ -170,7 +168,7 @@ public class FacturacionElectronicaGuiaCreateHandler(ConnectionDB _connectionDB,
                 {
                     numeracion,
                     serie,
-                    numeroControl = numeroControl.Value.Numero,
+                    numeroControl = numeroControl.Numero,
                     motivoTraslado = motivo,
                     destino,
                     renglones = command.Renglones.Count,
@@ -180,8 +178,8 @@ public class FacturacionElectronicaGuiaCreateHandler(ConnectionDB _connectionDB,
             await tx.CommitAsync();
 
             return Exito(Armar(
-                documentoId, serie, numeracion, emitidoEn, numeroControl.Value.Numero,
-                numeroControl.Value.Fecha, command, motivo, destino, imprenta, yaExistia: false));
+                documentoId, serie, numeracion, emitidoEn, numeroControl.Numero,
+                numeroControl.Fecha, command, motivo, destino, imprenta, yaExistia: false));
         }
         catch (NpgsqlException ex) when (FacturacionElectronicaDb.EsClaveDuplicada(ex))
         {

@@ -22,7 +22,11 @@ public record EmisorResponse(
     string UsuarioIns,
     string FechaIns,
     string UsuarioUpd,
-    string FechaUpd);
+    string FechaUpd,
+
+    // TM.4, D-54. null = el emisor no tiene cupo: sin limite.
+    long? CupoTotal = null,
+    long? CupoDisponible = null);
 
 // Numero de control asignado. Fase 2.
 //
@@ -171,10 +175,26 @@ public static class FacturacionElectronicaDb
     public const string SqlHealth =
         "SELECT current_database() || ' / ' || current_user || ' / schema ' || current_schema();";
 
-    private const string ColumnasEmisor = @"
-        ID, RIF, RAZON_SOCIAL, DOMICILIO_FISCAL, CORREO, ESTADO,
-        RIF_VERIFICADO_EL, RIF_VERIFICADO_ESTADO, TIPO_CONTRIBUYENTE,
-        USUARIO_INS, FECHA_INS, USUARIO_UPD, FECHA_UPD";
+    // Con alias E porque el JOIN con FED_EMISOR_CONTADOR trae otra FECHA_UPD.
+    //
+    // El cupo (TM.4, D-54) se calcula aqui y no se guarda: CUPO_TOTAL es la suma
+    // de las cargas y CUPO_DISPONIBLE descuenta lo consumido desde la base del
+    // primer cupo. Sin cargas, los dos salen NULL: el emisor no tiene limite.
+    private static readonly string ColumnasEmisor = $@"
+        E.ID, E.RIF, E.RAZON_SOCIAL, E.DOMICILIO_FISCAL, E.CORREO, E.ESTADO,
+        E.RIF_VERIFICADO_EL, E.RIF_VERIFICADO_ESTADO, E.TIPO_CONTRIBUYENTE,
+        E.USUARIO_INS, E.FECHA_INS, E.USUARIO_UPD, E.FECHA_UPD,
+        CUPO.TOTAL AS CUPO_TOTAL,
+        CUPO.TOTAL - (COALESCE({EmisorCupoDb.SqlConsumido}, 0) - CUPO.BASE) AS CUPO_DISPONIBLE";
+
+    private const string DesdeEmisor = @"
+        FROM FED.FED_EMISOR E
+        LEFT JOIN FED.FED_EMISOR_CONTADOR CT ON CT.EMISOR_ID = E.ID
+        LEFT JOIN LATERAL (
+            SELECT SUM(C.CANTIDAD) AS TOTAL, MIN(C.CONSUMIDO_AL_CARGAR) AS BASE
+            FROM FED.FED_EMISOR_CUPO C
+            WHERE C.EMISOR_ID = E.ID
+        ) CUPO ON TRUE";
 
     public const string SqlEmisorCreate = @"
         INSERT INTO FED.FED_EMISOR
@@ -190,15 +210,15 @@ public static class FacturacionElectronicaDb
     // esta @search, que es el camino que la pantalla ofrece.
     public static readonly string SqlEmisorGetAll = $@"
         SELECT {ColumnasEmisor}, COUNT(*) OVER() AS TOTAL_REGISTROS
-        FROM FED.FED_EMISOR
-        WHERE (@search = '' OR RIF ILIKE @like OR RAZON_SOCIAL ILIKE @like)
-        ORDER BY ID DESC
+        {DesdeEmisor}
+        WHERE (@search = '' OR E.RIF ILIKE @like OR E.RAZON_SOCIAL ILIKE @like)
+        ORDER BY E.ID DESC
         LIMIT @page_size OFFSET @row_offset;";
 
     public static readonly string SqlEmisorGetById = $@"
         SELECT {ColumnasEmisor}
-        FROM FED.FED_EMISOR
-        WHERE ID = @id;";
+        {DesdeEmisor}
+        WHERE E.ID = @id;";
 
     // El RIF no se actualiza a proposito. El Articulo 30 ata la secuencia de
     // numero de control al RIF del emisor, asi que cambiarlo rompe la unicidad
@@ -599,7 +619,9 @@ public static class FacturacionElectronicaDb
         reader.SafeGetString("usuario_ins"),
         SafeGetFecha(reader, "fecha_ins", "dd/MM/yyyy HH:mm"),
         reader.SafeGetString("usuario_upd"),
-        SafeGetFecha(reader, "fecha_upd", "dd/MM/yyyy HH:mm"));
+        SafeGetFecha(reader, "fecha_upd", "dd/MM/yyyy HH:mm"),
+        EmisorCupoDb.LeerEnteroNulable(reader, "cupo_total"),
+        EmisorCupoDb.LeerEnteroNulable(reader, "cupo_disponible"));
 
     // DOCUMENTO_ID nulo llega como 0 por SafeGetInt64: 0 significa "asignado sin
     // documento todavia", que es un estado valido en la Fase 2.

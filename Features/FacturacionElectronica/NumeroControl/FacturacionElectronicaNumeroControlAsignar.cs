@@ -112,6 +112,17 @@ public class FacturacionElectronicaNumeroControlAsignarHandler(ConnectionDB _con
                 secuencialActual = reader.SafeGetInt32("secuencial");
             }
 
+            // TM.4: la asignacion manual tambien descuenta del cupo del emisor,
+            // aunque no tenga documento (D-16). Va despues del bloqueo, igual que
+            // en FacturaEmision.AsignarNumeroControlAsync.
+            string? faltaCupo = await EmisorCupoDb.VerificarAsync(
+                cn, tx, command.EmisorId, identificadorActual, secuencialActual);
+
+            if (faltaCupo is not null)
+            {
+                return await FallaEnTransaccionAsync(tx, faltaCupo);
+            }
+
             // Decision D-2: el identificador rota al agotarse el secuencial.
             if (!FacturacionElectronicaDb.CalcularSiguiente(
                     identificadorActual, secuencialActual, out string identificador, out int secuencial))

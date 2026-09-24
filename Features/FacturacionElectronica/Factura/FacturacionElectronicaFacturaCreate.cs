@@ -134,14 +134,12 @@ public class FacturacionElectronicaFacturaCreateHandler(ConnectionDB _connection
             // NUMERO DE CONTROL, en la MISMA transaccion. Se reusa el SQL de la
             // Fase 2, incluido el bloqueo por emisor: es el mismo mecanismo que ya
             // se demostro bajo 30 peticiones simultaneas.
-            var numeroControl = await FacturaEmision.AsignarNumeroControlAsync(
+            var (numeroControl, faltaNumero) = await FacturaEmision.AsignarNumeroControlAsync(
                 cn, tx, command.EmisorId, tipo, documentoId, command.UsuarioIns);
 
             if (numeroControl is null)
             {
-                return await FacturaEmision.FallaEnTxAsync(tx,
-                    "La secuencia de números de control del emisor se agotó: se consumieron "
-                    + "los 99 identificadores de dos dígitos.");
+                return await FacturaEmision.FallaEnTxAsync(tx, faltaNumero ?? FacturaEmision.SecuenciaAgotada);
             }
 
             // Bitacora (Art. 18.2).
@@ -150,7 +148,7 @@ public class FacturacionElectronicaFacturaCreateHandler(ConnectionDB _connection
                 {
                     numeracion,
                     serie,
-                    numeroControl = numeroControl.Value.Numero,
+                    numeroControl = numeroControl.Numero,
                     totalGeneral = totales.TotalGeneral,
                     esPrueba = !imprenta.EsDefinitivo
                 });
@@ -159,7 +157,7 @@ public class FacturacionElectronicaFacturaCreateHandler(ConnectionDB _connection
 
             return FacturaEmision.Exito(FacturaEmision.Armar(
                 documentoId, tipo, serie, numeracion, emitidoEn, totales,
-                numeroControl.Value.Numero, numeroControl.Value.Fecha, imprenta, yaExistia: false));
+                numeroControl.Numero, numeroControl.Fecha, imprenta, yaExistia: false));
         }
         catch (NpgsqlException ex) when (FacturacionElectronicaDb.EsClaveDuplicada(ex))
         {

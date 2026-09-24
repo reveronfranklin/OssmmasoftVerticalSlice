@@ -227,14 +227,12 @@ public class FacturacionElectronicaNotaCreateHandler(ConnectionDB _connectionDB,
                 await cmd.ExecuteNonQueryAsync();
             }
 
-            var numeroControl = await FacturaEmision.AsignarNumeroControlAsync(
+            var (numeroControl, faltaNumero) = await FacturaEmision.AsignarNumeroControlAsync(
                 cn, tx, command.EmisorId, tipo, documentoId, command.UsuarioIns);
 
             if (numeroControl is null)
             {
-                return await FacturaEmision.FallaEnTxAsync(tx,
-                    "La secuencia de números de control del emisor se agotó: se consumieron "
-                    + "los 99 identificadores de dos dígitos.");
+                return await FacturaEmision.FallaEnTxAsync(tx, faltaNumero ?? FacturaEmision.SecuenciaAgotada);
             }
 
             // Bitacora (Art. 18.2). La emision de la nota apunta a la nota.
@@ -243,7 +241,7 @@ public class FacturacionElectronicaNotaCreateHandler(ConnectionDB _connectionDB,
                 {
                     numeracion,
                     serie,
-                    numeroControl = numeroControl.Value.Numero,
+                    numeroControl = numeroControl.Numero,
                     totalGeneral = totales.TotalGeneral,
                     documentoOrigenId = documentoOrigen.Id,
                     esAnulacion = command.EsAnulacion,
@@ -264,7 +262,7 @@ public class FacturacionElectronicaNotaCreateHandler(ConnectionDB _connectionDB,
                     {
                         notaId = documentoId,
                         notaNumeracion = numeracion,
-                        notaNumeroControl = numeroControl.Value.Numero,
+                        notaNumeroControl = numeroControl.Numero,
                         motivo
                     });
             }
@@ -273,7 +271,7 @@ public class FacturacionElectronicaNotaCreateHandler(ConnectionDB _connectionDB,
 
             var respuesta = FacturaEmision.Armar(
                 documentoId, tipo, serie, numeracion, emitidoEn, totales,
-                numeroControl.Value.Numero, numeroControl.Value.Fecha, imprenta, yaExistia: false)
+                numeroControl.Numero, numeroControl.Fecha, imprenta, yaExistia: false)
                 with
             {
                 DocumentoOrigenId = documentoOrigen.Id,
