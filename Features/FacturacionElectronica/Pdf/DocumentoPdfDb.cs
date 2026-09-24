@@ -56,7 +56,11 @@ public record DocumentoImpresionCabecera(
 
     // Propios de la guia de despacho (Art. 10). Vacios en los demas.
     string GuiaMotivoTraslado,
-    string GuiaDestino);
+    string GuiaDestino,
+
+    // TM.6, D-54. "Documento N de M" dentro del cupo del emisor. Vacio si el
+    // emisor no tiene cupo o el documento es anterior al primero.
+    string PosicionCupo = "");
 
 // Un renglon impreso. Los campos de medida solo los usa la guia.
 public record DocumentoImpresionRenglon(
@@ -97,6 +101,9 @@ public static class DocumentoPdfDb
                d.IMPRENTA_RIF, d.IMPRENTA_RAZON_SOCIAL, d.IMPRENTA_PROVIDENCIA, d.ES_PRUEBA,
                COALESCE(nc.IDENTIFICADOR || '-' || LPAD(nc.SECUENCIAL::text, 8, '0'), '') AS NUMERO_CONTROL,
                nc.FECHA_ASIGNACION,
+               nc.EMISOR_ID     AS NC_EMISOR_ID,
+               nc.IDENTIFICADOR AS NC_IDENTIFICADOR,
+               nc.SECUENCIAL    AS NC_SECUENCIAL,
                COALESCE(n.MOTIVO, '')            AS NOTA_MOTIVO,
                COALESCE(n.ORIGEN_NUMERACION, '') AS NOTA_ORIGEN_NUMERACION,
                COALESCE(n.ORIGEN_FECHA_8D, '')   AS NOTA_ORIGEN_FECHA_8D,

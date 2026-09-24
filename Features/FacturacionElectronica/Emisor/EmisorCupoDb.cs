@@ -52,6 +52,56 @@ public static class EmisorCupoDb
         WHERE EMISOR_ID = @emisor_id
         ORDER BY ID DESC;";
 
+    // TM.6. Las cargas en el orden en que se hicieron: es el orden en que se
+    // consumen.
+    public const string SqlCargasEnOrden = @"
+        SELECT CANTIDAD, CONSUMIDO_AL_CARGAR
+        FROM FED.FED_EMISOR_CUPO
+        WHERE EMISOR_ID = @emisor_id
+        ORDER BY ID;";
+
+    // TM.6. Que lugar ocupa un numero de control dentro del cupo que lo cubrio:
+    // "documento N de M". Las cargas se consumen en fila, una detras de otra, a
+    // partir de la base del primer cupo:
+    //
+    //     carga 1 cubre (base,            base + C1]
+    //     carga 2 cubre (base + C1,       base + C1 + C2]  ...
+    //
+    // Si se renueva antes de agotar, lo que quedaba de la carga anterior se usa
+    // primero: esos documentos siguen siendo "16 de 20" y la carga nueva arranca
+    // en 1. Devuelve null si el numero es anterior al primer cupo -no le toco
+    // ninguno- o si el emisor no tiene cupo.
+    //
+    // N cuenta numeros de control, no documentos: una asignacion manual sin
+    // documento (D-16) tambien ocupa un lugar, porque tambien descuenta.
+    public static (long Numero, int Cantidad)? PosicionEnCupo(
+        long consumido, IReadOnlyList<(int Cantidad, long ConsumidoAlCargar)> cargas)
+    {
+        if (cargas.Count == 0)
+        {
+            return null;
+        }
+
+        long inicio = cargas[0].ConsumidoAlCargar;
+
+        foreach (var carga in cargas)
+        {
+            if (consumido <= inicio)
+            {
+                return null;
+            }
+
+            if (consumido <= inicio + carga.Cantidad)
+            {
+                return (consumido - inicio, carga.Cantidad);
+            }
+
+            inicio += carga.Cantidad;
+        }
+
+        return null;
+    }
+
     public static long? Disponible(long? total, long? baseConsumo, long consumidoActual) =>
         total is null || baseConsumo is null ? null : total - (consumidoActual - baseConsumo);
 

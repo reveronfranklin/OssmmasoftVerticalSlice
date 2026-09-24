@@ -115,6 +115,8 @@ public class FacturacionElectronicaDocumentoPdfHandler(ConnectionDB _connectionD
     public static async Task<DocumentoImpresion?> LeerAsync(NpgsqlConnection cn, long documentoId)
     {
         DocumentoImpresionCabecera? cabecera = null;
+        long emisorId = 0;
+        long? consumido = null;
 
         using (var cmd = new NpgsqlCommand(DocumentoPdfDb.SqlDocumentoParaImprimir, cn))
         {
@@ -125,12 +127,48 @@ public class FacturacionElectronicaDocumentoPdfHandler(ConnectionDB _connectionD
             if (await reader.ReadAsync())
             {
                 cabecera = DocumentoPdfDb.MapCabecera(reader);
+
+                // Sin numero de control no hay lugar en el cupo que imprimir.
+                if (!reader.IsDBNull(reader.GetOrdinal("nc_emisor_id")))
+                {
+                    emisorId = reader.SafeGetInt64("nc_emisor_id");
+                    consumido = EmisorCupoDb.Consumido(
+                        reader.SafeGetString("nc_identificador"), reader.SafeGetInt32("nc_secuencial"));
+                }
             }
         }
 
         if (cabecera is null)
         {
             return null;
+        }
+
+        // TM.6. "Documento N de M": que lugar ocupa este numero de control en el
+        // cupo que lo cubrio. Se calcula al imprimir y no se guarda: el documento
+        // es inmutable y las cargas son de solo insercion, asi que el resultado
+        // no puede cambiar despues.
+        if (consumido is not null)
+        {
+            var cargas = new List<(int Cantidad, long ConsumidoAlCargar)>();
+
+            using (var cmd = new NpgsqlCommand(EmisorCupoDb.SqlCargasEnOrden, cn))
+            {
+                cmd.Parameters.AddWithValue("emisor_id", emisorId);
+
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    cargas.Add((reader.SafeGetInt32("cantidad"), reader.SafeGetInt64("consumido_al_cargar")));
+                }
+            }
+
+            var posicion = EmisorCupoDb.PosicionEnCupo(consumido.Value, cargas);
+
+            if (posicion is not null)
+            {
+                cabecera = cabecera with { PosicionCupo = $"Documento {posicion.Value.Numero} de {posicion.Value.Cantidad}" };
+            }
         }
 
         var renglones = new List<DocumentoImpresionRenglon>();

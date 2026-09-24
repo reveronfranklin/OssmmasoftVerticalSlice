@@ -130,6 +130,16 @@ public static class DocumentoPdfPlantilla
 
                     // 7.5 - el total de numeros asignados, "desde ... hasta ...".
                     columna.Item().AlignRight().Text(c.RangoNumerosControl).FontSize(PuntosEmisor);
+
+                    // TM.6, D-54. El lugar del documento en el cupo del emisor.
+                    // No es un numeral del Art. 7: es un dato comercial de la
+                    // imprenta que la norma no pide ni prohibe. Va junto al
+                    // numero de control, que es lo que cuenta, y en PuntosEmisor
+                    // para no quedar nunca por debajo del minimo del Art. 31.
+                    if (c.PosicionCupo.Length > 0)
+                    {
+                        columna.Item().AlignRight().Text(c.PosicionCupo).FontSize(PuntosEmisor);
+                    }
                 }
 
                 // 7.6 - fecha en ocho digitos y hora con a.m./p.m. Llega
