@@ -11,6 +11,12 @@ namespace OssmmasoftVerticalSlice.Features.FacturacionElectronica;
 // produce un codigo que ningun telefono lee sin que nada lo avise.
 public static class CodigoQr
 {
+    // Lado del QR en el papel, en puntos: 64 pt = 2,26 cm. La pauta habitual
+    // para un QR impreso es de 2 cm para arriba. A 52 pt (1,83 cm) la lectura
+    // quedo en el limite: la verificacion de TM.8 lo leyo a 150 y 300 dpi pero
+    // no a 200, que es lo que le pasa a una camara segun la distancia.
+    public const float LadoPuntos = 64f;
+
     // Nivel M: tolera ~15 % de dano. Alcanza para papel impreso y deja el
     // codigo mas chico que Q o H con una URL de este largo.
     public static string Svg(string contenido)

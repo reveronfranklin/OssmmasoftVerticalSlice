@@ -1527,6 +1527,11 @@ POST /api/FacturacionElectronica/documentoPdf
 
 El PDF cumple el **Art. 31**: los datos de la imprenta no bajan de 6 puntos y los del emisor y el numero de control no bajan de 8. No es una cuestion estetica -un incumplimiento tipografico es causal de revocatoria por el Art. 34.1-.
 
+**Dos datos del papel que agrego la Fase M**, sin cambiar la forma de la respuesta:
+
+- **`Documento N de M`** (`TM.6`, `D-54`), debajo del numero de control: el lugar del documento en el cupo del emisor. Solo sale si el emisor tiene cupo y el documento no es anterior al primero.
+- **El QR del enlace de consulta** (`TM.7`, `D-55`), en el pie de cada hoja, con la leyenda `Consulte este documento`. Solo sale si hay secreto del enlace (`settings:FedEnlaceSecreto`) **y** base del portal (`settings:FedPortalUrl`): un QR que no abre nada es peor que no tenerlo. Lo llevan tambien `retencionPdf` y los PDF de `consultaPublica`: es el mismo ejemplar.
+
 ### Response - fallas
 
 | Condicion | Mensaje |

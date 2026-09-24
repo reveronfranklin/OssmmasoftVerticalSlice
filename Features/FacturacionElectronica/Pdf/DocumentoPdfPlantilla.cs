@@ -402,7 +402,7 @@ public static class DocumentoPdfPlantilla
                 fila.ConstantItem(6);
                 fila.ConstantItem(84).Column(qr =>
                 {
-                    qr.Item().AlignCenter().Width(52).Height(52).Svg(CodigoQr.Svg(urlConsulta));
+                    qr.Item().AlignCenter().Width(CodigoQr.LadoPuntos).Height(CodigoQr.LadoPuntos).Svg(CodigoQr.Svg(urlConsulta));
                     qr.Item().AlignCenter().Text("Consulte este documento").FontSize(PuntosImprenta);
                 });
             }
