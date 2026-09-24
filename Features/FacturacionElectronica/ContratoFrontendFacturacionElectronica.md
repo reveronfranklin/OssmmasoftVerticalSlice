@@ -196,6 +196,18 @@ POST /api/FacturacionElectronica/getById
 `data` trae un emisor. Si no existe, `isValid = false` con
 `No se encontró el emisor solicitado.`
 
+### Construido y sin consumidor
+
+**Ninguna pantalla lo llama.** La constante `EMISOR_GET_BY_ID` esta declarada en
+`constants/api-paths.ts` y no la importa ningun servicio: la pantalla de emisores resuelve
+todo con `GetAll`, porque su grilla ya trae el emisor completo y el formulario de edicion
+lo recibe del estado, no de una segunda consulta.
+
+**Se deja igual, y no es un olvido.** Es una lectura por clave primaria, de las mas baratas
+que hay, y la primera pantalla que necesite un emisor sin haber listado antes -un enlace
+directo, un detalle abierto desde otro modulo- lo va a pedir. Borrarlo para volver a
+escribirlo despues no mejora nada.
+
 ## create
 
 ```http
@@ -520,6 +532,25 @@ Tres campos necesitan explicacion:
   lecturas y se guardan las dos: ver `D-15`.
 - **`estadoConciliacion` en `sin_documento` es valido**, no un pendiente que alguien olvido.
   Asignar un numero antes de que exista el documento es lo que la norma prevee (`D-16`).
+
+### Construido, probado, y sin ninguna pantalla que lo muestre
+
+**Este endpoint no tiene consumidor.** La constante `REGISTRO_ART32_GET_ALL` esta declarada
+en `constants/api-paths.ts` y ningun servicio la importa. En todo `src/fed` la unica mencion
+al Articulo 32 es un texto de ayuda en la pantalla de numeros de control.
+
+**Importa mas que el otro huerfano**, y conviene tenerlo presente: esto es el **registro
+automatizado que el Art. 29.7 obliga a remitirle al SENIAT**, con los siete numerales del
+Art. 32. Hoy existe, esta probado, lo consume el ciclo del reporte mensual del lado del
+backend, y **la unica forma de mirarlo con los ojos es consultando la base de datos**.
+
+**No se construye pantalla en esta fase, a proposito.** Una vista del registro es la
+superficie que el SENIAT va a querer ver, y el Art. 32.7 -«cualquier otra informacion que
+requiera»- deja abierto que pida columnas que hoy no estan. Disenarla antes de saber que
+pide es disenarla dos veces. Queda como fase propia.
+
+Mientras tanto, quien necesite leer el registro tiene dos caminos: este endpoint, que
+funciona, o el rol `fed_auditor` de solo lectura sobre la vista `FED_V_REGISTRO_ART32`.
 
 ## reporteMensualGetAll
 
@@ -1353,6 +1384,292 @@ El mensaje cita el numeral. Los rechazos verificados: sin motivo del traslado
 lleva prefijo-, sin RIF del receptor (10.5), sin nombre del receptor (10.5), sin
 bienes (10.4), sin medida (10.4), medida que la norma no nombra (10.4), medida
 sin valor (10.4), medida sin unidad (10.4) y bien sin descripcion (10.4).
+
+---
+
+# Fase 7 - Representacion grafica y entrega (Arts. 12, 18.9, 18.10 y 31)
+
+## Lo PRIMERO que hay que entender antes de integrarlo
+
+**Son dos obligaciones distintas, no una.** El Art. 18.9 obliga a **entregar** el documento al adquiriente. El Art. 18.10 obliga a que ese adquiriente **pueda consultarlo** despues, sin depender de haber guardado el correo. Por eso hay dos endpoints y no uno: `documentoEnviar` cumple el 18.9 y `consultaPublica` cumple el 18.10.
+
+**`consultaPublica` es el unico endpoint anonimo del modulo.** No lleva `[Authorize]`. Quien consulta es el receptor del documento, que no tiene cuenta en el ERP y no deberia necesitarla. Lo que lo protege no es una sesion sino la firma del codigo.
+
+**El codigo del enlace se firma con HMAC.** `enlacePublico` lo arma -y va autenticado, porque armarlo es una accion del emisor-; `consultaPublica` lo verifica. Si el secreto `settings:FedEnlaceSecreto` esta vacio, **las dos rutas se apagan** en vez de emitir codigos que cualquiera pueda reproducir.
+
+**Un fallo de consulta nunca dice por que.** Codigo mal formado, firma invalida y documento inexistente devuelven **el mismo mensaje**. Distinguirlos permitiria sondear que documentos existen.
+
+**El PDF viaja en base64 dentro del `ResultDto`, no como `application/pdf`.** Asi el frontend lo pasa al visor compartido del ERP sin forzar una descarga, que es lo que pide `ALC-3`.
+
+---
+
+## documentoPdf
+
+```http
+POST /api/FacturacionElectronica/documentoPdf
+```
+
+### Request
+
+```json
+{ "documentoId": 174 }
+```
+
+| Campo | Obligatorio | Nota |
+|---|---|---|
+| `documentoId` | **si** | Debe ser mayor que cero |
+
+### Response - exito
+
+```json
+{
+  "data": {
+    "documentoId": 174,
+    "denominacion": "FACTURA",
+    "numeracionConSerie": "1",
+    "numeroControl": "00-00000003",
+    "nombreArchivo": "FACTURA_1.pdf",
+    "contenidoBase64": "JVBERi0xLjQK...",
+    "esPrueba": true
+  },
+  "isValid": true,
+  "message": "suscces"
+}
+```
+
+`contenidoBase64` es el PDF completo. `esPrueba` en `true` significa que el documento **no tiene validez fiscal**: faltan los datos de la imprenta del Art. 7.14, y el propio PDF lo dice impreso.
+
+El PDF cumple el **Art. 31**: los datos de la imprenta no bajan de 6 puntos y los del emisor y el numero de control no bajan de 8. No es una cuestion estetica -un incumplimiento tipografico es causal de revocatoria por el Art. 34.1-.
+
+### Response - fallas
+
+| Condicion | Mensaje |
+|---|---|
+| `documentoId` en cero o negativo | `Falta el identificador del documento.` |
+| El documento no existe | `No existe un documento con el identificador {id}.` |
+| No se pudo abrir la conexion | `Error técnico al abrir conexión FED: {detalle}` |
+| Fallo al dibujar el PDF | `Error técnico al generar el PDF: {detalle}` |
+
+`nombreArchivo` se arma como `{denominacion con espacios en guion bajo}_{numeracion}.pdf`. **El PDF no se guarda en ninguna parte**: se genera a demanda desde el documento persistido, que es inmutable. Guardarlo crearia una copia que puede divergir, y el Art. 21.2 castiga tener mas de un ejemplar del mismo documento.
+
+---
+
+## retencionPdf
+
+```http
+POST /api/FacturacionElectronica/retencionPdf
+```
+
+Mismo contrato que `documentoPdf`, con otra clave en el request y otra plantilla del lado del backend.
+
+### Request
+
+```json
+{ "retencionId": 96 }
+```
+
+### Response - exito
+
+El **mismo** `DocumentoPdfResponse` que `documentoPdf`. `numeroControl` viene **vacio**, y no es un olvido: el Art. 11 no remite a los numerales 4 y 5 del Art. 7, asi que el comprobante de retencion no lleva numero de control.
+
+### Response - fallas
+
+| Condicion | Mensaje |
+|---|---|
+| `retencionId` en cero o negativo | `Falta el identificador del comprobante.` |
+| El comprobante no existe | `No existe un comprobante de retención con el identificador {id}.` |
+| No se pudo abrir la conexion | `Error técnico al abrir conexión FED: {detalle}` |
+| Fallo al dibujar el PDF | `Error técnico al generar el PDF: {detalle}` |
+
+`denominacion` viene con el literal `COMPROBANTE DE RETENCIÓN` y `nombreArchivo` como `COMPROBANTE_RETENCION_{numeracion}.pdf`.
+
+**Por que son dos rutas y no una con un parametro.** El comprobante de retencion no es un `FED_DOCUMENTO`: tiene su propia tabla y su propia plantilla. Un solo endpoint que aceptara «el id de un documento o el de un comprobante» seria un parametro que significa dos cosas distintas.
+
+---
+
+## documentoEnviar
+
+```http
+POST /api/FacturacionElectronica/documentoEnviar
+```
+
+Encola el envio del documento al receptor por correo, con el enlace de consulta publica en el cuerpo. **Encola: no entrega.** La entrega depende de `EmailQueueWorker`, que hoy arranca desactivado por configuracion -ver `INS-7`-.
+
+### Request
+
+```json
+{
+  "id": 174,
+  "correoDestino": "cliente@ejemplo.com",
+  "tipo": "d",
+  "usuarioIns": "avanessa"
+}
+```
+
+| Campo | Obligatorio | Nota |
+|---|---|---|
+| `id` | **si** | Del documento o del comprobante, segun `tipo` |
+| `tipo` | no | `d` documento, `r` retencion. Vacio es `d` |
+| `correoDestino` | **condicional** | Ver abajo |
+| `usuarioIns` | no | Queda en la bitacora del Art. 18.2 |
+
+**Cuando `correoDestino` va vacio, el backend usa el que ya conoce.** Para un comprobante de retencion eso siempre funciona: el Art. 11.4 obliga a guardar el correo del proveedor. Para una factura **no**: el Art. 7.7 no pide el correo del adquiriente y la tabla no lo tiene, asi que hay que indicarlo.
+
+### Response - exito
+
+```json
+{
+  "data": {
+    "emailId": 4821,
+    "correoDestino": "cliente@ejemplo.com",
+    "denominacion": "FACTURA",
+    "numeracion": "1",
+    "url": "http://localhost:3000/fed/consulta?c=d174.rVajKIpriGCcXjFOzLVJPf",
+    "esPrueba": true
+  },
+  "isValid": true,
+  "message": "suscces"
+}
+```
+
+`emailId` es la fila de la cola de correo del ERP, no un identificador de FED.
+
+### Response - fallas
+
+| Condicion | Mensaje |
+|---|---|
+| `id` en cero o negativo | `Falta el identificador del documento.` |
+| Secreto del enlace sin configurar | `No se puede enviar: falta configurar el secreto del enlace de consulta pública.` |
+| Sin correo indicado y sin correo conocido | `Falta el correo del destinatario: este documento no tiene uno registrado.` |
+| Correo mal formado | `El correo «xxx» no tiene un formato válido.` |
+| El documento no existe | `No existe el documento con el identificador {id}.` |
+| No se pudo abrir la conexion | `Error técnico al abrir conexión FED: {detalle}` |
+| Fallo al encolar | `No se pudo encolar el correo: {detalle}` |
+
+### Response - exito degradado
+
+**`isValid` puede ser `true` con un `message` distinto de `suscces`.** La cola de correo vive en Oracle y el documento en PostgreSQL, asi que no hay transaccion que los abarque: primero se encola, despues se asienta en bitacora. Si el asiento falla, el correo **ya salio**, y la respuesta lo dice concatenando al mensaje:
+
+```
+suscces El correo quedó encolado, pero NO se pudo registrar en la bitácora: {detalle}
+```
+
+Devolver 500 seria lo peor de los dos mundos: invita a reintentar y a mandar el documento dos veces.
+
+**No comparar `message` por igualdad con `suscces`.** Mirar `isValid`.
+
+---
+
+## enlacePublico
+
+```http
+POST /api/FacturacionElectronica/enlacePublico
+```
+
+Arma el codigo firmado y su URL, para copiarlo y entregarlo por otra via. **Va autenticado**: armar el enlace es una accion del emisor, usarlo es una accion del receptor.
+
+### Request
+
+```json
+{ "id": 174, "tipo": "d" }
+```
+
+| Campo | Obligatorio | Nota |
+|---|---|---|
+| `id` | **si** | Del documento o del comprobante |
+| `tipo` | no | `d` documento, `r` retencion. Cualquier otro valor se trata como `d` |
+
+### Response - exito
+
+```json
+{
+  "data": {
+    "codigo": "d174.rVajKIpriGCcXjFOzLVJPf",
+    "url": "http://localhost:3000/fed/consulta?c=d174.rVajKIpriGCcXjFOzLVJPf",
+    "habilitado": true
+  },
+  "isValid": true,
+  "message": "suscces"
+}
+```
+
+El `codigo` es `tipo` + `id` + `.` + la firma HMAC truncada. Si no hay portal configurado en `settings:FedPortalUrl`, `url` trae solo el codigo: el correo dira como usarlo en vez de mentir con un enlace que no lleva a ninguna parte.
+
+### Response - la consulta publica esta apagada
+
+```json
+{
+  "data": { "codigo": "", "url": "", "habilitado": false },
+  "isValid": false,
+  "message": "La consulta pública no está habilitada: falta configurar el secreto del enlace."
+}
+```
+
+`habilitado: false` es la senal para que la pantalla oculte la accion en vez de ofrecer un enlace que no va a funcionar.
+
+Es el **unico de los cinco que devuelve `data` no nula en una falla**, asi que se puede leer `habilitado` o `isValid`, indistintamente.
+
+**No valida que `id` sea mayor que cero.** La logica vive en el controlador, sin handler: con `id: 0` devuelve un codigo firmado igual, que despues `consultaPublica` rechazara por documento inexistente.
+
+**El codigo se deriva, no se guarda.** Funciona retroactivamente para documentos ya emitidos, sin migracion. Lo que se pierde: **un codigo derivado no se revoca uno por uno**. Rotar el secreto los invalida todos.
+
+---
+
+## consultaPublica
+
+```http
+POST /api/FacturacionElectronica/consultaPublica
+```
+
+**El unico endpoint del modulo SIN `[Authorize]`.** Lo consume `/fed/consulta`, la unica pagina del ERP que no exige cuenta.
+
+### Request
+
+```json
+{ "codigo": "d174.rVajKIpriGCcXjFOzLVJPf" }
+```
+
+### Response - exito
+
+```json
+{
+  "data": {
+    "denominacion": "FACTURA",
+    "numeracion": "1",
+    "numeroControl": "00-00000003",
+    "fechaEmision8d": "17092026",
+    "horaEmision": "01.22.47 a.m.",
+    "emisorRif": "J-40123456-7",
+    "emisorRazonSocial": "Ferretería El Tornillo Feliz, C.A.",
+    "receptorRif": "J-30555444-1",
+    "receptorNombre": "Constructora Los Andes, C.A.",
+    "totalGeneral": 92.80,
+    "moneda": "VES",
+    "esPrueba": true,
+    "nombreArchivo": "FACTURA_1.pdf",
+    "contenidoBase64": "JVBERi0xLjQK..."
+  },
+  "isValid": true,
+  "message": "suscces"
+}
+```
+
+**Devuelve lo que el documento ya muestra impreso, y nada mas.** Ningun identificador interno: ni el `id`, ni el `emisorId`, ni la clave de idempotencia. Quien consulta es un tercero.
+
+### Response - fallas
+
+| Condicion | Mensaje |
+|---|---|
+| Codigo mal formado, firma invalida, o documento inexistente | `El documento no está disponible. Verifique el enlace que recibió.` |
+| Secreto del enlace sin configurar | `La consulta pública no está habilitada en este ambiente.` |
+
+**Cinco condiciones distintas comparten el mismo mensaje a proposito**: firma invalida, codigo mal formado, documento inexistente, comprobante inexistente y fallo tecnico. Si respondieran distinto, cualquiera podria sondear que documentos existen cambiando el identificador. Es la misma razon por la que un login no dice si el usuario existe.
+
+**Consecuencia para la pantalla:** no se puede distinguir «enlace roto» de «documento borrado» de «error del servidor». Los tres son el mismo texto, y no hay mas informacion que ofrecer al usuario.
+
+A diferencia del resto del modulo, **el detalle de la excepcion nunca llega al llamador**: queda en el log del servidor.
+
+**Cuando el codigo es de una retencion, los campos se remapean:** `emisorRif` y `emisorRazonSocial` traen los del agente, `receptorRif` y `receptorNombre` los del proveedor, `totalGeneral` trae el total retenido, `moneda` viene con `VES` y `numeroControl` vacio.
 
 ---
 
