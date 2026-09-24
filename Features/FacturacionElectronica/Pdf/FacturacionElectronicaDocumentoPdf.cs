@@ -55,7 +55,8 @@ public record DocumentoPdfResponse(
     string ContenidoBase64,
     bool EsPrueba);
 
-public class FacturacionElectronicaDocumentoPdfHandler(ConnectionDB _connectionDB, IWebHostEnvironment _environment)
+public class FacturacionElectronicaDocumentoPdfHandler(
+    ConnectionDB _connectionDB, IWebHostEnvironment _environment, IConfiguration _config)
 {
     public async Task<ResultDto<DocumentoPdfResponse>> HandleAsync(DocumentoPdfQuery query)
     {
@@ -85,7 +86,11 @@ public class FacturacionElectronicaDocumentoPdfHandler(ConnectionDB _connectionD
             }
 
             var c = documento.Cabecera;
-            byte[] pdf = DocumentoPdfPlantilla.Generar(documento, LogoImprenta.Leer(_environment));
+
+            // TM.7: el QR del enlace de consulta, solo si la consulta esta encendida.
+            byte[] pdf = DocumentoPdfPlantilla.Generar(
+                documento, LogoImprenta.Leer(_environment),
+                EnlacePublico.UrlParaQr(_config, EnlacePublico.TipoDocumento, c.Id));
 
             // El nombre del archivo lleva la denominacion y el numero de control,
             // que es como se identifica el papel cuando ya salio del sistema.
@@ -212,7 +217,8 @@ public class FacturacionElectronicaDocumentoPdfHandler(ConnectionDB _connectionD
 // comprobante" seria un parametro que significa dos cosas distintas.
 public record RetencionPdfQuery(long RetencionId);
 
-public class FacturacionElectronicaRetencionPdfHandler(ConnectionDB _connectionDB, IWebHostEnvironment _environment)
+public class FacturacionElectronicaRetencionPdfHandler(
+    ConnectionDB _connectionDB, IWebHostEnvironment _environment, IConfiguration _config)
 {
     public async Task<ResultDto<DocumentoPdfResponse>> HandleAsync(RetencionPdfQuery query)
     {
@@ -268,7 +274,8 @@ public class FacturacionElectronicaRetencionPdfHandler(ConnectionDB _connectionD
             }
 
             byte[] pdf = RetencionPdfPlantilla.Generar(
-                new RetencionImpresion(cabecera, detalle), LogoImprenta.Leer(_environment));
+                new RetencionImpresion(cabecera, detalle), LogoImprenta.Leer(_environment),
+                EnlacePublico.UrlParaQr(_config, EnlacePublico.TipoRetencion, cabecera.Id));
 
             return new ResultDto<DocumentoPdfResponse>(new DocumentoPdfResponse(
                 cabecera.Id,
@@ -300,13 +307,13 @@ public class FacturacionElectronicaRetencionPdfHandler(ConnectionDB _connectionD
 [Authorize]
 [Route("api/FacturacionElectronica")]
 public class FacturacionElectronicaDocumentoPdfController(
-    ConnectionDB _connectionDB, IWebHostEnvironment _environment) : ControllerBase
+    ConnectionDB _connectionDB, IWebHostEnvironment _environment, IConfiguration _config) : ControllerBase
 {
     [HttpPost]
     [Route("documentoPdf")]
     public async Task<IActionResult> DocumentoPdf(DocumentoPdfQuery value)
     {
-        var handler = new FacturacionElectronicaDocumentoPdfHandler(_connectionDB, _environment);
+        var handler = new FacturacionElectronicaDocumentoPdfHandler(_connectionDB, _environment, _config);
         var result = await handler.HandleAsync(value);
 
         return Ok(result);
@@ -316,7 +323,7 @@ public class FacturacionElectronicaDocumentoPdfController(
     [Route("retencionPdf")]
     public async Task<IActionResult> RetencionPdf(RetencionPdfQuery value)
     {
-        var handler = new FacturacionElectronicaRetencionPdfHandler(_connectionDB, _environment);
+        var handler = new FacturacionElectronicaRetencionPdfHandler(_connectionDB, _environment, _config);
         var result = await handler.HandleAsync(value);
 
         return Ok(result);

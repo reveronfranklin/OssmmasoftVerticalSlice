@@ -91,9 +91,14 @@ public class FacturacionElectronicaConsultaPublicaHandler(
         {
             byte[]? logo = LogoImprenta.Leer(_environment);
 
+            // TM.7: el papel que se consulta lleva el mismo QR que el que se
+            // imprimio. Es el mismo documento, y el Art. 21.2 no admite dos
+            // versiones distintas de un ejemplar.
+            string? urlConsulta = EnlacePublico.UrlParaQr(_config, tipo, id);
+
             return tipo == EnlacePublico.TipoRetencion
-                ? await ComprobanteAsync(cn, id, logo)
-                : await DocumentoAsync(cn, id, logo);
+                ? await ComprobanteAsync(cn, id, logo, urlConsulta)
+                : await DocumentoAsync(cn, id, logo, urlConsulta);
         }
         catch (Exception ex)
         {
@@ -104,7 +109,7 @@ public class FacturacionElectronicaConsultaPublicaHandler(
     }
 
     private static async Task<ResultDto<ConsultaPublicaResponse>> DocumentoAsync(
-        NpgsqlConnection cn, long id, byte[]? logo)
+        NpgsqlConnection cn, long id, byte[]? logo, string? urlConsulta)
     {
         var documento = await FacturacionElectronicaDocumentoPdfHandler.LeerAsync(cn, id);
 
@@ -114,7 +119,7 @@ public class FacturacionElectronicaConsultaPublicaHandler(
         }
 
         var c = documento.Cabecera;
-        byte[] pdf = DocumentoPdfPlantilla.Generar(documento, logo);
+        byte[] pdf = DocumentoPdfPlantilla.Generar(documento, logo, urlConsulta);
 
         return Exito(new ConsultaPublicaResponse(
             c.Denominacion,
@@ -134,7 +139,7 @@ public class FacturacionElectronicaConsultaPublicaHandler(
     }
 
     private static async Task<ResultDto<ConsultaPublicaResponse>> ComprobanteAsync(
-        NpgsqlConnection cn, long id, byte[]? logo)
+        NpgsqlConnection cn, long id, byte[]? logo, string? urlConsulta)
     {
         RetencionImpresionCabecera? cabecera = null;
 
@@ -169,7 +174,7 @@ public class FacturacionElectronicaConsultaPublicaHandler(
             }
         }
 
-        byte[] pdf = RetencionPdfPlantilla.Generar(new RetencionImpresion(cabecera, detalle), logo);
+        byte[] pdf = RetencionPdfPlantilla.Generar(new RetencionImpresion(cabecera, detalle), logo, urlConsulta);
 
         return Exito(new ConsultaPublicaResponse(
             "COMPROBANTE DE RETENCIÓN",

@@ -48,7 +48,7 @@ public static class DocumentoPdfPlantilla
     // del disco. Nulo cuando el archivo no esta, y el papel sale igual de valido:
     // el Art. 7.14 pide razon social, RIF y providencia de la imprenta, no su
     // logo.
-    public static byte[] Generar(DocumentoImpresion documento, byte[]? logoImprenta = null)
+    public static byte[] Generar(DocumentoImpresion documento, byte[]? logoImprenta = null, string? urlConsulta = null)
     {
         QuestPDF.Settings.License = LicenseType.Community;
 
@@ -90,7 +90,7 @@ public static class DocumentoPdfPlantilla
                     columna.Item().PaddingTop(12).Element(e => Leyendas(e, c, esGuia));
                 });
 
-                page.Footer().Element(e => PieImprenta(e, c, logoImprenta));
+                page.Footer().Element(e => PieImprenta(e, c, logoImprenta, urlConsulta));
             });
         }).GeneratePdf();
     }
@@ -369,7 +369,7 @@ public static class DocumentoPdfPlantilla
     // 7.2 y 7.3-, y estampar ahi el logo de Ossmmasoft haria parecer que el
     // documento lo emite la imprenta. El Art. 7.14 le da a la imprenta su lugar,
     // que es este, y el Art. 31 le da su tamano, que es el mas chico del papel.
-    private static void PieImprenta(IContainer container, DocumentoImpresionCabecera c, byte[]? logo)
+    private static void PieImprenta(IContainer container, DocumentoImpresionCabecera c, byte[]? logo, string? urlConsulta)
     {
         container.BorderTop(0.5f).PaddingTop(4).Row(fila =>
         {
@@ -393,6 +393,19 @@ public static class DocumentoPdfPlantilla
                         .FontSize(PuntosImprenta);
                 }
             });
+
+            // TM.7, D-55. El QR del enlace de consulta (Art. 18.10), a la
+            // derecha del pie para que salga en cada hoja. Solo si la consulta
+            // publica esta encendida y hay portal: ver EnlacePublico.UrlParaQr.
+            if (urlConsulta is not null)
+            {
+                fila.ConstantItem(6);
+                fila.ConstantItem(84).Column(qr =>
+                {
+                    qr.Item().AlignCenter().Width(52).Height(52).Svg(CodigoQr.Svg(urlConsulta));
+                    qr.Item().AlignCenter().Text("Consulte este documento").FontSize(PuntosImprenta);
+                });
+            }
         });
     }
 

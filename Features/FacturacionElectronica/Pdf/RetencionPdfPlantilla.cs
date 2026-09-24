@@ -138,7 +138,7 @@ public static class RetencionPdfPlantilla
         reader.SafeGetDecimal("monto_retenido"),
         reader.SafeGetDecimal("porcentaje"));
 
-    public static byte[] Generar(RetencionImpresion comprobante, byte[]? logoImprenta = null)
+    public static byte[] Generar(RetencionImpresion comprobante, byte[]? logoImprenta = null, string? urlConsulta = null)
     {
         QuestPDF.Settings.License = LicenseType.Community;
 
@@ -162,7 +162,7 @@ public static class RetencionPdfPlantilla
                     columna.Item().PaddingTop(12).Element(e => Leyendas(e, c));
                 });
 
-                page.Footer().Element(e => PieImprenta(e, c, logoImprenta));
+                page.Footer().Element(e => PieImprenta(e, c, logoImprenta, urlConsulta));
             });
         }).GeneratePdf();
     }
@@ -329,7 +329,7 @@ public static class RetencionPdfPlantilla
     }
 
     // 11.9 - los datos de la imprenta digital autorizada. Art. 31: minimo 6 pt.
-    private static void PieImprenta(IContainer container, RetencionImpresionCabecera c, byte[]? logo)
+    private static void PieImprenta(IContainer container, RetencionImpresionCabecera c, byte[]? logo, string? urlConsulta)
     {
         container.BorderTop(0.5f).PaddingTop(4).Row(fila =>
         {
@@ -353,6 +353,19 @@ public static class RetencionPdfPlantilla
                         .FontSize(PuntosImprenta);
                 }
             });
+
+            // TM.7, D-55. El QR del enlace de consulta (Art. 18.10), a la
+            // derecha del pie para que salga en cada hoja. Solo si la consulta
+            // publica esta encendida y hay portal: ver EnlacePublico.UrlParaQr.
+            if (urlConsulta is not null)
+            {
+                fila.ConstantItem(6);
+                fila.ConstantItem(84).Column(qr =>
+                {
+                    qr.Item().AlignCenter().Width(52).Height(52).Svg(CodigoQr.Svg(urlConsulta));
+                    qr.Item().AlignCenter().Text("Consulte este documento").FontSize(PuntosImprenta);
+                });
+            }
         });
     }
 

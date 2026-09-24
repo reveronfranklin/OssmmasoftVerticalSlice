@@ -66,6 +66,20 @@ public static class EnlacePublico
         return baseUrl.Length > 0 ? $"{baseUrl}/fed/consulta?c={codigo}" : codigo;
     }
 
+    // TM.7. La URL para el QR, o null si no hay que dibujarlo. Un QR que abre
+    // nada es peor que no tenerlo: se exige el secreto -sin el la consulta esta
+    // apagada- Y la base del portal -sin ella Url() devuelve solo el codigo, que
+    // un telefono no sabe abrir-.
+    public static string? UrlParaQr(IConfiguration config, string tipo, long id)
+    {
+        if (!Configurado(config) || string.IsNullOrWhiteSpace(config[ClaveBaseUrl]))
+        {
+            return null;
+        }
+
+        return Url(config, tipo, id);
+    }
+
     // Devuelve el tipo y el id solo si la firma es valida. Cualquier codigo mal
     // formado, con firma incorrecta o de un secreto viejo cae en false, y quien
     // llama responde lo mismo que ante un documento inexistente: no se distingue
