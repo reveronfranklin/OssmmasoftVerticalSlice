@@ -19,6 +19,8 @@ Content-Type: application/json
 
 Todos los endpoints usan `POST` y devuelven el wrapper `ResultDto`.
 
+**Toda fecha y hora que devuelve el modulo esta en hora legal de Venezuela (UTC-4)**, ya formateada, sin importar la zona del servidor. Hasta el 2026-09-24 las que venian de columnas `timestamptz` salian en UTC -cuatro horas de mas, y el dia siguiente despues de las 8:00 p.m.-; lo corrige `FacturaFormato.HoraVenezuela`, y del lado de la base `Sql/25_fed_zona_horaria.sql`.
+
 El frontend no debe enviar `codigoEmpresa`. El backend toma la empresa desde
 `settings:EmpresaConfig`. El endpoint de esta fase no usa empresa.
 

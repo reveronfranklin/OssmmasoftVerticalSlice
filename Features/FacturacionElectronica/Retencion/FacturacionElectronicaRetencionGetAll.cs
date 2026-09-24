@@ -87,7 +87,7 @@ public class FacturacionElectronicaRetencionGetAllHandler(ConnectionDB _connecti
                         reader.SafeGetString("numeracion"),
                         periodo,
                         RetencionDb.FormatearPeriodo(periodo),
-                        emitidoEn.ToString("dd/MM/yyyy HH:mm"),
+                        FacturaFormato.HoraVenezuela(emitidoEn).ToString("dd/MM/yyyy HH:mm"),
                         FacturaFormato.FechaOchoDigitos(emitidoEn),
                         reader.SafeGetString("agente_rif"),
                         reader.SafeGetString("agente_razon_social"),

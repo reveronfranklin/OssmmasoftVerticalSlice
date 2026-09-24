@@ -74,7 +74,7 @@ public class FacturacionElectronicaEmisorCupoGetAllHandler(ConnectionDB _connect
                         reader.SafeGetInt64("id"),
                         reader.SafeGetInt32("cantidad"),
                         reader.SafeGetString("usuario_ins"),
-                        reader.GetDateTime(reader.GetOrdinal("fecha_ins")).ToString("dd/MM/yyyy HH:mm")));
+                        FacturaFormato.HoraVenezuela(reader.GetDateTime(reader.GetOrdinal("fecha_ins"))).ToString("dd/MM/yyyy HH:mm")));
                 }
             }
 

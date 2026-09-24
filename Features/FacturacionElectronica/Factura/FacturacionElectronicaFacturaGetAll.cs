@@ -101,7 +101,7 @@ public class FacturacionElectronicaFacturaGetAllHandler(ConnectionDB _connection
                         numeracion,
                         FacturaFormato.NumeracionConSerie(serie, numeracion),
                         reader.SafeGetString("numero_control"),
-                        emitidoEn.ToString("dd/MM/yyyy HH:mm"),
+                        FacturaFormato.HoraVenezuela(emitidoEn).ToString("dd/MM/yyyy HH:mm"),
                         FacturaFormato.FechaOchoDigitos(emitidoEn),
                         FacturaFormato.HoraConMeridiano(emitidoEn),
                         reader.SafeGetString("emisor_rif"),

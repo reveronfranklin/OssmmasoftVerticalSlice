@@ -172,7 +172,7 @@ public class FacturacionElectronicaNumeroControlAsignarHandler(ConnectionDB _con
                 FacturacionElectronicaDb.FormatearNumeroControl(identificador, secuencial),
                 FacturacionElectronicaDb.FormatearNumeroControlTexto(identificador, secuencial),
                 tipoDocumento,
-                fechaAsignacion.ToString("dd/MM/yyyy HH:mm:ss"),
+                FacturaFormato.HoraVenezuela(fechaAsignacion).ToString("dd/MM/yyyy HH:mm:ss"),
                 YaExistia: false));
         }
         catch (NpgsqlException ex) when (FacturacionElectronicaDb.EsClaveDuplicada(ex)

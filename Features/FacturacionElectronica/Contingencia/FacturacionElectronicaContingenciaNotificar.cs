@@ -112,7 +112,7 @@ public class FacturacionElectronicaContingenciaNotificarHandler(ConnectionDB _co
                 id, command.EmisorId, numeracion,
                 FacturaFormato.FechaOchoDigitos(command.FechaEmisionFisica),
                 escenario,
-                notificadoEn.ToString("dd/MM/yyyy HH:mm"),
+                FacturaFormato.HoraVenezuela(notificadoEn).ToString("dd/MM/yyyy HH:mm"),
                 string.Empty, 0, string.Empty, Conciliado: false));
         }
         catch (NpgsqlException ex) when (FacturacionElectronicaDb.EsClaveDuplicada(ex)

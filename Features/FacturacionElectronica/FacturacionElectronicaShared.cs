@@ -600,8 +600,10 @@ public static class FacturacionElectronicaDb
         return valor switch
         {
             DateOnly fecha       => fecha.ToDateTime(TimeOnly.MinValue).ToString(formato),
-            DateTime fechaHora   => fechaHora.ToString(formato),
-            DateTimeOffset fecha => fecha.LocalDateTime.ToString(formato),
+            // Un timestamptz llega en UTC: sin convertir, las grillas mostraban
+            // la hora con 4 horas de mas. Ver FacturaFormato.HoraVenezuela.
+            DateTime fechaHora   => FacturaFormato.HoraVenezuela(fechaHora).ToString(formato),
+            DateTimeOffset fecha => FacturaFormato.HoraVenezuela(fecha.UtcDateTime).ToString(formato),
             _                    => Convert.ToDateTime(valor).ToString(formato)
         };
     }

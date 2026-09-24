@@ -19,11 +19,51 @@ public static class FacturaFormato
     // el resultado tiene que ser el mismo.
     private static readonly CultureInfo Invariante = CultureInfo.InvariantCulture;
 
+    // La hora legal de Venezuela, que es la que tiene que decir el papel (7.6 y
+    // 7.15). Npgsql entrega los timestamptz como DateTime en UTC: formatearlos
+    // tal cual imprimia la hora con 4 horas de mas, y todo documento emitido
+    // despues de las 8:00 p.m. salia con la fecha del dia siguiente.
+    //
+    // Se busca por su nombre IANA, despues por el de Windows, y si el sistema no
+    // tiene ninguno se usa UTC-4 fijo: Venezuela no tiene horario de verano desde
+    // 2016. No depende de la zona del servidor, que en produccion puede ser UTC.
+    private static readonly TimeZoneInfo ZonaVenezuela = BuscarZonaVenezuela();
+
+    private static TimeZoneInfo BuscarZonaVenezuela()
+    {
+        foreach (string id in new[] { "America/Caracas", "Venezuela Standard Time" })
+        {
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById(id);
+            }
+            catch (TimeZoneNotFoundException)
+            {
+            }
+            catch (InvalidTimeZoneException)
+            {
+            }
+        }
+
+        return TimeZoneInfo.CreateCustomTimeZone("VET", TimeSpan.FromHours(-4), "Venezuela", "Venezuela");
+    }
+
+    // Lleva un instante a la hora de Venezuela. Solo convierte lo que trae zona:
+    // un DateTime Utc -lo que devuelve un timestamptz- o Local. Uno sin zona
+    // (Unspecified) es una fecha de calendario -una columna date, o una fecha que
+    // escribio el usuario- y se deja como esta: convertirla la correria de dia.
+    public static DateTime HoraVenezuela(DateTime fecha) => fecha.Kind switch
+    {
+        DateTimeKind.Utc   => TimeZoneInfo.ConvertTimeFromUtc(fecha, ZonaVenezuela),
+        DateTimeKind.Local => TimeZoneInfo.ConvertTime(fecha, ZonaVenezuela),
+        _                  => fecha
+    };
+
     // Art. 7.6 - fecha de emision "en ocho digitos, formato DDMMAAAA, que pueden
     // ir separados". Se emite sin separadores: ocho digitos es lo unico que la
     // norma exige siempre, y agregarlos es opcional.
     public static string FechaOchoDigitos(DateTime fecha) =>
-        fecha.ToString("ddMMyyyy", Invariante);
+        HoraVenezuela(fecha).ToString("ddMMyyyy", Invariante);
 
     // Art. 7.6 - hora "en formato HH.MM.SS, indicando a.m. o p.m."
     //
@@ -32,8 +72,9 @@ public static class FacturaFormato
     // todo el mundo formatea HH:mm:ss.
     public static string HoraConMeridiano(DateTime fecha)
     {
-        string hora = fecha.ToString("hh.mm.ss", Invariante);
-        string meridiano = fecha.Hour < 12 ? "a.m." : "p.m.";
+        DateTime local = HoraVenezuela(fecha);
+        string hora = local.ToString("hh.mm.ss", Invariante);
+        string meridiano = local.Hour < 12 ? "a.m." : "p.m.";
 
         return $"{hora} {meridiano}";
     }

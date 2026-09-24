@@ -26,7 +26,10 @@ public class FacturacionElectronicaPanelResumenHandler(ConnectionDB _connectionD
 
         if (periodo.Length == 0)
         {
-            periodo = DateTime.Now.ToString("yyyyMM");
+            // El mes en curso en Venezuela, no en la zona del servidor: con un
+            // servidor en UTC, entre las 8:00 p.m. del ultimo dia y la medianoche
+            // el panel ya mostraria el mes siguiente.
+            periodo = FacturaFormato.HoraVenezuela(DateTime.UtcNow).ToString("yyyyMM");
         }
         else if (periodo.Length != 6 || !periodo.All(char.IsDigit))
         {
