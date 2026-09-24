@@ -49,6 +49,15 @@ public class FacturacionElectronicaEmisorCreateHandler(ConnectionDB _connectionD
             return Falla(error);
         }
 
+        // Fase E: el patron del RIF tambien en el backend, no solo en la pantalla.
+        string rif = EmisorValidador.NormalizarRif(command.Rif);
+        string? errorRif = EmisorValidador.ValidarRif(rif);
+
+        if (errorRif is not null)
+        {
+            return Falla(errorRif);
+        }
+
         string tipoContribuyente = string.IsNullOrWhiteSpace(command.TipoContribuyente)
             ? "ordinario"
             : command.TipoContribuyente.Trim();
@@ -89,7 +98,7 @@ public class FacturacionElectronicaEmisorCreateHandler(ConnectionDB _connectionD
 
             using (var cmd = new NpgsqlCommand(FacturacionElectronicaDb.SqlEmisorCreate, cn, tx))
             {
-                cmd.Parameters.AddWithValue("rif", command.Rif.Trim());
+                cmd.Parameters.AddWithValue("rif", rif);
                 cmd.Parameters.AddWithValue("razon_social", command.RazonSocial.Trim());
                 cmd.Parameters.AddWithValue("domicilio_fiscal", command.DomicilioFiscal.Trim());
                 cmd.Parameters.AddWithValue("correo", FacturacionElectronicaDb.DbValue(command.Correo));
@@ -125,7 +134,7 @@ public class FacturacionElectronicaEmisorCreateHandler(ConnectionDB _connectionD
         {
             // La defensa es el UNIQUE de la tabla, no un SELECT previo: entre la
             // consulta y el insert cabe otra peticion.
-            return Falla($"Ya existe un emisor registrado con el RIF {command.Rif.Trim()}.");
+            return Falla($"Ya existe un emisor registrado con el RIF {rif}.");
         }
         catch (Exception ex)
         {

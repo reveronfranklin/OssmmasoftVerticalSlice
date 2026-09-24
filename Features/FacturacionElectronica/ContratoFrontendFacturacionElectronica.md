@@ -150,6 +150,7 @@ proyecto y lo que la tabla del frontend consume directo.
 ## Validaciones de negocio
 
 - RIF, razon social y domicilio fiscal son obligatorios.
+- **El RIF se valida tambien en el servidor** (`EmisorValidador`, Fase E): formato `J-12345678-9`, con la primera letra entre `V`, `E`, `J`, `P` y `G`. Mal formado responde `isValid = false` con `El RIF debe tener el formato J-12345678-9.` Se guarda **en mayusculas**: `j-12345678-9` queda como `J-12345678-9`, y choca con el duplicado si ya existe.
 - **RIF duplicado** responde HTTP 200 con `isValid = false` y el mensaje
   `Ya existe un emisor registrado con el RIF <rif>.` La defensa es la restriccion `UNIQUE` de
   la tabla, no una consulta previa: entre el `SELECT` y el `INSERT` cabe otra peticion.
