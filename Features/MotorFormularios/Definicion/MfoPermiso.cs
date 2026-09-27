@@ -27,10 +27,9 @@ namespace OssmmasoftVerticalSlice.Features.MotorFormularios;
 /// solo presentacion -localStorage lo edita cualquiera- y esta comprobacion es
 /// la que de verdad manda.
 ///
-/// **Alcance:** el superusuario lo es para administrar permisos, no para el
-/// resto del motor. Sigue necesitando <c>LLENAR</c>, <c>VER</c> o lo que
-/// corresponda para operar sobre un formulario cerrado. Lo que siempre puede es
-/// concederselo.
+/// **Alcance:** el superusuario tiene acceso a todas las acciones del motor y
+/// a todos sus reportes, incluso en formularios con permisos restringidos.
+/// La marca se verifica en SIS antes de aplicar las asignaciones individuales.
 ///
 /// **Cuidado con dejar la instalacion sin superusuarios.** Si ninguna fila de
 /// <c>SIS_USUARIOS</c> tiene <c>IS_SUPERUSER = 1</c> -o la columna no existe-,
