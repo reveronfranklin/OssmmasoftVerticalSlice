@@ -401,3 +401,11 @@ Request:
   "numeroPlaca": ""
 }
 ```
+
+### Formato de fechas del filtro BM1
+
+`fechaDesde` y `fechaHasta` se envian como `yyyy-MM-dd`, con el año siempre
+rellenado a cuatro digitos. Por ejemplo, el año 13 se envia como `0013-11-12`,
+no `13-11-12`. Una fecha invalida o fuera de 0001 a 9999 se rechaza en el
+frontend antes de enviar la peticion. No se transforma automaticamente 0013
+en 2013: la fecha inicial procede del minimo de movimientos registrado en BD.
