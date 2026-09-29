@@ -230,6 +230,21 @@ Reglas:
 
 ### `POST /api/BmBienesFotos/GetByNumeroPlaca`
 
+Usar la placa completa `nroPlaca` de BM1. No usar `numeroPlaca` de la vista,
+que puede contener una abreviatura o un rango.
+
+Respuesta: `ResultDto<List<BmBienFotoResponse>>`, sin paginacion. Una consulta
+correcta sin fotos devuelve `isValid: true` y `data: []`. Una placa vacia o un
+error de conexion/ejecucion/mapeo devuelve `isValid: false`, `data: null` y
+`message` con el motivo. Los errores de ejecucion se registran en el log del
+backend con la placa consultada. El frontend muestra el error y permite
+reintentar; no debe interpretarlo como una lista sin fotos.
+
+Si el mensaje indica un procedimiento inexistente o invalido, revisar
+`BM.SP_BM_FOTO_GET_PLACA` en `Sql/01_INSTALL_BM_ENT2.sql` y los permisos de
+`Sql/08_GRANT_BM_RUNTIME.sql`. Si la consulta funciona pero falla el GET de la
+imagen, revisar `settings:BmFiles` y el permiso de lectura de la identidad de IIS.
+
 Request:
 
 ```json

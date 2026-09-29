@@ -23,6 +23,17 @@ Oracle 10g no valida JSON nativamente. El API valida que `jsonMenu` sea un objet
 
 ## Modelo
 
+En crear y modificar, el usuario se selecciona con autocompletado desde
+`POST /api/SisUsuarios/GetAll`, con `pageNumber: 1`, `pageSize: 50`,
+`searchText` y `soloActivos: false`. La busqueda se envia al servidor.
+La seleccion completa `codigoUsuario` (solo lectura) y `usuario` con el
+`login` de SIS, o con `usuario` si el login esta vacio. No se admite texto
+libre como seleccion. Los errores de carga se muestran en el selector.
+El editor JSON, su validacion y la vista previa se conservan.
+
+Este contrato guarda el menu en `SIS.OSS_USUARIO_ROL`; no asigna por si mismo
+roles del catalogo de Seguridad, cuya relacion se guarda en `SIS.OSS_USR_ROL`.
+
 ```json
 {
   "codigoUsuarioRol": 1,

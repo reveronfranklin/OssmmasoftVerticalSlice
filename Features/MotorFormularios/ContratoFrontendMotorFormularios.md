@@ -598,6 +598,13 @@ mirarlo.
 
 ## Autorizacion
 
+La opcion lateral `Reportes` (`/apps/mfo/formularios`) esta disponible para
+todos los usuarios autenticados. El frontend la incorpora al menu recibido de
+`SisUsuarios/GetMenuByUsuario`, incluso si el JSON del usuario no la incluye,
+y evita duplicados por ruta. No requiere asignar el rol REPORTES ni regenerar
+el cache JSON_MENU. La lista de formularios y su ejecucion siguen sujetas a los
+permisos del motor; esta entrada comun no concede permisos adicionales.
+
 `MFO_PERMISO` guarda, por formulario y rol, cuales de estas acciones se permiten:
 `DISENAR`, `LLENAR`, `VER`, `EXPORTAR`, `ANULAR`. El rol es el codigo de
 `SIS.OSS_USUARIO_ROL` y el usuario viaja en `X-Usuario`.
