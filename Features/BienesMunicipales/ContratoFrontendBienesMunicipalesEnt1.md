@@ -49,6 +49,12 @@ Item:
 
 ### `GET api/Bm1/GetFechaPrimerMovimiento`
 
+La salida Oracle `DATE` se lee como `OracleDate.Value`; un valor nulo se devuelve
+como `data: null`. Los errores de consulta devuelven `isValid: false` y `message`
+en el `ResultDto`, sin propagar una excepcion HTTP 500. Esta fecha solo inicializa
+el filtro Desde: la carga de ICP es independiente y permite consultar con las
+fechas seleccionadas manualmente.
+
 Devuelve la primera fecha de movimiento registrada para la empresa configurada.
 
 ### `POST api/Bm1/GetByListIcp`
