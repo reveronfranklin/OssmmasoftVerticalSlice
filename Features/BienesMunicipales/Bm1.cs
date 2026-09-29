@@ -15,16 +15,28 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config, IWe
     [HttpGet("GetListICP")]
     public async Task<IActionResult> GetListIcp()
     {
+        return await ReadListIcpAsync(esConteo: true);
+    }
+
+    [HttpGet("GetListICPInventario")]
+    public async Task<IActionResult> GetListIcpInventario()
+    {
+        return await ReadListIcpAsync(esConteo: false);
+    }
+
+    private async Task<IActionResult> ReadListIcpAsync(bool esConteo)
+    {
         if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
         {
             return Ok(BmDb.InvalidList<BmIcpResponse>(error));
         }
 
-        using var cn = connectionDB.GetBmcConnection();
-        var openError = await BmDb.TryOpenAsync(cn, "BMC");
+        var dominio = esConteo ? "BMC" : "BM";
+        using var cn = esConteo ? connectionDB.GetBmcConnection() : connectionDB.GetBmConnection();
+        var openError = await BmDb.TryOpenAsync(cn, dominio);
         if (openError is not null) return Ok(BmDb.InvalidList<BmIcpResponse>(openError));
 
-        using var cmd = BmDb.StoredProcedure("BMC.SP_BM1_GET_LIST_ICP", cn);
+        using var cmd = BmDb.StoredProcedure($"{dominio}.SP_BM1_GET_LIST_ICP", cn);
         cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
@@ -38,7 +50,7 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config, IWe
         catch (Exception ex)
         {
             return Ok(BmDb.InvalidList<BmIcpResponse>(
-                $"Error tecnico al consultar ICP en BMC: {ex.Message}"));
+                $"Error tecnico al consultar ICP en {dominio}: {ex.Message}"));
         }
     }
 

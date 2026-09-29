@@ -20,6 +20,22 @@ Todas las respuestas backend usan `ResultDto<T>`:
 
 ## BM1
 
+### `GET api/Bm1/GetListICPInventario`
+
+Catalogo para la pantalla BM1. Sin cuerpo ni paginacion. Consulta
+`BM.SP_BM1_GET_LIST_ICP` por `DefaultConnectionBM`, la misma fuente que
+`GetByListIcp`. Empresa tomada de `settings:EmpresaConfig`.
+
+Respuesta: `ResultDto<List<BmIcpResponse>>`; ejemplo:
+
+```json
+{"data":[{"codigoIcp":2283,"unidadTrabajo":"DIRECCION DE ADMINISTRACION"}],"isValid":true,"message":"Success","cantidadRegistros":1,"page":0}
+```
+
+Los errores devuelven `isValid: false`, `data: null` y `message` con el motivo.
+El frontend debe usar los ICP de este catalogo para BM1. El endpoint existente
+`GetListICP` conserva BMC para las pantallas de conteo.
+
 ### `GET api/Bm1/GetListICP`
 
 Devuelve ICP/unidades con bienes vigentes.
