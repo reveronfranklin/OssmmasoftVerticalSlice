@@ -297,16 +297,4 @@ public static class FacturaValidador
 
     private static FacturaValidacion Invalida(string articulo, FacturaFalta falta) =>
         new(false, [falta], articulo);
-
-    // El numeral 7.14 decide si el documento puede ser definitivo. Se expone
-    // aparte porque la respuesta no es "valido o invalido" sino "de prueba o
-    // definitivo", y confundir las dos cosas llevaria a rechazar emisiones que hoy
-    // son perfectamente correctas.
-    //
-    // Este es el unico numeral que hoy NO se puede cumplir, y no por un descuido:
-    // la providencia no existe hasta que el SENIAT autorice a Ossmmasoft. Por eso
-    // no bloquea la emision, marca el documento como de prueba. Emitir en modo
-    // prueba es correcto; emitir un documento DEFINITIVO sin ese dato no lo es, y
-    // eso lo impide el CHECK de la tabla.
-    public static bool EsDocumentoDePrueba(FacturaImprentaDatos imprenta) => !imprenta.EsDefinitivo;
 }

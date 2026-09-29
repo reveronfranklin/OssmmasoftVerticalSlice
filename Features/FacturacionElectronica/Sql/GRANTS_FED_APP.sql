@@ -95,9 +95,6 @@ GRANT UPDATE (ULTIMO_NUMERO, FECHA_UPD)
 -- El modo de numeracion es dato editable del emisor, como su razon social.
 GRANT UPDATE (MODO_NUMERACION) ON FED.FED_EMISOR TO fed_app;
 
--- Identificador del documento del emisor externo: se completa despues de asignar.
-GRANT UPDATE (DOCUMENTO_EXTERNO) ON FED.FED_NUM_CONTROL TO fed_app;
-
 -- El tipo de contribuyente es dato editable del emisor: una empresa puede pasar
 -- de contribuyente formal a ordinario, y de eso depende contra que articulo se
 -- valida su nota (D-31).

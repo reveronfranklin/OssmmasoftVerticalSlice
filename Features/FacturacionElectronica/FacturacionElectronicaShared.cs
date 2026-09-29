@@ -506,8 +506,10 @@ public static class FacturacionElectronicaDb
     // emitio el 2026-09-07 con precio 2.000, alicuota 16 %, base 4.000 e IVA 640,
     // y sin ninguno de los tres datos que el Art. 10 le exige. Queda como dato de
     // prueba: no hay UPDATE sobre FED_DOCUMENTO con que arreglarlo.
-    public static readonly string[] TiposEmisionDirecta = ["factura"];
-
+    //
+    // La lista de emision directa (TiposEmisionDirecta = ["factura"]) se quito el
+    // 2026-09-29 porque nadie la leia: FacturaValidador aplica la regla por
+    // exclusion, rechazando TiposNota y TiposGuia con el articulo que incumplen.
     public static readonly string[] TiposNota = ["debito", "credito"];
 
     // El tipo que se emite por guiaCreate. Uno solo, pero nombrado igual que los

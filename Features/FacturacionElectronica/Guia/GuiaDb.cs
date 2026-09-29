@@ -126,9 +126,6 @@ public static class GuiaDb
         MedidaValor: renglon.MedidaValor,
         MedidaUnidad: renglon.MedidaUnidad);
 
-    public static string TextoMedida(GuiaRenglonCommand renglon) =>
-        $"{renglon.MedidaTipo}: {renglon.MedidaValor:0.####} {renglon.MedidaUnidad}".Trim();
-
     public static GuiaDatos MapGuia(IDataReader reader) => new(
         reader.SafeGetString("motivo_traslado"),
         reader.SafeGetString("destino"),

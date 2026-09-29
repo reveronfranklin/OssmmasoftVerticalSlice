@@ -183,6 +183,9 @@ CREATE INDEX IF NOT EXISTS FED_DOCUMENTO_EMI_FEC_IX
 -- INV-1 se sostiene igual en los dos caminos: DOCUMENTO_ID ya tenia su UNIQUE, y
 -- DOCUMENTO_EXTERNO recibe el suyo por emisor. Dos numeros de control para el
 -- mismo documento sigue siendo imposible, venga de donde venga el documento.
+--
+-- NOTA (2026-09-29): DOCUMENTO_EXTERNO nunca llego a usarse y la elimina el
+-- script 26_fed_num_control_sin_doc_externo.sql. Se deja aca como historia.
 -- -----------------------------------------------------------------------------
 ALTER TABLE FED.FED_NUM_CONTROL
     ADD COLUMN IF NOT EXISTS DOCUMENTO_EXTERNO VARCHAR(60);

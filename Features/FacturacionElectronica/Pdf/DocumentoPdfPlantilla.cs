@@ -35,9 +35,10 @@ public static class DocumentoPdfPlantilla
 
     // Lo que se usa realmente, con margen sobre el minimo. El margen es
     // deliberado: si un renderizador redondea hacia abajo, 8.0 exacto podria
-    // medir 7.98 y quedar por debajo del minimo legal.
-    private const float PuntosImprenta = 6.5f;
-    private const float PuntosEmisor = 9f;
+    // medir 7.98 y quedar por debajo del minimo legal. Se escriben como minimo
+    // MAS margen para que subir un minimo arrastre el tamano usado.
+    private const float PuntosImprenta = PuntosMinimosImprenta + 0.5f;
+    private const float PuntosEmisor = PuntosMinimosEmisor + 1f;
     private const float PuntosControl = 10f;
     private const float PuntosCuerpo = 8.5f;
     private const float PuntosDenominacion = 16f;
@@ -259,8 +260,9 @@ public static class DocumentoPdfPlantilla
             foreach (var r in renglones)
             {
                 // 7.8 - la marca (E) del exento va junto a la descripcion, no en
-                // una columna aparte: asi lo pide el numeral.
-                string descripcion = r.Exento && !esGuia ? $"{r.Descripcion} (E)" : r.Descripcion;
+                // una columna aparte: asi lo pide el numeral. El literal vive en
+                // FacturaFormato, no aca.
+                string descripcion = FacturaFormato.ConMarcaExento(r.Descripcion, r.Exento && !esGuia);
 
                 if (r.Codigo.Length > 0)
                 {

@@ -23,6 +23,12 @@ namespace OssmmasoftVerticalSlice.Features.FacturacionElectronica;
 // instantanea que ya rige para los datos del emisor: si manana el gobierno cambia
 // la tasa, las facturas viejas conservan la que se les aplico. Un documento fiscal
 // no puede cambiar porque cambio un catalogo.
+//
+// PENDIENTE (auditoria de codigo muerto, 2026-09-29): ESTA CLASE NO ESTA
+// CONECTADA. Ningun handler ni endpoint llama a ObtenerAsync, y segun git nunca
+// lo hizo. La emision hoy solo comprueba que la alicuota este entre 0 y 100
+// (FacturaValidador). Se conserva porque es la pieza que falta para cumplir
+// D-22; conectarla cambia que se acepta al emitir y queda como tarea aparte.
 public record AlicuotaResponse(decimal Valor, string Descripcion);
 
 public static class FacturaAlicuotas

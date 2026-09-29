@@ -93,11 +93,4 @@ public static class FacturaNumerales
     // Art. 23 de la 00071 dice "segun sea el caso", y el caso es este.
     public static string ArticuloParaNota(string tipoContribuyente) =>
         tipoContribuyente == "ordinario" ? Art13 : Art15;
-
-    // El nombre de la norma, para que el mensaje diga cual se incumple.
-    public static string Norma(string articulo) => articulo switch
-    {
-        Art13 or Art15 => "Providencia SNAT/2011/00071",
-        _              => "Providencia SNAT/2024/000102"
-    };
 }
