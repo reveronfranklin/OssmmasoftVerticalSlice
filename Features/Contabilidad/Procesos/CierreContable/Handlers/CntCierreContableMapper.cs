@@ -23,5 +23,6 @@ internal static class CntCierreContableMapper
             reader.SafeGetInt32("CANT_SALDOS"),
             reader.SafeGetInt32("CANT_HIST_ANALITICO"),
             reader.SafeGetInt32("CANT_MODIFICACIONES"),
-            CntDb.SafeGetNullableInt(reader, "CODIGO_EMPRESA"));
+            CntDb.SafeGetNullableInt(reader, "CODIGO_EMPRESA"),
+            reader.SafeGetInt32("CANT_PENDIENTES"));
 }

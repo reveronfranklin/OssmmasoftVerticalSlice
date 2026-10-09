@@ -40,19 +40,19 @@ public record CntClonePlanCuentasCommand(int UsuarioId, int EmpresaOrigen);
 public record CntPeriodoGetAllQuery(int UsuarioId = 0, bool SoloAbiertos = false, DateTime? Fecha = null);
 public record CntMayorSearchQuery(int UsuarioId = 0, string SearchText = "", int PageSize = 20);
 public record CntAuxiliarSearchQuery(int UsuarioId = 0, string SearchText = "", int? CodigoMayor = null, int PageSize = 20);
-public record CntComprobanteGetAllQuery(int UsuarioId, int PageSize = 10, int PageNumber = 1, string SearchText = "", int? CodigoPeriodo = null, int? OrigenId = null, DateTime? FechaDesde = null, DateTime? FechaHasta = null, bool? EsAutomatico = null);
+public record CntComprobanteGetAllQuery(int UsuarioId, int PageSize = 10, int PageNumber = 1, string SearchText = "", int? CodigoPeriodo = null, int? OrigenId = null, DateTime? FechaDesde = null, DateTime? FechaHasta = null, bool? EsAutomatico = null, string? EstadoContable = null);
 public record CntComprobanteGetByIdQuery(int CodigoComprobante, int UsuarioId);
 public record CntComprobantePrintQuery(int CodigoComprobante, int UsuarioId);
 public record CntComprobanteNumberQuery(int UsuarioId, int CodigoPeriodo, int TipoComprobanteId, DateTime FechaComprobante);
 public record CntComprobanteCreateCommand(int UsuarioId, int CodigoPeriodo, int TipoComprobanteId, DateTime FechaComprobante, int? OrigenId, string? Observacion, List<CntDetalleCreateCommand> Detalles);
-public record CntComprobanteUpdateCommand(int CodigoComprobante, int UsuarioId, int CodigoPeriodo, int TipoComprobanteId, DateTime FechaComprobante, int? OrigenId, string? Observacion, List<CntDetalleCreateCommand> Detalles);
-public record CntComprobanteDeleteCommand(int CodigoComprobante, int UsuarioId);
+public record CntComprobanteUpdateCommand(int CodigoComprobante, int UsuarioId, int CodigoPeriodo, int TipoComprobanteId, DateTime FechaComprobante, int? OrigenId, string? Observacion, List<CntDetalleCreateCommand> Detalles, int? Version = null);
+public record CntComprobanteDeleteCommand(int CodigoComprobante, int UsuarioId, int? Version = null);
 public record CntComprobanteReorderCommand(int UsuarioId, int CodigoPeriodo, int TipoComprobanteId);
 public record CntDetalleGetByComprobanteQuery(int CodigoComprobante, int UsuarioId);
 public record CntDetalleCreateCommand(int CodigoMayor, int CodigoAuxiliar, string? Referencia1, string? Referencia2, string? Referencia3, string? Descripcion, decimal Monto);
-public record CntDetalleAddCommand(int CodigoComprobante, int UsuarioId, int CodigoMayor, int CodigoAuxiliar, string? Referencia1, string? Referencia2, string? Referencia3, string? Descripcion, decimal Monto);
-public record CntDetalleUpdateCommand(int CodigoDetalleComprobante, int UsuarioId, int CodigoMayor, int CodigoAuxiliar, string? Referencia1, string? Referencia2, string? Referencia3, string? Descripcion, decimal Monto);
-public record CntDetalleDeleteCommand(int CodigoDetalleComprobante, int UsuarioId);
+public record CntDetalleAddCommand(int CodigoComprobante, int UsuarioId, int CodigoMayor, int CodigoAuxiliar, string? Referencia1, string? Referencia2, string? Referencia3, string? Descripcion, decimal Monto, int? Version = null);
+public record CntDetalleUpdateCommand(int CodigoDetalleComprobante, int UsuarioId, int CodigoMayor, int CodigoAuxiliar, string? Referencia1, string? Referencia2, string? Referencia3, string? Descripcion, decimal Monto, int? Version = null);
+public record CntDetalleDeleteCommand(int CodigoDetalleComprobante, int UsuarioId, int? Version = null);
 public record CntAutomaticPreviewCommand(int UsuarioId, int CodigoPeriodo, int TipoComprobanteId, int OrigenId, DateTime FechaDesde, DateTime FechaHasta);
 public record CntAutomaticConfirmCommand(int UsuarioId, int CodigoPeriodo, int TipoComprobanteId, int OrigenId, DateTime FechaDesde, DateTime FechaHasta, DateTime? FechaComprobante, string? Observacion);
 public record CntMayorAnaliticoQuery(int UsuarioId, int PageSize = 10, int PageNumber = 1, string SearchText = "", int? CodigoPeriodo = null, int? CodigoMayor = null, int? CodigoAuxiliar = null, DateTime? FechaDesde = null, DateTime? FechaHasta = null);
@@ -89,7 +89,13 @@ public record CntComprobanteResponse(
     decimal TotalHaber,
     decimal Diferencia,
     bool EsAutomatico,
-    int CodigoEmpresa);
+    int CodigoEmpresa,
+    string EstadoContable = "FINALIZADO",
+    bool AjusteManual = false,
+    int Version = 1)
+{
+    public bool EsPendienteCorreccion => EstadoContable == "PENDIENTE";
+}
 
 public record CntDetalleResponse(
     int CodigoDetalleComprobante,
@@ -150,7 +156,9 @@ public record CntAutomaticDailyConfirmResponse(
     decimal TotalHaber,
     decimal Diferencia,
     string Estado,
-    string Mensaje);
+    string Mensaje,
+    string EstadoContable = "",
+    bool AjusteManual = false);
 
 public record CntAutomaticConfirmResponse(
     int CantidadComprobantes,
@@ -160,7 +168,15 @@ public record CntAutomaticConfirmResponse(
     decimal TotalDebe,
     decimal TotalHaber,
     decimal Diferencia,
-    List<CntAutomaticDailyConfirmResponse> Comprobantes);
+    List<CntAutomaticDailyConfirmResponse> Comprobantes)
+{
+    public int CantidadPendientes => Comprobantes.Count(x => (x.Estado is "GENERADO" or "REEMPLAZADO") && x.EstadoContable == "PENDIENTE");
+    public int CantidadFinalizados => Comprobantes.Count(x => (x.Estado is "GENERADO" or "REEMPLAZADO") && x.EstadoContable == "FINALIZADO");
+    public int CantidadDiasProtegidos => Comprobantes.Count(x => x.Estado == "PROTEGIDO");
+}
+
+public record CntComprobanteFinalizarCommand(int CodigoComprobante, int UsuarioId, int Version);
+public record CntComprobanteFinalizarResponse(int CodigoComprobante, string EstadoContable, decimal Diferencia, int Version);
 
 public record CntMayorAnaliticoResponse(
     int? CodigoComprobante,

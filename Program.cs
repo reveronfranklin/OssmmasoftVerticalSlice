@@ -127,6 +127,7 @@ builder.Services.AddScoped<GetCntComprobantePrintHandler>();
 builder.Services.AddScoped<GenerateCntComprobanteNumberHandler>();
 builder.Services.AddScoped<GetCntDetallesByComprobanteHandler>();
 builder.Services.AddScoped<CreateCntComprobanteHandler>();
+builder.Services.AddScoped<FinalizarCntComprobanteHandler>();
 builder.Services.AddScoped<UpdateCntComprobanteHandler>();
 builder.Services.AddScoped<DeleteCntComprobanteHandler>();
 builder.Services.AddScoped<ReorderCntComprobantesHandler>();

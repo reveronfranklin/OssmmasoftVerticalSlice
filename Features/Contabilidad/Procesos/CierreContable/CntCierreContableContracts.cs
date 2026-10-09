@@ -23,7 +23,8 @@ public record CntCierrePeriodoResponse(
     int CantidadSaldos,
     int CantidadHistAnalitico,
     int CantidadModificaciones,
-    int? CodigoEmpresa);
+    int? CodigoEmpresa,
+    int CantidadPendientes = 0);
 
 public record CntCierreActionResponse(
     int CodigoPeriodo,

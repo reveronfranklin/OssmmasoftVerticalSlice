@@ -18,7 +18,8 @@ public class CntComprobantesController(
     ReorderCntComprobantesHandler reorderHandler,
     AddCntDetalleHandler addDetailHandler,
     UpdateCntDetalleHandler updateDetailHandler,
-    DeleteCntDetalleHandler deleteDetailHandler) : ControllerBase
+    DeleteCntDetalleHandler deleteDetailHandler,
+    FinalizarCntComprobanteHandler finalizarHandler) : ControllerBase
 {
     [HttpPost("GetAll")]
     public async Task<IActionResult> GetAll(CntComprobanteGetAllQuery value) =>
@@ -47,6 +48,10 @@ public class CntComprobantesController(
     [HttpPost("update")]
     public async Task<IActionResult> Update(CntComprobanteUpdateCommand value) =>
         Ok(await updateHandler.HandleAsync(value, User, Request));
+
+    [HttpPost("finalizar")]
+    public async Task<IActionResult> Finalizar(CntComprobanteFinalizarCommand value) =>
+        Ok(await finalizarHandler.HandleAsync(value, User, Request));
 
     [HttpPost("delete")]
     public async Task<IActionResult> Delete(CntComprobanteDeleteCommand value) =>
