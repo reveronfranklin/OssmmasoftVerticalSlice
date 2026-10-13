@@ -141,7 +141,7 @@ clave de negocio**: el Articulo 30 ata la secuencia de numero de control a ese R
 | `estado` | `string` | `activo` o `inactivo`. No hay borrado: un emisor se desactiva |
 | `rifVerificadoEl` | `string` | `dd/MM/yyyy`. Vacio si nunca se verifico |
 | `rifVerificadoEstado` | `string` | `vigente`, `no_vigente` o `sin_verificar`. Art. 29.2 |
-| `cupoTotal` | `number \| null` | Suma de todas las cargas de cupo. **`null` = el emisor no tiene cupo: sin limite.** Ver [Cupo de documentos](#cupo-de-documentos) |
+| `cupoTotal` | `number \| null` | Suma de todas las cargas de cupo. **`null` = el emisor no tiene cupo: bloqueado** (Fase Q, `D-56`; antes significaba sin limite). Ver [Cupo de documentos](#cupo-de-documentos) |
 | `cupoDisponible` | `number \| null` | Numeros de control que le quedan. `null` junto con `cupoTotal` |
 
 Las fechas viajan **ya formateadas como texto**, no como ISO: es lo que hace el resto del
@@ -236,9 +236,10 @@ POST /api/FacturacionElectronica/create
 
 `estado` no viaja: todo emisor nace `activo`.
 
-`cupoInicial` es **opcional**. Omitido, `null` o `0` = el emisor nace sin cupo, es decir sin
-limite. Si viene, el emisor y su primera carga de cupo se graban en la misma transaccion.
-Fuera de rango (negativo o mayor que 99.999.999) responde `isValid = false`.
+`cupoInicial` es **obligatorio** desde la Fase Q (`D-56`, 2026-10-13). Omitido, `null`, `0` o
+fuera de rango responde `isValid = false` con
+`El cupo inicial es obligatorio: entre 1 y 99.999.999.` El emisor y su primera carga de cupo se
+graban en la misma transaccion. Antes era opcional y su ausencia dejaba al emisor sin limite.
 
 ### Response
 
@@ -295,8 +296,11 @@ prohibe.
 
 - **Descuenta todo numero de control**: factura, notas, guia y la asignacion manual sin
   documento. La retencion no, porque no lleva numero de control.
-- **Sin ninguna carga, el emisor no tiene limite.** Es como siguen funcionando los emisores que
-  ya existian.
+- **Sin ninguna carga, el emisor esta bloqueado** (Fase Q, `D-56`, 2026-10-13). Hasta entonces
+  no tenia limite. `facturaCreate`, `notaCreate`, `guiaCreate` y `asignarNumeroControl`
+  responden `isValid = false` con
+  `El emisor no tiene cupo de documentos: debe cargarse un cupo antes de asignar números de control.`
+  Se desbloquea con `cupoRenovar`.
 - **Renovar suma, no reemplaza.** Cada carga queda registrada con su cantidad, fecha y usuario.
 - **Lo consumido antes del primer cupo no cuenta.** Si un emisor que ya emitia recibe su primer
   cupo de 20, tiene 20 disponibles.

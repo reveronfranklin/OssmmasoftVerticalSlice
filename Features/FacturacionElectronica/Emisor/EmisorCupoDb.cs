@@ -15,7 +15,8 @@ public record EmisorCupoCargaResponse(
     string UsuarioIns,
     string FechaIns);
 
-// CupoTotal y CupoDisponible en null = el emisor no tiene cupo: sin limite.
+// CupoTotal y CupoDisponible en null = el emisor no tiene cupo cargado. Desde
+// la Fase Q (D-56) eso significa BLOQUEADO, no sin limite.
 public record EmisorCupoResponse(
     long EmisorId,
     long? CupoTotal,
@@ -27,6 +28,10 @@ public static class EmisorCupoDb
     // El tope de una carga, escrito para mensajes. Fijo y no con {valor:N0}: N0
     // toma la cultura del servidor, que hoy es en-US y escribe "99,999,999".
     public const string CantidadMaximaTexto = "99.999.999";
+
+    // Fase Q (D-56): sin cupo cargado no se asigna numero de control.
+    public const string MensajeSinCupo =
+        "El emisor no tiene cupo de documentos: debe cargarse un cupo antes de asignar números de control.";
 
     // Posicion del ultimo numero asignado en la secuencia del emisor. Es la
     // misma cuenta en C# y en SQL; si una cambia, la otra tambien.
@@ -121,14 +126,25 @@ public static class EmisorCupoDb
     // con los valores que ese bloqueo devolvio. Por eso no hay carrera: dos
     // peticiones del mismo emisor pasan por aqui de a una, y la segunda ya ve el
     // numero que consumio la primera. Devuelve el motivo del rechazo, o null si
-    // queda cupo o el emisor no tiene.
+    // queda cupo.
+    //
+    // FASE Q (D-56, 2026-10-13). Hasta entonces un emisor SIN ninguna carga
+    // pasaba sin limite, para no romper a los que ya existian. Ya no: todo
+    // emisor debe tener cupo cargado. Los que no lo tienen quedan bloqueados
+    // hasta que se les cargue con cupoRenovar.
     public static async Task<string?> VerificarAsync(
         NpgsqlConnection cn, NpgsqlTransaction tx, long emisorId, string identificador, int secuencial)
     {
         var (total, baseConsumo) = await LeerResumenAsync(cn, tx, emisorId);
+
+        if (total is null)
+        {
+            return MensajeSinCupo;
+        }
+
         long? disponible = Disponible(total, baseConsumo, Consumido(identificador, secuencial));
 
-        if (disponible is null or > 0)
+        if (disponible > 0)
         {
             return null;
         }

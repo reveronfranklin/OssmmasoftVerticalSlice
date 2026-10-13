@@ -30,6 +30,10 @@
 -- cupo no cuenta. Un emisor SIN ninguna fila queda sin limite, que es como
 -- siguen funcionando los emisores que ya existian.
 --
+-- NOTA (2026-10-13): lo de "sin limite" se revirtio en la Fase Q (D-56). Un
+-- emisor sin filas ahora queda BLOQUEADO; el script 27 actualiza el comentario
+-- de la tabla. Se deja aca como historia.
+--
 -- Reejecutable: CREATE ... IF NOT EXISTS.
 -- =============================================================================
 

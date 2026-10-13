@@ -24,7 +24,8 @@ public record EmisorResponse(
     string UsuarioUpd,
     string FechaUpd,
 
-    // TM.4, D-54. null = el emisor no tiene cupo: sin limite.
+    // TM.4, D-54. null = el emisor no tiene cupo cargado: desde la Fase Q (D-56)
+    // esta bloqueado, no sin limite.
     long? CupoTotal = null,
     long? CupoDisponible = null);
 
@@ -195,7 +196,8 @@ public static class FacturacionElectronicaDb
     //
     // El cupo (TM.4, D-54) se calcula aqui y no se guarda: CUPO_TOTAL es la suma
     // de las cargas y CUPO_DISPONIBLE descuenta lo consumido desde la base del
-    // primer cupo. Sin cargas, los dos salen NULL: el emisor no tiene limite.
+    // primer cupo. Sin cargas, los dos salen NULL: el emisor no tiene cupo y,
+    // desde la Fase Q (D-56), no puede emitir.
     private static readonly string ColumnasEmisor = $@"
         E.ID, E.RIF, E.RAZON_SOCIAL, E.DOMICILIO_FISCAL, E.CORREO, E.ESTADO,
         E.RIF_VERIFICADO_EL, E.RIF_VERIFICADO_ESTADO, E.TIPO_CONTRIBUYENTE,

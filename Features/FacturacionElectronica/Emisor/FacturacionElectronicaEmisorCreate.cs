@@ -18,8 +18,10 @@ public record FacturacionElectronicaEmisorCreateCommand(
     // declarar queda sobre-validado, no sub-validado.
     string TipoContribuyente = "ordinario",
 
-    // TM.4, D-54. Cupo de documentos con el que nace el emisor. null o 0 = sin
-    // cupo, es decir sin limite, que es como funcionaban todos hasta ahora.
+    // TM.4, D-54. Cupo de documentos con el que nace el emisor. OBLIGATORIO
+    // desde la Fase Q (D-56): un emisor sin cupo no puede emitir, asi que crearlo
+    // sin el seria crearlo bloqueado. Queda int? solo para que su ausencia en el
+    // JSON llegue como null y se rechace con un mensaje de negocio.
     int? CupoInicial = null);
 
 public class FacturacionElectronicaEmisorCreateHandler(ConnectionDB _connectionDB)
@@ -69,9 +71,9 @@ public class FacturacionElectronicaEmisorCreateHandler(ConnectionDB _connectionD
 
         int cupoInicial = command.CupoInicial ?? 0;
 
-        if (cupoInicial is < 0 or > FacturacionElectronicaDb.SecuencialMaximo)
+        if (cupoInicial is < 1 or > FacturacionElectronicaDb.SecuencialMaximo)
         {
-            return Falla($"El cupo inicial debe estar entre 1 y {EmisorCupoDb.CantidadMaximaTexto}, o vacío para no limitar.");
+            return Falla($"El cupo inicial es obligatorio: entre 1 y {EmisorCupoDb.CantidadMaximaTexto}.");
         }
 
         using var cn = _connectionDB.GetFedConnection();
@@ -90,7 +92,7 @@ public class FacturacionElectronicaEmisorCreateHandler(ConnectionDB _connectionD
         try
         {
             // El emisor y su primer cupo van juntos o no va ninguno: un emisor
-            // que nace sin el cupo pedido quedaria sin limite sin que nadie lo
+            // que nace sin el cupo pedido quedaria bloqueado sin que nadie lo
             // note.
             using var tx = await cn.BeginTransactionAsync();
 
@@ -109,11 +111,10 @@ public class FacturacionElectronicaEmisorCreateHandler(ConnectionDB _connectionD
                 id = await cmd.ExecuteScalarAsync();
             }
 
-            if (cupoInicial > 0)
+            // Consumido 0: el emisor recien creado todavia no recibio ningun
+            // numero, y nadie mas lo ve hasta el commit.
+            using (var cmdCupo = new NpgsqlCommand(EmisorCupoDb.SqlInsertar, cn, tx))
             {
-                // Consumido 0: el emisor recien creado todavia no recibio ningun
-                // numero, y nadie mas lo ve hasta el commit.
-                using var cmdCupo = new NpgsqlCommand(EmisorCupoDb.SqlInsertar, cn, tx);
                 cmdCupo.Parameters.AddWithValue("emisor_id", Convert.ToInt64(id));
                 cmdCupo.Parameters.AddWithValue("cantidad", cupoInicial);
                 cmdCupo.Parameters.AddWithValue("consumido", 0L);
