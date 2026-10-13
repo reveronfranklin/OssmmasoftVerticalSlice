@@ -56,10 +56,16 @@ El bloque a insertar, como **nuevo elemento raíz** del arreglo:
     {
       "title": "Comprobantes de Retencion",
       "path": "/apps/fed/retenciones"
+    },
+    {
+      "title": "Contingencia",
+      "path": "/apps/fed/contingencia"
     }
   ]
 }
 ```
+
+**Contingencia se sumó el 2026-10-13.** La pantalla existe desde la Fase 8, pero este bloque se había escrito antes y nunca se actualizó, así que los usuarios con el bloque viejo no la ven. Para esos usuarios basta con agregar el último elemento a su `JSON_MENU`.
 
 Sin acentos, como el resto del dato: en el menú vivo se lee `Administracion`, `Tesoreria`, `Nomina`.
 
@@ -72,6 +78,8 @@ Los `path` tienen que coincidir con las páginas reales:
 | `/apps/fed/numeros-control` | `src/pages/apps/fed/numeros-control/index.tsx` |
 | `/apps/fed/reporte-mensual` | `src/pages/apps/fed/reporte-mensual/index.tsx` |
 | `/apps/fed/facturas` | `src/pages/apps/fed/facturas/index.tsx` |
+| `/apps/fed/retenciones` | `src/pages/apps/fed/retenciones/index.tsx` |
+| `/apps/fed/contingencia` | `src/pages/apps/fed/contingencia/index.tsx` |
 
 Procedimiento: `SELECT` con `ROWID` del usuario, editar el CLOB agregando el bloque al arreglo, guardar. Reversa: quitar el bloque.
 
@@ -79,7 +87,7 @@ Procedimiento: `SELECT` con `ROWID` del usuario, editar el CLOB agregando el blo
 
 ## Camino B - `SIS_MENU_FED.sql`
 
-`SIS_MENU_FED.sql` registra el módulo en el modelo normalizado: `OSS_MOD` código 9 (`FED`) y las opciones 9000 padre, 9010 Emisores, 9020 Números de Control, 9030 Reporte Mensual, 9040 Documentos Fiscales y 9050 Panel -que va primero en el orden, por ser la pantalla de entrada-, con `MERGE` reejecutable.
+`SIS_MENU_FED.sql` registra el módulo en el modelo normalizado: `OSS_MOD` código 9 (`FED`) y las opciones 9000 padre, 9010 Emisores, 9020 Números de Control, 9030 Reporte Mensual, 9040 Documentos Fiscales, 9050 Panel -que va primero en el orden, por ser la pantalla de entrada-, 9060 Comprobantes de Retención y 9070 Contingencia, con `MERGE` reejecutable.
 
 **Registrar no es mostrar.** Sin fila en `OSS_ROL_MENU` esas opciones no llegan a ningún `JSON_MENU`, y el script deja `v_rol_clave` vacío a propósito.
 
