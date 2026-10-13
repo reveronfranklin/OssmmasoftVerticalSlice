@@ -598,6 +598,13 @@ mirarlo.
 
 ## Autorizacion
 
+La opcion lateral `Reportes` (`/apps/mfo/formularios`) esta disponible para
+todos los usuarios autenticados. El frontend la incorpora al menu recibido de
+`SisUsuarios/GetMenuByUsuario`, incluso si el JSON del usuario no la incluye,
+y evita duplicados por ruta. No requiere asignar el rol REPORTES ni regenerar
+el cache JSON_MENU. La lista de formularios y su ejecucion siguen sujetas a los
+permisos del motor; esta entrada comun no concede permisos adicionales.
+
 `MFO_PERMISO` guarda, por formulario y rol, cuales de estas acciones se permiten:
 `DISENAR`, `LLENAR`, `VER`, `EXPORTAR`, `ANULAR`. El rol es el codigo de
 `SIS.OSS_USUARIO_ROL` y el usuario viaja en `X-Usuario`.
@@ -621,9 +628,13 @@ Reglas de la politica:
   caida de SIS en una puerta abierta.
 - **Administrar permisos solo exige ser superusuario**, no `DISENAR`. Es lo que
   permite recuperar un formulario que quedo cerrado por una asignacion mal
-  hecha, sin bajar a SQL. El superusuario no pasa por encima del resto del
-  motor: para operar sobre un formulario cerrado sigue necesitando el permiso
-  que corresponda, aunque siempre pueda concederselo.
+  hecha, sin bajar a SQL. El superusuario tiene acceso a todas las acciones de
+  todos los formularios y a todos sus reportes, sin asignaciones individuales.
+  El servidor verifica `SIS_USUARIOS.IS_SUPERUSER` usando el usuario de
+  `X-Usuario`; una marca enviada por el frontend no concede este acceso.
+- La pantalla de reportes muestra el mensaje de error cuando
+  `getByFormulario` devuelve `isValid = false`. Solo indica que no hay reportes
+  enlazados cuando la consulta termina correctamente con una lista vacia.
 - `api/MfoFormulario/GetAll`, `getById`, `create` y `api/MfoVersion/getFull` no
   exigen permiso: son catalogo y metadatos, y `getFull` lo necesita el
   renderizador para pintar el formulario a quien solo tiene `LLENAR`.

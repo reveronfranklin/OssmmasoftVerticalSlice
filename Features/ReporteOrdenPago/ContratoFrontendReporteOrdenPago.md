@@ -15,6 +15,17 @@ Genera el PDF de Orden de Pago directamente desde `OssmmasoftVerticalSlice`.
 El pie del reporte incluye las lineas de firma de `PRESIDENTE (A)` y
 `DIRECTOR(A) DE ADMINISTRACIÓN`.
 
+### Formato de impresion
+
+- Hoja carta vertical, con firmas y datos de impresion al pie.
+- El cuerpo de imputaciones reserva al menos 180 puntos y el de retenciones
+  64 puntos, incluso sin registros. El motivo reserva al menos 40 puntos.
+- Con datos breves, los bloques conservan su altura aunque cambie la cantidad
+  de filas; el espacio se distribuye entre ellas.
+- Si el texto o la cantidad de registros supera el espacio reservado, el reporte
+  crece y continua en las paginas necesarias, sin recortar datos.
+- Mantener la vista previa existente del PDF.
+
 ### Request
 
 ```json

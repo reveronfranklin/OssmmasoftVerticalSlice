@@ -49,7 +49,10 @@ internal static class CntDb
             totalHaber,
             totalDebe - totalHaber,
             reader.SafeGetInt32("ES_AUTOMATICO") == 1,
-            reader.SafeGetInt32("CODIGO_EMPRESA"));
+            reader.SafeGetInt32("CODIGO_EMPRESA"),
+            reader.SafeGetString("ESTADO_CMP"),
+            reader.SafeGetInt32("AJUSTE_MANUAL") == 1,
+            reader.SafeGetInt32("VERSION_CMP"));
     }
 
     public static CntDetalleResponse MapDetalle(IDataReader reader)

@@ -72,6 +72,7 @@ public class GetCntComprobantesHandler(ConnectionDB connectionDB, IConfiguration
             cmd.Parameters.Add("p_ORIGEN_ID", OracleDbType.Int32).Value = CntDb.DbValue(value.OrigenId);
             cmd.Parameters.Add("p_FECHA_DESDE", OracleDbType.Date).Value = CntDb.DbValue(value.FechaDesde);
             cmd.Parameters.Add("p_FECHA_HASTA", OracleDbType.Date).Value = CntDb.DbValue(value.FechaHasta);
+            cmd.Parameters.Add("p_ESTADO_CMP", OracleDbType.Varchar2).Value = CntDb.StringDbValue(value.EstadoContable);
             cmd.Parameters.Add("p_ES_AUTOMATICO", OracleDbType.Int32).Value = value.EsAutomatico.HasValue ? (value.EsAutomatico.Value ? 1 : 0) : DBNull.Value;
             cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
             cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
@@ -361,7 +362,7 @@ public class CreateCntComprobanteHandler(ConnectionDB connectionDB, IConfigurati
         return await SaveAsync(connectionDB, config, value.UsuarioId, null, value.CodigoPeriodo, value.TipoComprobanteId, value.FechaComprobante, value.OrigenId, value.Observacion, value.Detalles);
     }
 
-    internal static async Task<ResultDto<int>> SaveAsync(ConnectionDB connectionDB, IConfiguration config, int usuarioId, int? codigoComprobante, int codigoPeriodo, int tipoComprobanteId, DateTime fechaComprobante, int? origenId, string? observacion, List<CntDetalleCreateCommand> detalles, bool permitirAutomatico = false)
+    internal static async Task<ResultDto<int>> SaveAsync(ConnectionDB connectionDB, IConfiguration config, int usuarioId, int? codigoComprobante, int codigoPeriodo, int tipoComprobanteId, DateTime fechaComprobante, int? origenId, string? observacion, List<CntDetalleCreateCommand> detalles, bool permitirAutomatico = false, int? version = null)
     {
         try
         {
@@ -375,10 +376,9 @@ public class CreateCntComprobanteHandler(ConnectionDB connectionDB, IConfigurati
                 return new ResultDto<int>(0) { IsValid = false, Message = "El comprobante debe tener al menos un detalle." };
             }
 
-            if (Math.Abs(detalles.Sum(x => x.Monto)) > 0.01m)
-            {
-                return new ResultDto<int>(0) { IsValid = false, Message = "El comprobante no esta cuadrado. La suma de MONTO debe ser cero." };
-            }
+            detalles = detalles.Select(x => x with { Monto = CntMoney.Normalize(x.Monto) }).ToList();
+            if (detalles.Any(x => x.Monto == 0 || x.CodigoMayor <= 0 || x.CodigoAuxiliar <= 0))
+                return new ResultDto<int>(0) { IsValid = false, Message = "Cada detalle requiere cuentas e importe valido." };
 
             using var cn = connectionDB.GetCntConnection();
             await cn.OpenAsync();
@@ -386,6 +386,31 @@ public class CreateCntComprobanteHandler(ConnectionDB connectionDB, IConfigurati
 
             try
             {
+                await CntPendienteDb.LockAsync(cn, tx);
+                await CntPendienteDb.ValidatePeriodAsync(cn, tx, codigoPeriodo, empresa, fechaComprobante);
+                bool pendiente = false;
+                int? periodoAnterior = null;
+                if (codigoComprobante.HasValue)
+                {
+                    await CntPendienteDb.CheckEditAsync(cn, tx, codigoComprobante.Value, empresa, version, usuarioId, permitirAutomatico, "EDITAR");
+                    using var header = new OracleCommand(@"SELECT CODIGO_PERIODO, TIPO_COMPROBANTE_ID, FECHA_COMPROBANTE, ORIGEN_ID, EXTRA1, ESTADO_CMP
+                        FROM CNT.CNT_COMPROBANTES WHERE CODIGO_COMPROBANTE = :id AND CODIGO_EMPRESA = :empresa", cn) { BindByName = true, Transaction = tx };
+                    header.Parameters.Add("id", OracleDbType.Int32).Value = codigoComprobante.Value;
+                    header.Parameters.Add("empresa", OracleDbType.Int32).Value = empresa;
+                    using var reader = await header.ExecuteReaderAsync();
+                    if (!await reader.ReadAsync()) throw new InvalidOperationException("Comprobante no encontrado.");
+                    periodoAnterior = reader.SafeGetInt32("CODIGO_PERIODO");
+                    bool automatico = reader.SafeGetString("EXTRA1") == "AUTOMATICO";
+                    pendiente = automatico && reader.SafeGetString("ESTADO_CMP") == "PENDIENTE";
+                    if (automatico && (periodoAnterior != codigoPeriodo || reader.SafeGetInt32("TIPO_COMPROBANTE_ID") != tipoComprobanteId
+                        || CntDb.SafeGetDate(reader, "FECHA_COMPROBANTE").Date != fechaComprobante.Date
+                        || CntDb.SafeGetNullableInt(reader, "ORIGEN_ID") != origenId))
+                        throw new InvalidOperationException("No puede cambiar la cabecera de un comprobante automatico.");
+                    if (automatico) fechaComprobante = CntDb.SafeGetDate(reader, "FECHA_COMPROBANTE");
+                }
+                if (!pendiente && !CntMoney.IsBalanced(detalles.Select(x => x.Monto)))
+                    return new ResultDto<int>(0) { IsValid = false, Message = "El comprobante no esta cuadrado." };
+
                 int comprobanteId;
                 var procedure = codigoComprobante.HasValue ? "CNT.SP_CNT_CMP_UPD" : "CNT.SP_CNT_CMP_INS";
                 using (var cmd = new OracleCommand(procedure, cn) { CommandType = CommandType.StoredProcedure, BindByName = true, Transaction = tx })
@@ -426,9 +451,11 @@ public class CreateCntComprobanteHandler(ConnectionDB connectionDB, IConfigurati
                     delCmd.Parameters.Add("p_CODIGO_COMPROBANTE", OracleDbType.Int32).Value = comprobanteId;
                     delCmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
                     delCmd.Parameters.Add("p_USUARIO_ID", OracleDbType.Int32).Value = usuarioId;
-                    delCmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
+                    var deleteMessage = delCmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
                     delCmd.Parameters.Add("p_PERMITIR_AUTOMATICO", OracleDbType.Int32).Value = permitirAutomatico ? 1 : 0;
                     await delCmd.ExecuteNonQueryAsync();
+                    if (!CntDb.IsSuccessMessage(CntDb.GetMessage(deleteMessage)))
+                        throw new InvalidOperationException(CntDb.GetMessage(deleteMessage));
                 }
 
                 foreach (var detalle in detalles)
@@ -457,8 +484,15 @@ public class CreateCntComprobanteHandler(ConnectionDB connectionDB, IConfigurati
                     }
                 }
 
+                if (codigoComprobante.HasValue)
+                    await CntPendienteDb.FinishAsync(cn, tx, comprobanteId, empresa, usuarioId);
+                else
+                    await CntPendienteDb.AuditAsync(cn, tx, comprobanteId, empresa, usuarioId, "CREADO");
+                await CntPendienteDb.InvalidatePrecloseAsync(cn, tx, codigoPeriodo, empresa);
+                if (periodoAnterior.HasValue && periodoAnterior != codigoPeriodo)
+                    await CntPendienteDb.InvalidatePrecloseAsync(cn, tx, periodoAnterior.Value, empresa);
                 tx.Commit();
-                return new ResultDto<int>(comprobanteId) { IsValid = true, Message = "Success" };
+                return new ResultDto<int>(comprobanteId) { IsValid = true, Message = pendiente ? "Cambios guardados. El comprobante permanece pendiente de finalizacion." : "Success" };
             }
             catch
             {
@@ -491,7 +525,7 @@ public class UpdateCntComprobanteHandler(ConnectionDB connectionDB, IConfigurati
 
         var automaticPermission = await CntSecurity.CheckPermissionAsync(connectionDB, config, value.UsuarioId, CntSecurity.ComprobanteEditAutomatic);
 
-        return await CreateCntComprobanteHandler.SaveAsync(connectionDB, config, value.UsuarioId, value.CodigoComprobante, value.CodigoPeriodo, value.TipoComprobanteId, value.FechaComprobante, value.OrigenId, value.Observacion, value.Detalles, automaticPermission.IsValid);
+        return await CreateCntComprobanteHandler.SaveAsync(connectionDB, config, value.UsuarioId, value.CodigoComprobante, value.CodigoPeriodo, value.TipoComprobanteId, value.FechaComprobante, value.OrigenId, value.Observacion, value.Detalles, automaticPermission.IsValid, value.Version);
     }
 }
 
@@ -520,17 +554,26 @@ public class DeleteCntComprobanteHandler(ConnectionDB connectionDB, IConfigurati
 
             using var cn = connectionDB.GetCntConnection();
             await cn.OpenAsync();
-            using var cmd = new OracleCommand("CNT.SP_CNT_CMP_DEL", cn) { CommandType = CommandType.StoredProcedure, BindByName = true };
+            using var tx = cn.BeginTransaction();
+            var automaticPermission = await CntSecurity.CheckPermissionAsync(connectionDB, config, value.UsuarioId, CntSecurity.ComprobanteEditAutomatic);
+            await CntPendienteDb.CheckEditAsync(cn, tx, value.CodigoComprobante, empresa, value.Version, value.UsuarioId, automaticPermission.IsValid, "ELIMINAR");
+            using (var period = new OracleCommand("SELECT CODIGO_PERIODO FROM CNT.CNT_COMPROBANTES WHERE CODIGO_COMPROBANTE = :id AND CODIGO_EMPRESA = :empresa", cn) { BindByName = true, Transaction = tx })
+            {
+                period.Parameters.Add("id", OracleDbType.Int32).Value = value.CodigoComprobante;
+                period.Parameters.Add("empresa", OracleDbType.Int32).Value = empresa;
+                await CntPendienteDb.InvalidatePrecloseAsync(cn, tx, Convert.ToInt32(await period.ExecuteScalarAsync()), empresa);
+            }
+            using var cmd = new OracleCommand("CNT.SP_CNT_CMP_DEL", cn) { CommandType = CommandType.StoredProcedure, BindByName = true, Transaction = tx };
             cmd.Parameters.Add("p_CODIGO_COMPROBANTE", OracleDbType.Int32).Value = value.CodigoComprobante;
             cmd.Parameters.Add("p_USUARIO_ID", OracleDbType.Int32).Value = value.UsuarioId;
             cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
             var pMessage = cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
-            var automaticPermission = await CntSecurity.CheckPermissionAsync(connectionDB, config, value.UsuarioId, CntSecurity.ComprobanteEditAutomatic);
             cmd.Parameters.Add("p_PERMITIR_AUTOMATICO", OracleDbType.Int32).Value = automaticPermission.IsValid ? 1 : 0;
             await cmd.ExecuteNonQueryAsync();
 
             var message = CntDb.GetMessage(pMessage);
             var isSuccess = CntDb.IsSuccessMessage(message);
+            if (isSuccess) tx.Commit();
             return new ResultDto<string>(message) { Data = isSuccess ? message : null, IsValid = isSuccess, Message = message };
         }
         catch (Exception ex)
@@ -605,6 +648,7 @@ public class AddCntDetalleHandler(ConnectionDB connectionDB, IConfiguration conf
             value.UsuarioId,
             CntSecurity.ComprobanteEdit,
             "CNT.SP_CNT_DET_INS",
+            value.CodigoComprobante, null, value.Version,
             cmd =>
             {
                 cmd.Parameters.Add("p_CODIGO_COMPROBANTE", OracleDbType.Int32).Value = value.CodigoComprobante;
@@ -626,6 +670,7 @@ public class UpdateCntDetalleHandler(ConnectionDB connectionDB, IConfiguration c
             value.UsuarioId,
             CntSecurity.ComprobanteEdit,
             "CNT.SP_CNT_DET_UPD",
+            null, value.CodigoDetalleComprobante, value.Version,
             cmd =>
             {
                 cmd.Parameters.Add("p_CODIGO_DETALLE", OracleDbType.Int32).Value = value.CodigoDetalleComprobante;
@@ -638,44 +683,10 @@ public class DeleteCntDetalleHandler(ConnectionDB connectionDB, IConfiguration c
 {
     public async Task<ResultDto<string>> HandleAsync(CntDetalleDeleteCommand value, ClaimsPrincipal user, HttpRequest request)
     {
-        try
-        {
-            var userValidation = await CntSecurity.ValidateRequestUserAsync(connectionDB, config, user, request, value.UsuarioId);
-            if (!userValidation.IsValid)
-            {
-                return new ResultDto<string>(string.Empty) { IsValid = false, Message = userValidation.Message };
-            }
-
-            var permission = await CntSecurity.CheckPermissionAsync(connectionDB, config, value.UsuarioId, CntSecurity.ComprobanteEdit);
-            if (!permission.IsValid)
-            {
-                return permission;
-            }
-
-            if (!CntDb.TryGetEmpresa(config, out int empresa, out string errorMessage))
-            {
-                return new ResultDto<string>(string.Empty) { IsValid = false, Message = errorMessage };
-            }
-
-            using var cn = connectionDB.GetCntConnection();
-            await cn.OpenAsync();
-            using var cmd = new OracleCommand("CNT.SP_CNT_DET_DEL", cn) { CommandType = CommandType.StoredProcedure, BindByName = true };
-            cmd.Parameters.Add("p_CODIGO_DETALLE", OracleDbType.Int32).Value = value.CodigoDetalleComprobante;
-            cmd.Parameters.Add("p_USUARIO_ID", OracleDbType.Int32).Value = value.UsuarioId;
-            cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
-            var pMessage = cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
-            var automaticPermission = await CntSecurity.CheckPermissionAsync(connectionDB, config, value.UsuarioId, CntSecurity.ComprobanteEditAutomatic);
-            cmd.Parameters.Add("p_PERMITIR_AUTOMATICO", OracleDbType.Int32).Value = automaticPermission.IsValid ? 1 : 0;
-            await cmd.ExecuteNonQueryAsync();
-
-            var message = CntDb.GetMessage(pMessage);
-            var isSuccess = CntDb.IsSuccessMessage(message);
-            return new ResultDto<string>(message) { Data = isSuccess ? message : null, IsValid = isSuccess, Message = message };
-        }
-        catch (Exception ex)
-        {
-            return new ResultDto<string>(string.Empty) { Data = null, IsValid = false, Message = ex.Message };
-        }
+        var result = await CntDetalleWriteSupport.ExecuteDetailAsync(connectionDB, config, user, request,
+            value.UsuarioId, CntSecurity.ComprobanteEdit, "CNT.SP_CNT_DET_DEL", null, value.CodigoDetalleComprobante, value.Version,
+            cmd => cmd.Parameters.Add("p_CODIGO_DETALLE", OracleDbType.Int32).Value = value.CodigoDetalleComprobante);
+        return new ResultDto<string>(result.IsValid ? "OK" : "") { IsValid = result.IsValid, Message = result.Message };
     }
 }
 
@@ -689,6 +700,7 @@ internal static class CntDetalleWriteSupport
         int usuarioId,
         string permissionName,
         string procedure,
+        int? comprobante, int? detalle, int? version,
         Action<OracleCommand> configure)
     {
         try
@@ -712,19 +724,28 @@ internal static class CntDetalleWriteSupport
 
             using var cn = connectionDB.GetCntConnection();
             await cn.OpenAsync();
-            using var cmd = new OracleCommand(procedure, cn) { CommandType = CommandType.StoredProcedure, BindByName = true };
+            using var tx = cn.BeginTransaction();
+            await CntPendienteDb.LockAsync(cn, tx);
+            int id = comprobante ?? await CntPendienteDb.ResolveDetailAsync(cn, tx, detalle!.Value, empresa);
+            var automaticPermission = await CntSecurity.CheckPermissionAsync(connectionDB, config, usuarioId, CntSecurity.ComprobanteEditAutomatic);
+            await CntPendienteDb.CheckEditAsync(cn, tx, id, empresa, version, usuarioId, automaticPermission.IsValid, "DETALLE");
+            using var cmd = new OracleCommand(procedure, cn) { CommandType = CommandType.StoredProcedure, BindByName = true, Transaction = tx };
             configure(cmd);
             cmd.Parameters.Add("p_USUARIO_ID", OracleDbType.Int32).Value = usuarioId;
             cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
-            var pCodigoOut = cmd.Parameters.Add("p_CODIGO_OUT", OracleDbType.Int32, ParameterDirection.Output);
+            var pCodigoOut = procedure == "CNT.SP_CNT_DET_DEL" ? null : cmd.Parameters.Add("p_CODIGO_OUT", OracleDbType.Int32, ParameterDirection.Output);
             var pMessage = cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
-            var automaticPermission = await CntSecurity.CheckPermissionAsync(connectionDB, config, usuarioId, CntSecurity.ComprobanteEditAutomatic);
             cmd.Parameters.Add("p_PERMITIR_AUTOMATICO", OracleDbType.Int32).Value = automaticPermission.IsValid ? 1 : 0;
             await cmd.ExecuteNonQueryAsync();
 
             var message = CntDb.GetMessage(pMessage);
             var isSuccess = CntDb.IsSuccessMessage(message);
-            return new ResultDto<int>(CntDb.GetIntOutput(pCodigoOut)) { Data = isSuccess ? CntDb.GetIntOutput(pCodigoOut) : 0, IsValid = isSuccess, Message = message };
+            if (isSuccess)
+            {
+                await CntPendienteDb.FinishAsync(cn, tx, id, empresa, usuarioId);
+                tx.Commit();
+            }
+            return new ResultDto<int>((pCodigoOut is null ? id : CntDb.GetIntOutput(pCodigoOut))) { Data = isSuccess ? (pCodigoOut is null ? id : CntDb.GetIntOutput(pCodigoOut)) : 0, IsValid = isSuccess, Message = message };
         }
         catch (Exception ex)
         {
@@ -740,6 +761,6 @@ internal static class CntDetalleWriteSupport
         cmd.Parameters.Add("p_REFERENCIA2", OracleDbType.Varchar2).Value = CntDb.StringDbValue(detalle.Referencia2);
         cmd.Parameters.Add("p_REFERENCIA3", OracleDbType.Varchar2).Value = CntDb.StringDbValue(detalle.Referencia3);
         cmd.Parameters.Add("p_DESCRIPCION", OracleDbType.Varchar2).Value = CntDb.StringDbValue(detalle.Descripcion);
-        cmd.Parameters.Add("p_MONTO", OracleDbType.Decimal).Value = detalle.Monto;
+        cmd.Parameters.Add("p_MONTO", OracleDbType.Decimal).Value = CntMoney.Normalize(detalle.Monto);
     }
 }

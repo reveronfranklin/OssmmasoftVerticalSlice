@@ -1,7 +1,11 @@
 PROMPT Instalando core del modulo de Contabilidad CNT...
 PROMPT Requiere que las tablas, indices y secuencias base de CNT existan previamente.
 
+@@INSTALL_CNT_CMP_PEND.sql
+@@SP_CNT_CMP_GUARD.sql
 @@SP_CNT_CORE.sql
+@@SP_CNT_CMP_VIEWS.sql
+@@SP_CNT_CMP_TRIGGERS.sql
 @@SP_CNT_CATALOGOS.sql
 @@SP_CNT_RUBROS.sql
 @@SP_CNT_BALANCES.sql

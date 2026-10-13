@@ -8,7 +8,10 @@ namespace OssmmasoftVerticalSlice.Features.BienesMunicipales;
 
 [ApiController]
 [Route("api/BmBienesFotos")]
-public class BmBienesFotosController(ConnectionDB connectionDB, IConfiguration config) : ControllerBase
+public class BmBienesFotosController(
+    ConnectionDB connectionDB,
+    IConfiguration config,
+    ILogger<BmBienesFotosController> logger) : ControllerBase
 {
     [HttpPost("GetByNumeroPlaca")]
     public async Task<IActionResult> GetByNumeroPlaca(BmBienFotoByPlacaRequest request)
@@ -149,21 +152,34 @@ public class BmBienesFotosController(ConnectionDB connectionDB, IConfiguration c
 
     private async Task<OssmmasoftVerticalSlice.Helpers.ResultDto<List<BmBienFotoResponse>>> GetByPlacaAsync(string numeroPlaca)
     {
-        if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
+        if (string.IsNullOrWhiteSpace(numeroPlaca))
         {
-            return BmDb.InvalidList<BmBienFotoResponse>(error);
+            return BmDb.InvalidList<BmBienFotoResponse>("Debe indicar el numero de placa.");
         }
 
-        using var cn = connectionDB.GetBmConnection();
-        var openError = await BmDb.TryOpenAsync(cn, "BM");
-        if (openError is not null) return BmDb.InvalidList<BmBienFotoResponse>(openError);
+        try
+        {
+            if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
+            {
+                return BmDb.InvalidList<BmBienFotoResponse>(error);
+            }
 
-        using var cmd = BmDb.StoredProcedure("BM.SP_BM_FOTO_GET_PLACA", cn);
-        cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
-        cmd.Parameters.Add("p_NumeroPlaca", OracleDbType.Varchar2).Value = BmDb.DbValue(numeroPlaca);
-        cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
+            using var cn = connectionDB.GetBmConnection();
+            var openError = await BmDb.TryOpenAsync(cn, "BM");
+            if (openError is not null) return BmDb.InvalidList<BmBienFotoResponse>(openError);
 
-        return await BmDb.ExecuteListAsync(cmd, MapFoto);
+            using var cmd = BmDb.StoredProcedure("BM.SP_BM_FOTO_GET_PLACA", cn);
+            cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
+            cmd.Parameters.Add("p_NumeroPlaca", OracleDbType.Varchar2).Value = BmDb.DbValue(numeroPlaca);
+            cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
+
+            return await BmDb.ExecuteListAsync(cmd, MapFoto);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error al consultar fotos del bien con placa {NumeroPlaca}", numeroPlaca);
+            return BmDb.InvalidList<BmBienFotoResponse>($"Error tecnico al consultar las fotos del bien: {ex.Message}");
+        }
     }
 
     private static BmBienFotoResponse MapFoto(IDataReader reader)
@@ -188,12 +204,13 @@ public class BmBienesFotosController(ConnectionDB connectionDB, IConfiguration c
             return string.Empty;
         }
 
-        if (Uri.TryCreate(foto, UriKind.Absolute, out _))
+        if (Uri.TryCreate(foto, UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
         {
             return foto;
         }
 
-        var fileName = Path.GetFileName(foto);
+        var fileName = Path.GetFileName(foto.Replace('\\', '/'));
         if (string.IsNullOrWhiteSpace(fileName))
         {
             return string.Empty;

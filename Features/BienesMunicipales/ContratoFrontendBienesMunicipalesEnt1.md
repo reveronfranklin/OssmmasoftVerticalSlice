@@ -20,6 +20,22 @@ Todas las respuestas backend usan `ResultDto<T>`:
 
 ## BM1
 
+### `GET api/Bm1/GetListICPInventario`
+
+Catalogo para la pantalla BM1. Sin cuerpo ni paginacion. Consulta
+`BM.SP_BM1_GET_LIST_ICP` por `DefaultConnectionBM`, la misma fuente que
+`GetByListIcp`. Empresa tomada de `settings:EmpresaConfig`.
+
+Respuesta: `ResultDto<List<BmIcpResponse>>`; ejemplo:
+
+```json
+{"data":[{"codigoIcp":2283,"unidadTrabajo":"DIRECCION DE ADMINISTRACION"}],"isValid":true,"message":"Success","cantidadRegistros":1,"page":0}
+```
+
+Los errores devuelven `isValid: false`, `data: null` y `message` con el motivo.
+El frontend debe usar los ICP de este catalogo para BM1. El endpoint existente
+`GetListICP` conserva BMC para las pantallas de conteo.
+
 ### `GET api/Bm1/GetListICP`
 
 Devuelve ICP/unidades con bienes vigentes.
@@ -48,6 +64,12 @@ Item:
 ```
 
 ### `GET api/Bm1/GetFechaPrimerMovimiento`
+
+La salida Oracle `DATE` se lee como `OracleDate.Value`; un valor nulo se devuelve
+como `data: null`. Los errores de consulta devuelven `isValid: false` y `message`
+en el `ResultDto`, sin propagar una excepcion HTTP 500. Esta fecha solo inicializa
+el filtro Desde: la carga de ICP es independiente y permite consultar con las
+fechas seleccionadas manualmente.
 
 Devuelve la primera fecha de movimiento registrada para la empresa configurada.
 
@@ -379,3 +401,11 @@ Request:
   "numeroPlaca": ""
 }
 ```
+
+### Formato de fechas del filtro BM1
+
+`fechaDesde` y `fechaHasta` se envian como `yyyy-MM-dd`, con el año siempre
+rellenado a cuatro digitos. Por ejemplo, el año 13 se envia como `0013-11-12`,
+no `13-11-12`. Una fecha invalida o fuera de 0001 a 9999 se rechaza en el
+frontend antes de enviar la peticion. No se transforma automaticamente 0013
+en 2013: la fecha inicial procede del minimo de movimientos registrado en BD.

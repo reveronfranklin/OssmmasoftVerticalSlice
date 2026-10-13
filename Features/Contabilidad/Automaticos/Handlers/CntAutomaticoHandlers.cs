@@ -99,34 +99,6 @@ public class ConfirmCntAutomaticoHandler(ConnectionDB connectionDB, IConfigurati
 
             while (current <= end)
             {
-                var replace = await CntAutomaticoSupport.DeleteExistingAutomaticForDayAsync(
-                    connectionDB,
-                    config,
-                    value.CodigoPeriodo,
-                    value.TipoComprobanteId,
-                    value.OrigenId,
-                    current,
-                    value.UsuarioId,
-                    empresa);
-
-                if (!replace.IsValid)
-                {
-                    results.Add(new CntAutomaticDailyConfirmResponse(
-                        current,
-                        0,
-                        string.Empty,
-                        0,
-                        0m,
-                        0m,
-                        0m,
-                        "ERROR",
-                        replace.Message));
-
-                    await CntAutomaticoSupport.LogAsync(connectionDB, config, "CONFIRM_DIA", value.CodigoPeriodo, value.TipoComprobanteId, value.OrigenId, current, current, current, null, null, 0, 0m, 0m, value.UsuarioId, "ERROR", replace.Message);
-                    current = current.AddDays(1);
-                    continue;
-                }
-
                 var daily = await CntAutomaticoSupport.ConfirmDayAsync(
                     connectionDB,
                     value.CodigoPeriodo,
@@ -136,7 +108,7 @@ public class ConfirmCntAutomaticoHandler(ConnectionDB connectionDB, IConfigurati
                     value.UsuarioId,
                     empresa,
                     value.Observacion,
-                    replace.Data == "REEMPLAZADO");
+                    false);
 
                 results.Add(daily);
 
@@ -377,92 +349,6 @@ internal static class CntAutomaticoSupport
         cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
     }
 
-    public static async Task<ResultDto<string>> DeleteExistingAutomaticForDayAsync(
-        ConnectionDB connectionDB,
-        IConfiguration config,
-        int codigoPeriodo,
-        int tipoComprobanteId,
-        int origenId,
-        DateTime fechaComprobante,
-        int usuarioId,
-        int empresa)
-    {
-        try
-        {
-            using var cn = connectionDB.GetCntConnection();
-            await cn.OpenAsync();
-
-            var existing = new List<(int CodigoComprobante, string Extra1)>();
-            using (var query = new OracleCommand(@"
-                SELECT CODIGO_COMPROBANTE,
-                       NVL(EXTRA1, ' ') EXTRA1
-                  FROM CNT.CNT_COMPROBANTES
-                 WHERE CODIGO_PERIODO = :p_CODIGO_PERIODO
-                   AND TIPO_COMPROBANTE_ID = :p_TIPO_COMPROBANTE_ID
-                   AND NVL(ORIGEN_ID, 0) = :p_ORIGEN_ID
-                   AND TRUNC(FECHA_COMPROBANTE) = TRUNC(:p_FECHA_COMPROBANTE)
-                   AND CODIGO_EMPRESA = :p_CODIGO_EMPRESA", cn))
-            {
-                query.BindByName = true;
-                query.Parameters.Add("p_CODIGO_PERIODO", OracleDbType.Int32).Value = codigoPeriodo;
-                query.Parameters.Add("p_TIPO_COMPROBANTE_ID", OracleDbType.Int32).Value = tipoComprobanteId;
-                query.Parameters.Add("p_ORIGEN_ID", OracleDbType.Int32).Value = origenId;
-                query.Parameters.Add("p_FECHA_COMPROBANTE", OracleDbType.Date).Value = fechaComprobante.Date;
-                query.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
-
-                using var reader = await query.ExecuteReaderAsync();
-                while (await reader.ReadAsync())
-                {
-                    existing.Add((reader.SafeGetInt32("CODIGO_COMPROBANTE"), reader.SafeGetString("EXTRA1").Trim()));
-                }
-            }
-
-            if (existing.Count == 0)
-            {
-                return new ResultDto<string>("OK") { IsValid = true, Message = "Success" };
-            }
-
-            if (existing.Any(x => !string.Equals(x.Extra1, "AUTOMATICO", StringComparison.OrdinalIgnoreCase)))
-            {
-                return new ResultDto<string>(string.Empty)
-                {
-                    Data = null,
-                    IsValid = false,
-                    Message = $"Existe un comprobante manual para la fecha {fechaComprobante:yyyy-MM-dd}. No se reemplaza."
-                };
-            }
-
-            foreach (var item in existing)
-            {
-                using var deleteDetails = new OracleCommand(@"
-                    DELETE FROM CNT.CNT_DETALLE_COMPROBANTE
-                     WHERE CODIGO_COMPROBANTE = :p_CODIGO_COMPROBANTE
-                       AND CODIGO_EMPRESA = :p_CODIGO_EMPRESA", cn);
-                deleteDetails.BindByName = true;
-                deleteDetails.Parameters.Add("p_CODIGO_COMPROBANTE", OracleDbType.Int32).Value = item.CodigoComprobante;
-                deleteDetails.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
-                await deleteDetails.ExecuteNonQueryAsync();
-
-                using var deleteHeader = new OracleCommand(@"
-                    DELETE FROM CNT.CNT_COMPROBANTES
-                     WHERE CODIGO_COMPROBANTE = :p_CODIGO_COMPROBANTE
-                       AND CODIGO_EMPRESA = :p_CODIGO_EMPRESA", cn);
-                deleteHeader.BindByName = true;
-                deleteHeader.Parameters.Add("p_CODIGO_COMPROBANTE", OracleDbType.Int32).Value = item.CodigoComprobante;
-                deleteHeader.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
-                await deleteHeader.ExecuteNonQueryAsync();
-
-                await LogAsync(connectionDB, config, "REEMPLAZO_DIA", codigoPeriodo, tipoComprobanteId, origenId, fechaComprobante.Date, fechaComprobante.Date, fechaComprobante.Date, item.CodigoComprobante, null, 0, 0m, 0m, usuarioId, "REEMPLAZADO", "Comprobante automatico existente eliminado para regeneracion.");
-            }
-
-            return new ResultDto<string>("REEMPLAZADO") { IsValid = true, Message = "Comprobante automatico previo reemplazado." };
-        }
-        catch (Exception ex)
-        {
-            return new ResultDto<string>(string.Empty) { Data = null, IsValid = false, Message = ex.Message };
-        }
-    }
-
     public static async Task<CntAutomaticDailyConfirmResponse> ConfirmDayAsync(
         ConnectionDB connectionDB,
         int codigoPeriodo,
@@ -479,7 +365,65 @@ internal static class CntAutomaticoSupport
         {
             using var cn = connectionDB.GetCntConnection();
             await cn.OpenAsync();
-            using var cmd = new OracleCommand("CNT.SP_CNT_AUT_CONF", cn) { CommandType = CommandType.StoredProcedure, BindByName = true };
+            using var tx = cn.BeginTransaction();
+            await CntPendienteDb.LockAsync(cn, tx);
+            // Recheck under the same lock used by cierre and manual edits.
+            await CntPendienteDb.ValidatePeriodAsync(cn, tx, codigoPeriodo, empresa, dia);
+            using (var lookup = new OracleCommand(@"
+                SELECT c.CODIGO_COMPROBANTE, c.NUMERO_COMPROBANTE, c.ESTADO_CMP,
+                       c.AJUSTE_MANUAL, c.EXTRA1,
+                       (SELECT COUNT(*) FROM CNT.CNT_DETALLE_LIBRO l WHERE l.CODIGO_IDENTIFICADOR = c.CODIGO_COMPROBANTE
+                          AND l.CODIGO_EMPRESA = c.CODIGO_EMPRESA AND l.TIPO_DOCUMENTO_ID = c.TIPO_COMPROBANTE_ID
+                          AND NVL(l.ORIGEN_ID, -1) = NVL(c.ORIGEN_ID, -1)) REL_LIBRO,
+                       NVL(SUM(CASE WHEN d.MONTO < 0 THEN -d.MONTO ELSE 0 END),0) TOTAL_DEBE,
+                       NVL(SUM(CASE WHEN d.MONTO > 0 THEN d.MONTO ELSE 0 END),0) TOTAL_HABER,
+                       COUNT(d.CODIGO_DETALLE_COMPROBANTE) CANTIDAD
+                  FROM CNT.CNT_COMPROBANTES c
+                  LEFT JOIN CNT.CNT_DETALLE_COMPROBANTE d ON d.CODIGO_COMPROBANTE = c.CODIGO_COMPROBANTE AND d.CODIGO_EMPRESA = c.CODIGO_EMPRESA
+                 WHERE c.CODIGO_PERIODO = :periodo AND c.TIPO_COMPROBANTE_ID = :tipo
+                   AND c.ORIGEN_ID = :origen AND TRUNC(c.FECHA_COMPROBANTE) = :dia
+                   AND c.CODIGO_EMPRESA = :empresa
+                 GROUP BY c.CODIGO_COMPROBANTE, c.NUMERO_COMPROBANTE, c.ESTADO_CMP, c.AJUSTE_MANUAL, c.EXTRA1, c.CODIGO_EMPRESA, c.TIPO_COMPROBANTE_ID, c.ORIGEN_ID", cn) { BindByName = true, Transaction = tx })
+            {
+                lookup.Parameters.Add("periodo", OracleDbType.Int32).Value = codigoPeriodo;
+                lookup.Parameters.Add("tipo", OracleDbType.Int32).Value = tipoComprobanteId;
+                lookup.Parameters.Add("origen", OracleDbType.Int32).Value = origenId;
+                lookup.Parameters.Add("dia", OracleDbType.Date).Value = dia.Date;
+                lookup.Parameters.Add("empresa", OracleDbType.Int32).Value = empresa;
+                var ids = new List<int>();
+                using (var reader = await lookup.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        int id = reader.SafeGetInt32("CODIGO_COMPROBANTE");
+                        ids.Add(id);
+                        if (reader.SafeGetInt32("AJUSTE_MANUAL") == 1 || reader.SafeGetString("EXTRA1") != "AUTOMATICO" || reader.SafeGetInt32("REL_LIBRO") > 0)
+                        {
+                            return new CntAutomaticDailyConfirmResponse(dia.Date, id, reader.SafeGetString("NUMERO_COMPROBANTE"), reader.SafeGetInt32("CANTIDAD"),
+                                reader.SafeGetDecimal("TOTAL_DEBE"), reader.SafeGetDecimal("TOTAL_HABER"), reader.SafeGetDecimal("TOTAL_DEBE") - reader.SafeGetDecimal("TOTAL_HABER"),
+                                "PROTEGIDO", "Se conserva el comprobante existente manual, historico, con ajustes o con relaciones de libro banco.", reader.SafeGetString("ESTADO_CMP"), reader.SafeGetInt32("AJUSTE_MANUAL") == 1);
+                        }
+                    }
+                }
+                if (ids.Count > 1)
+                    return new CntAutomaticDailyConfirmResponse(dia.Date, 0, "", 0, 0m, 0m, 0m, "ERROR", "Existen comprobantes duplicados para el dia. Revise antes de regenerar.");
+                foreach (int id in ids)
+                {
+                    await CntPendienteDb.AllowWriteAsync(cn, tx, id, empresa);
+                    await CntPendienteDb.AuditAsync(cn, tx, id, empresa, usuarioId, "REGENERAR_ANTES");
+                    using var delete = new OracleCommand("CNT.SP_CNT_CMP_DEL", cn) { CommandType = CommandType.StoredProcedure, BindByName = true, Transaction = tx };
+                    delete.Parameters.Add("p_CODIGO_COMPROBANTE", OracleDbType.Int32).Value = id;
+                    delete.Parameters.Add("p_USUARIO_ID", OracleDbType.Int32).Value = usuarioId;
+                    delete.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
+                    var deleteMessage = delete.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
+                    delete.Parameters.Add("p_PERMITIR_AUTOMATICO", OracleDbType.Int32).Value = 1;
+                    await delete.ExecuteNonQueryAsync();
+                    if (!CntDb.IsSuccessMessage(CntDb.GetMessage(deleteMessage)))
+                        return new CntAutomaticDailyConfirmResponse(dia.Date, id, "", 0, 0m, 0m, 0m, "ERROR", CntDb.GetMessage(deleteMessage));
+                }
+                wasReplaced = ids.Count > 0;
+            }
+            using var cmd = new OracleCommand("CNT.SP_CNT_AUT_CONF", cn) { CommandType = CommandType.StoredProcedure, BindByName = true, Transaction = tx };
             AddBaseParams(cmd, codigoPeriodo, tipoComprobanteId, origenId, dia.Date, dia.Date, usuarioId, empresa);
             cmd.Parameters.Add("p_FECHA_COMPROBANTE", OracleDbType.Date).Value = dia.Date;
             cmd.Parameters.Add("p_OBSERVACION", OracleDbType.Varchar2).Value = CntDb.StringDbValue(observacion);
@@ -507,15 +451,25 @@ internal static class CntAutomaticoSupport
 
             if (!isSuccess)
             {
-                return new CntAutomaticDailyConfirmResponse(dia.Date, codigo, numero, cantidad, totalDebe, totalHaber, totalDebe - totalHaber, "ERROR", message);
+                return new CntAutomaticDailyConfirmResponse(dia.Date, 0, string.Empty, 0, 0m, 0m, 0m, "ERROR", message);
             }
 
-            return new CntAutomaticDailyConfirmResponse(dia.Date, codigo, numero, cantidad, totalDebe, totalHaber, totalDebe - totalHaber, wasReplaced ? "REEMPLAZADO" : "GENERADO", message);
+            if (codigo <= 0 || cantidad <= 0)
+                return new CntAutomaticDailyConfirmResponse(dia.Date, 0, string.Empty, 0, 0m, 0m, 0m, "ERROR", "La generacion no devolvio un comprobante valido.");
+            await CntPendienteDb.AuditAsync(cn, tx, codigo, empresa, usuarioId, "GENERADO");
+            await CntPendienteDb.InvalidatePrecloseAsync(cn, tx, codigoPeriodo, empresa);
+            tx.Commit();
+            return new CntAutomaticDailyConfirmResponse(dia.Date, codigo, numero, cantidad, totalDebe, totalHaber, totalDebe - totalHaber, wasReplaced ? "REEMPLAZADO" : "GENERADO", message,
+                totalDebe == totalHaber ? "FINALIZADO" : "PENDIENTE");
         }
         catch (OracleException ex) when (ex.Number == 8103 && retryAfterObjectRefresh)
         {
             OracleConnection.ClearAllPools();
             return await ConfirmDayAsync(connectionDB, codigoPeriodo, tipoComprobanteId, origenId, dia, usuarioId, empresa, observacion, wasReplaced, retryAfterObjectRefresh: false);
+        }
+        catch (Exception ex)
+        {
+            return new CntAutomaticDailyConfirmResponse(dia.Date, 0, "", 0, 0m, 0m, 0m, "ERROR", $"Error tecnico: {ex.Message}");
         }
     }
 
@@ -575,7 +529,7 @@ internal static class CntAutomaticoSupport
 
     public static CntAutomaticLineResponse MapLine(IDataReader reader)
     {
-        var monto = reader.SafeGetDecimal("MONTO");
+        var monto = CntMoney.Normalize(reader.SafeGetDecimal("MONTO"));
         return new CntAutomaticLineResponse(
             reader.SafeGetInt32("SECUENCIA"),
             reader.SafeGetInt32("CODIGO_MAYOR"),

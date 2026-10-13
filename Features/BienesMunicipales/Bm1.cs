@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Oracle.ManagedDataAccess.Client;
+using Oracle.ManagedDataAccess.Types;
 using OssmmasoftVerticalSlice.ContextDB;
 using OssmmasoftVerticalSlice.Helpers;
 using System.Data;
@@ -14,16 +15,28 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config, IWe
     [HttpGet("GetListICP")]
     public async Task<IActionResult> GetListIcp()
     {
+        return await ReadListIcpAsync(esConteo: true);
+    }
+
+    [HttpGet("GetListICPInventario")]
+    public async Task<IActionResult> GetListIcpInventario()
+    {
+        return await ReadListIcpAsync(esConteo: false);
+    }
+
+    private async Task<IActionResult> ReadListIcpAsync(bool esConteo)
+    {
         if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
         {
             return Ok(BmDb.InvalidList<BmIcpResponse>(error));
         }
 
-        using var cn = connectionDB.GetBmcConnection();
-        var openError = await BmDb.TryOpenAsync(cn, "BMC");
+        var dominio = esConteo ? "BMC" : "BM";
+        using var cn = esConteo ? connectionDB.GetBmcConnection() : connectionDB.GetBmConnection();
+        var openError = await BmDb.TryOpenAsync(cn, dominio);
         if (openError is not null) return Ok(BmDb.InvalidList<BmIcpResponse>(openError));
 
-        using var cmd = BmDb.StoredProcedure("BMC.SP_BM1_GET_LIST_ICP", cn);
+        using var cmd = BmDb.StoredProcedure($"{dominio}.SP_BM1_GET_LIST_ICP", cn);
         cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
 
@@ -37,7 +50,7 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config, IWe
         catch (Exception ex)
         {
             return Ok(BmDb.InvalidList<BmIcpResponse>(
-                $"Error tecnico al consultar ICP en BMC: {ex.Message}"));
+                $"Error tecnico al consultar ICP en {dominio}: {ex.Message}"));
         }
     }
 
@@ -92,30 +105,47 @@ public class Bm1Controller(ConnectionDB connectionDB, IConfiguration config, IWe
     [HttpGet("GetFechaPrimerMovimiento")]
     public async Task<IActionResult> GetFechaPrimerMovimiento()
     {
-        if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
+        try
         {
-            return Ok(new ResultDto<DateTime?>(null) { IsValid = false, Message = error });
+            if (!BmDb.TryGetEmpresa(config, out var empresa, out var error))
+            {
+                return Ok(new ResultDto<DateTime?>(null) { IsValid = false, Message = error });
+            }
+
+            using var cn = connectionDB.GetBmConnection();
+            var openError = await BmDb.TryOpenAsync(cn, "BM");
+            if (openError is not null) return Ok(new ResultDto<DateTime?>(null) { IsValid = false, Message = openError });
+
+            using var cmd = BmDb.StoredProcedure("BM.SP_BM1_GET_FIRST_MOV", cn);
+            cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
+            var pFecha = cmd.Parameters.Add("p_Fecha", OracleDbType.Date, ParameterDirection.Output);
+            var pMessage = cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
+
+            await cmd.ExecuteNonQueryAsync();
+            var message = BmDb.GetMessage(pMessage);
+            DateTime? fecha = pFecha.Value switch
+            {
+                null or DBNull => null,
+                OracleDate oracleDate => oracleDate.IsNull ? null : oracleDate.Value,
+                DateTime date => date,
+                _ => Convert.ToDateTime(pFecha.Value, CultureInfo.InvariantCulture)
+            };
+
+            return Ok(new ResultDto<DateTime?>(fecha)
+            {
+                Data = BmDb.IsSuccessMessage(message) ? fecha : null,
+                IsValid = BmDb.IsSuccessMessage(message),
+                Message = message
+            });
         }
-
-        using var cn = connectionDB.GetBmConnection();
-        var openError = await BmDb.TryOpenAsync(cn, "BM");
-        if (openError is not null) return Ok(new ResultDto<DateTime?>(null) { IsValid = false, Message = openError });
-
-        using var cmd = BmDb.StoredProcedure("BM.SP_BM1_GET_FIRST_MOV", cn);
-        cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
-        var pFecha = cmd.Parameters.Add("p_Fecha", OracleDbType.Date, ParameterDirection.Output);
-        var pMessage = cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
-
-        await cmd.ExecuteNonQueryAsync();
-        var message = BmDb.GetMessage(pMessage);
-        var fecha = pFecha.Value == DBNull.Value ? null : (DateTime?)Convert.ToDateTime(pFecha.Value, CultureInfo.InvariantCulture);
-
-        return Ok(new ResultDto<DateTime?>(fecha)
+        catch (Exception ex)
         {
-            Data = BmDb.IsSuccessMessage(message) ? fecha : null,
-            IsValid = BmDb.IsSuccessMessage(message),
-            Message = message
-        });
+            return Ok(new ResultDto<DateTime?>(null)
+            {
+                IsValid = false,
+                Message = $"Error tecnico al consultar la fecha del primer movimiento: {ex.Message}"
+            });
+        }
     }
 
     [HttpPost("GetByListIcp")]

@@ -23,6 +23,7 @@ namespace OssmmasoftVerticalSlice.Features.MotorFormularios;
 ///
 /// Sin usuario identificado no se puede comprobar nada, asi que un formulario
 /// **con** permisos definidos se deniega.
+/// El superusuario, verificado en SIS, tiene acceso a todas las acciones y reportes.
 /// </summary>
 public static class MfoAutorizacion
 {
@@ -41,6 +42,9 @@ public static class MfoAutorizacion
     {
         try
         {
+            var superusuario = await EsSuperusuarioAsync(conexiones, usuario);
+            if (superusuario.Es) return Ok;
+
             var definidos = await ContarPermisosAsync(conexiones, formularioId);
 
             // Formulario sin permisos configurados: abierto.
@@ -201,6 +205,9 @@ public static class MfoAutorizacion
     {
         try
         {
+            var superusuario = await EsSuperusuarioAsync(conexiones, usuario);
+            if (superusuario.Es) return Ok;
+
             if (string.IsNullOrWhiteSpace(usuario))
             {
                 return Ok;
