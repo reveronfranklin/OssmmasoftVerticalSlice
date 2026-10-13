@@ -1889,3 +1889,74 @@ segunda no encuentra fila que actualizar); y **el documento indicado pertenece
 a otro emisor** -mismo mensaje y mismo criterio que `notaCreate` para el
 documento origen-, medido con el documento de un emisor distinto al de la
 notificacion.
+
+**Fase C (2026-10-13) - dos rechazos nuevos:**
+
+- `"El documento {numeracion} ya regulariza otra contingencia."` - un documento
+  fisico tiene una sola contraparte digital. Dos conciliaciones simultaneas con
+  el mismo documento se serializan con un candado por documento
+  (`pg_advisory_xact_lock`) dentro de la transaccion: la segunda espera y
+  recibe este rechazo.
+- `"El documento {numeracion} es del dd/MM/yyyy, anterior a la fecha del
+  documento fisico (dd/MM/yyyy): no puede regularizarlo."` - la fecha del
+  documento se toma en hora de Venezuela.
+
+Las conciliaciones anteriores a la Fase C que incumplen estas reglas (datos de
+prueba de la Fase 8) quedan como estan: la tabla es append-only.
+
+## contingenciaDocumentosCandidatos
+
+Fase C (2026-10-13). Los documentos que pueden regularizar una contingencia,
+para elegirlos de una lista en vez de escribir el `documentoId`.
+
+```http
+POST /api/FacturacionElectronica/contingenciaDocumentosCandidatos
+```
+
+### Request
+
+```json
+{ "contingenciaId": 12, "searchText": "", "pageSize": 50, "pageNumber": 1 }
+```
+
+Va la contingencia y no el emisor: el emisor y la fecha del documento fisico
+salen de la base. `searchText` filtra por numeracion -tal como se muestra en
+`numeracionConSerie`, con o sin `serie X`-, numero de control, nombre o RIF del
+adquiriente; vacio trae todos. `pageSize` tope 100. El ejemplo es el documento
+173 de la base local (sin serie).
+
+### Response
+
+```json
+{
+  "data": [
+    {
+      "id": 173,
+      "tipoDocumento": "factura",
+      "denominacion": "FACTURA",
+      "numeracionConSerie": "1",
+      "numeroControl": "00-00000001",
+      "emitidoEn": "14/09/2026 20:54",
+      "adqNombre": "Cliente Prueba OSS183",
+      "adqRif": "V-1",
+      "totalGeneral": 11.60,
+      "moneda": "VES"
+    }
+  ],
+  "isValid": true,
+  "cantidadRegistros": 1,
+  "page": 1,
+  "totalPage": 1
+}
+```
+
+Las tres condiciones son **las mismas que valida `contingenciaConciliar`**, para
+que la lista no ofrezca nada que despues se rechace: mismo emisor, emitido el
+dia del documento fisico o despues, y no usado por otra contingencia. Orden:
+del mas antiguo al mas reciente, porque los mas cercanos a la falla son los
+candidatos naturales. No filtra por tipo ni por `esPrueba`.
+
+### Rechazos
+
+Los mismos dos de `contingenciaConciliar` sobre la notificacion: inexistente, o
+ya conciliada. Sin ellos, una lista vacia no explicaria por que.

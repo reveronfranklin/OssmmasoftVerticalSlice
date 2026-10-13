@@ -116,6 +116,22 @@ public record ContingenciaListaResponse(
     string UsuarioIns,
     bool Conciliado);
 
+// Fase C - un documento que puede regularizar una contingencia: del mismo
+// emisor, emitido el dia del documento fisico o despues, y que no regulariza
+// ya otra contingencia. Es un subconjunto de FacturaListaResponse: para elegir
+// basta con reconocerlo, no hace falta su estado ni su saldo.
+public record ContingenciaCandidatoResponse(
+    long Id,
+    string TipoDocumento,
+    string Denominacion,
+    string NumeracionConSerie,
+    string NumeroControl,
+    string EmitidoEn,
+    string AdqNombre,
+    string AdqRif,
+    decimal TotalGeneral,
+    string Moneda);
+
 // Un periodo mensual del Art. 29.7. La fila existe desde antes de que haya algo
 // que reportar: eso es lo que convierte un periodo omitido en algo visible.
 public record ReporteMensualResponse(
@@ -796,7 +812,7 @@ public static class FacturacionElectronicaDb
         RETURNING ID, NOTIFICADO_EN;";
 
     public const string SqlContingenciaPorId = @"
-        SELECT ID, EMISOR_ID, CONCILIADO_EN FROM FED.FED_CONTINGENCIA WHERE ID = @id;";
+        SELECT ID, EMISOR_ID, CONCILIADO_EN, FECHA_EMISION_FISICA FROM FED.FED_CONTINGENCIA WHERE ID = @id;";
 
     public const string SqlContingenciaGetAll = @"
         SELECT
@@ -811,11 +827,63 @@ public static class FacturacionElectronicaDb
         ORDER BY c.NOTIFICADO_EN DESC
         LIMIT @page_size OFFSET @row_offset;";
 
-    // El documento que regulariza tiene que existir y ser del mismo emisor: una
-    // contingencia de un emisor no se concilia con el documento de otro (mismo
-    // criterio de FacturacionElectronicaNotaCreate para el documento origen).
-    public const string SqlContingenciaDocumentoDeEmisor = @"
-        SELECT ID FROM FED.FED_DOCUMENTO WHERE ID = @documento_id AND EMISOR_ID = @emisor_id;";
+    // Fase C - los documentos que pueden regularizar una contingencia. Las tres
+    // condiciones son las mismas que valida ContingenciaConciliar, para que la
+    // lista no ofrezca nada que el backend despues rechace:
+    //   - del mismo emisor que la contingencia;
+    //   - emitido el dia del documento fisico o despues: el documento digital
+    //     regulariza el fisico DESPUES de la falla. La fecha se toma en hora de
+    //     Venezuela de forma explicita, sin depender de la zona de la sesion
+    //     (leccion de la Fase H);
+    //   - que no regularice ya otra contingencia: un documento fisico tiene una
+    //     sola contraparte digital.
+    // No se filtra por tipo ni por ES_PRUEBA: la norma no restringe el tipo, y
+    // hoy todos los documentos son de prueba.
+    // Los mas cercanos a la falla van primero: son los candidatos naturales.
+    public const string SqlContingenciaCandidatos = @"
+        SELECT
+            d.ID, d.TIPO_DOCUMENTO, d.SERIE, d.NUMERACION, d.EMITIDO_EN,
+            d.ADQ_NOMBRE, d.ADQ_RIF, d.TOTAL_GENERAL, d.MONEDA,
+            COALESCE(nc.IDENTIFICADOR || '-' || LPAD(nc.SECUENCIAL::text, 8, '0'), '') AS NUMERO_CONTROL,
+            COUNT(*) OVER() AS TOTAL_REGISTROS
+        FROM FED.FED_CONTINGENCIA c
+        JOIN FED.FED_DOCUMENTO d ON d.EMISOR_ID = c.EMISOR_ID
+        LEFT JOIN FED.FED_NUM_CONTROL nc ON nc.DOCUMENTO_ID = d.ID
+        WHERE c.ID = @contingencia_id
+          AND (d.EMITIDO_EN AT TIME ZONE 'America/Caracas')::date >= c.FECHA_EMISION_FISICA
+          AND NOT EXISTS (SELECT 1 FROM FED.FED_CONTINGENCIA o WHERE o.DOCUMENTO_ID = d.ID)
+          AND (@buscar = ''
+               OR d.NUMERACION ILIKE '%' || @buscar || '%'
+               -- El mismo texto que muestra FacturaFormato.NumeracionConSerie.
+               OR CASE WHEN COALESCE(TRIM(d.SERIE), '') = '' THEN d.NUMERACION
+                       ELSE 'serie ' || TRIM(d.SERIE) || ' ' || d.NUMERACION END ILIKE '%' || @buscar || '%'
+               OR COALESCE(nc.IDENTIFICADOR || '-' || LPAD(nc.SECUENCIAL::text, 8, '0'), '') ILIKE '%' || @buscar || '%'
+               OR d.ADQ_NOMBRE ILIKE '%' || @buscar || '%'
+               OR d.ADQ_RIF ILIKE '%' || @buscar || '%')
+        ORDER BY d.EMITIDO_EN ASC, d.ID ASC
+        LIMIT @page_size OFFSET @row_offset;";
+
+    // Fase C - lo que ContingenciaConciliar necesita saber del documento para
+    // decidir. Una fila solo si existe y es del mismo emisor (criterio de
+    // NotaCreate para el documento origen); FECHA_LOCAL en hora de Venezuela,
+    // y YA_USADO si ya regulariza otra contingencia.
+    public const string SqlContingenciaDocumentoParaConciliar = @"
+        SELECT d.ID, d.SERIE, d.NUMERACION,
+               (d.EMITIDO_EN AT TIME ZONE 'America/Caracas')::date AS FECHA_LOCAL,
+               EXISTS (SELECT 1 FROM FED.FED_CONTINGENCIA o WHERE o.DOCUMENTO_ID = d.ID) AS YA_USADO
+        FROM FED.FED_DOCUMENTO d
+        WHERE d.ID = @documento_id AND d.EMISOR_ID = @emisor_id;";
+
+    // Fase C - serializa las conciliaciones de un MISMO documento. Sin esto, dos
+    // conciliaciones simultaneas de contingencias distintas con el mismo
+    // documento pasarian las dos el chequeo de YA_USADO: con READ COMMITTED
+    // ninguna ve el UPDATE de la otra hasta que confirma. El candado dura lo que
+    // la transaccion y no toca el esquema (no hay UNIQUE sobre DOCUMENTO_ID: eso
+    // seria una migracion sobre una tabla con datos de prueba que ya lo violan).
+    // 32016 = espacio de candados del requerimiento 32; el segundo valor es el
+    // documento.
+    public const string SqlContingenciaCandadoDocumento = @"
+        SELECT pg_advisory_xact_lock(32016, @documento_id::int);";
 
     public const string SqlContingenciaConciliar = @"
         UPDATE FED.FED_CONTINGENCIA

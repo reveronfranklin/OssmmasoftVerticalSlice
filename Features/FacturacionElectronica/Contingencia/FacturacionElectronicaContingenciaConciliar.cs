@@ -15,6 +15,12 @@ namespace OssmmasoftVerticalSlice.Features.FacturacionElectronica;
 // registro (o no) por su propia via. Completar CONCILIADO_EN, DOCUMENTO_ID y
 // USUARIO_CONCILIA es agregar un dato pendiente, no enmendar la notificacion
 // -mismo criterio que ENTREGADO_EN en FED_RETENCION.
+//
+// FASE C (2026-10-13). Hasta entonces bastaba con que el documento fuera del
+// mismo emisor, y eso dejaba pasar dos cosas: un mismo documento conciliando
+// varias contingencias, y un documento anterior al fisico que dice regularizar.
+// Ahora se rechazan las dos. Las conciliaciones previas que las incumplen
+// (datos de prueba de la Fase 8) quedan como estan: la tabla es append-only.
 public record FacturacionElectronicaContingenciaConciliarCommand(
     long ContingenciaId,
     long DocumentoId,
@@ -61,12 +67,16 @@ public class FacturacionElectronicaContingenciaConciliarHandler(ConnectionDB _co
             return Falla($"Error técnico al abrir conexión FED: {ex.Message}");
         }
 
-        // Nivel 3 - ejecucion.
+        // Nivel 3 - ejecucion. En transaccion desde la Fase C: el candado por
+        // documento (SqlContingenciaCandadoDocumento) solo dura lo que ella.
         try
         {
-            long emisorId;
+            using var tx = await cn.BeginTransactionAsync();
 
-            using (var cmd = new NpgsqlCommand(FacturacionElectronicaDb.SqlContingenciaPorId, cn))
+            long emisorId;
+            DateTime fechaFisica;
+
+            using (var cmd = new NpgsqlCommand(FacturacionElectronicaDb.SqlContingenciaPorId, cn, tx))
             {
                 cmd.Parameters.AddWithValue("id", command.ContingenciaId);
 
@@ -83,25 +93,53 @@ public class FacturacionElectronicaContingenciaConciliarHandler(ConnectionDB _co
                 }
 
                 emisorId = reader.SafeGetInt64("emisor_id");
+                fechaFisica = reader.GetDateTime(reader.GetOrdinal("fecha_emision_fisica"));
             }
 
-            // El documento tiene que ser del mismo emisor: una contingencia no
-            // se concilia con el documento de otro (mismo criterio que
-            // FacturacionElectronicaNotaCreate para el documento origen).
-            using (var cmd = new NpgsqlCommand(FacturacionElectronicaDb.SqlContingenciaDocumentoDeEmisor, cn))
+            // Desde aqui y hasta el COMMIT, ninguna otra conciliacion puede
+            // tomar este mismo documento.
+            using (var cmd = new NpgsqlCommand(FacturacionElectronicaDb.SqlContingenciaCandadoDocumento, cn, tx))
+            {
+                cmd.Parameters.AddWithValue("documento_id", command.DocumentoId);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            // Tres reglas sobre el documento, las mismas con las que
+            // contingenciaDocumentosCandidatos arma la lista:
+            //   - del mismo emisor (criterio de NotaCreate para el origen);
+            //   - que no regularice ya otra contingencia (Fase C);
+            //   - emitido el dia del documento fisico o despues (Fase C).
+            using (var cmd = new NpgsqlCommand(FacturacionElectronicaDb.SqlContingenciaDocumentoParaConciliar, cn, tx))
             {
                 cmd.Parameters.AddWithValue("documento_id", command.DocumentoId);
                 cmd.Parameters.AddWithValue("emisor_id", emisorId);
 
-                object? encontrado = await cmd.ExecuteScalarAsync();
+                using var reader = await cmd.ExecuteReaderAsync();
 
-                if (encontrado is null)
+                if (!await reader.ReadAsync())
                 {
                     return Falla("El documento indicado no existe o pertenece a otro emisor.");
                 }
+
+                string numeracion = FacturaFormato.NumeracionConSerie(
+                    reader.SafeGetString("serie"), reader.SafeGetString("numeracion"));
+
+                if (reader.GetBoolean(reader.GetOrdinal("ya_usado")))
+                {
+                    return Falla($"El documento {numeracion} ya regulariza otra contingencia.");
+                }
+
+                DateTime fechaDocumento = reader.GetDateTime(reader.GetOrdinal("fecha_local"));
+
+                if (fechaDocumento.Date < fechaFisica.Date)
+                {
+                    return Falla(
+                        $"El documento {numeracion} es del {fechaDocumento:dd/MM/yyyy}, anterior a la fecha del " +
+                        $"documento físico ({fechaFisica:dd/MM/yyyy}): no puede regularizarlo.");
+                }
             }
 
-            using (var cmd = new NpgsqlCommand(FacturacionElectronicaDb.SqlContingenciaConciliar, cn))
+            using (var cmd = new NpgsqlCommand(FacturacionElectronicaDb.SqlContingenciaConciliar, cn, tx))
             {
                 cmd.Parameters.AddWithValue("id", command.ContingenciaId);
                 cmd.Parameters.AddWithValue("documento_id", command.DocumentoId);
@@ -115,6 +153,8 @@ public class FacturacionElectronicaContingenciaConciliarHandler(ConnectionDB _co
                     return Falla("Esa notificación ya está conciliada.");
                 }
             }
+
+            await tx.CommitAsync();
 
             return new ResultDto<bool>(true) { IsValid = true, Message = FacturacionElectronicaDb.MensajeExito };
         }
