@@ -1905,8 +1905,9 @@ notificacion.
   documento fisico (dd/MM/yyyy): no puede regularizarlo."` - la fecha del
   documento se toma en hora de Venezuela.
 
-Las conciliaciones anteriores a la Fase C que incumplen estas reglas (datos de
-prueba de la Fase 8) quedan como estan: la tabla es append-only.
+Las conciliaciones anteriores a la Fase C que incumplian estas reglas (9 en la
+base local, datos de prueba de la Fase 8) volvieron a pendientes el 2026-10-13.
+Hay respaldo y reversa en `3-Tareas/respaldos/` del requerimiento.
 
 ## contingenciaDocumentosCandidatos
 

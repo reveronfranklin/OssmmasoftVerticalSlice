@@ -19,8 +19,9 @@ namespace OssmmasoftVerticalSlice.Features.FacturacionElectronica;
 // FASE C (2026-10-13). Hasta entonces bastaba con que el documento fuera del
 // mismo emisor, y eso dejaba pasar dos cosas: un mismo documento conciliando
 // varias contingencias, y un documento anterior al fisico que dice regularizar.
-// Ahora se rechazan las dos. Las conciliaciones previas que las incumplen
-// (datos de prueba de la Fase 8) quedan como estan: la tabla es append-only.
+// Ahora se rechazan las dos. Las 9 conciliaciones previas que las incumplian
+// (datos de prueba de la Fase 8, base local) volvieron a pendientes el mismo
+// dia; respaldo y reversa en el requerimiento, 3-Tareas/respaldos/.
 public record FacturacionElectronicaContingenciaConciliarCommand(
     long ContingenciaId,
     long DocumentoId,
