@@ -274,13 +274,17 @@ public record BmBienFotoByPlacaRequest(string NumeroPlaca);
 
 public record BmBienFotoDeleteRequest(int CodigoBienFoto);
 
+public record BmBienFotoEditRequest(int CodigoBienFoto, string? Titulo);
+
 public record BmBienFotoResponse(
     int CodigoBienFoto,
     int CodigoBien,
     string NumeroPlaca,
     string Foto,
     string Titulo,
-    string Patch
+    string Patch,
+    DateTime? FechaCarga = null,
+    bool EsPrincipal = false
 );
 
 public record BmCatalogFilterRequest(string? SearchText, int Page = 1, int PageSize = 50);

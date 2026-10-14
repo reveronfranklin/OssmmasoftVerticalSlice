@@ -65,6 +65,7 @@ BEGIN
   grant_obj('EXECUTE', 'BM', 'SP_BM_FOTO_GET_PLACA', v_bm_user);
   grant_obj('EXECUTE', 'BM', 'SP_BM_FOTO_INS', v_bm_user);
   grant_obj('EXECUTE', 'BM', 'SP_BM_FOTO_DEL', v_bm_user);
+  grant_obj('EXECUTE', 'BM', 'SP_BM_FOTO_EDIT', v_bm_user);
 
   grant_obj('EXECUTE', 'BM', 'SP_BM_TIT_GET_ALL', v_bm_user);
   grant_obj('EXECUTE', 'BM', 'SP_BM_TIT_INS', v_bm_user);
