@@ -66,6 +66,14 @@ Respuesta binaria con tipo del archivo, o imagen sustituta/404 segun disponibili
 Se mantiene tambien GET `/api/BmBienesFotos/Image/{numeroPlaca}/{foto}`.
 Resolver `patch` relativo usando el origen del backend, conservando URLs absolutas.
 
+Compatibilidad historica (2026-10-15): buscar primero el archivo exacto dentro de
+la carpeta de la placa y luego en la raiz configurada. Si no existe, intentar
+`min_{foto}` en esas mismas ubicaciones antes de usar la imagen sustituta/404.
+No buscar en otra placa ni sustituir nombres parecidos (singular/plural).
+El backend registra la ruta esperada si no encuentra archivo ni miniatura, y
+advierte cuando sirve una miniatura por falta del original. La resolucion de
+esa alternativa puede ser menor que la del original; no se renombra ni mueve nada.
+
 ### POST `/api/BmBienesFotos/AddImage/{codigoBien}`
 
 Multipart compatible con el contrato anterior:
@@ -149,3 +157,40 @@ indice y datos nuevos, sin borrar fotos. No volver a ejecutar el instalador base
 Los archivos definitivos sin registro tras una falla se conservan para reintento;
 los temporales se eliminan al finalizar el intento. No se borra automaticamente un
 archivo definitivo ante una respuesta incierta, porque la transaccion pudo confirmar.
+
+## Sincronizacion transparente al consultar (2026-10-15)
+
+`GetByNumeroPlaca` mantiene su request y response. Tras una consulta exitosa,
+la API inventaria solo `settings:BmFiles/<placa>` (sin subcarpetas). Incorpora
+JPEG, PNG y WebP no vacios que faltan en tabla. Original y `min_` cuentan como
+una sola foto, con el nombre logico sin `min_`. No renombra archivos ni corrige
+por semejanza; conserva titulos y principal de todos los registros existentes.
+Los nuevos registros recuperados tienen titulo y fecha desconocidos (null).
+No se utiliza fecha del disco como fecha historica de carga.
+
+El SP valida que la placa canonica identifique exactamente un bien de la empresa
+configurada. La insercion se serializa con las otras escrituras y se comprueba
+otra vez la existencia para evitar duplicados ante consultas concurrentes.
+Si la carpeta no se puede inventariar completamente, no se inicia sincronizacion.
+Si falla un registro o falta el nuevo SP, se registra el problema y se conserva
+la consulta normal. Las inserciones ya confirmadas se conservan y son idempotentes.
+
+La comprobacion de nuevas inserciones tiene presupuesto de dos segundos entre
+archivos y timeout de dos segundos por llamada, con bloqueo NOWAIT en Oracle.
+No es una garantia de latencia total: el acceso al disco depende del sistema.
+Carpetas grandes se completan en consultas sucesivas. No hay pasos nuevos en UI.
+
+Para evitar que una eliminacion reaparezca por conservarse el archivo, el SP de
+borrado registra su nombre logico en `BM_FOTO_OMIT` dentro de la misma transaccion.
+La sincronizacion respeta esas exclusiones. No se puede deducir retrospectivamente
+que archivos sin registro fueron borrados antes de instalar esta version.
+
+Instalacion adicional: ejecutar `Sql/SP_BM_FOTO_SYNC.sql` DESPUES de la migracion
+`SP_BM_FOTO_GALERIA.sql`; conceder EXECUTE de `BM.SP_BM_FOTO_SYNC` al runtime
+(ver scripts 07/08 actualizados). Luego publicar la API. No requiere actualizar
+frontend. No reaplicar la migracion de galeria sin reaplicar despues la de sync,
+pues ambas definen `SP_BM_FOTO_DEL`.
+
+Reverso: volver a la API anterior para desactivar el inventario automatico;
+conservar la tabla de exclusiones y los registros recuperados. Si se necesita
+restaurar el SP de borrado, reaplicar la version de galeria. No borrar archivos.

@@ -36,27 +36,49 @@ public class BmBienesFotosController(
 
     private async Task<IActionResult> GetImageAsync(string numeroPlaca, string foto)
     {
-        var folder = BmDb.GetBmFilesPath(config);
-        var fileName = Path.GetFileName(Uri.UnescapeDataString(foto));
-        var placaFolder = BuildSafeFolderName(numeroPlaca);
-
-        if (string.IsNullOrWhiteSpace(fileName) || string.IsNullOrWhiteSpace(placaFolder))
-        {
+        if (string.IsNullOrWhiteSpace(numeroPlaca) || string.IsNullOrWhiteSpace(foto))
             return NotFound();
-        }
 
-        var candidates = new[]
+        var folder = BmDb.GetBmFilesPath(config);
+        // El model binder ya decodifico la URL. No volver a decodificar nombres
+        // que pueden contener un porcentaje literal; normalizar rutas historicas.
+        var fileName = Path.GetFileName(foto.Replace('\\', '/')).Trim();
+        var placaFolder = BuildSafeFolderName(numeroPlaca.Trim());
+
+        if (string.IsNullOrWhiteSpace(fileName) || fileName is "." or ".."
+            || placaFolder is "." or "..")
+            return NotFound();
+
+        var originalPaths = new[]
         {
             Path.Combine(folder, placaFolder, fileName),
-            Path.Combine(folder, fileName),
-            Path.Combine(folder, "no-product-image.png")
+            Path.Combine(folder, fileName)
         };
-
-        var filePath = candidates.FirstOrDefault(System.IO.File.Exists);
-        if (string.IsNullOrWhiteSpace(filePath))
+        var filePath = originalPaths.FirstOrDefault(System.IO.File.Exists);
+        if (filePath is null)
         {
-            return NotFound();
+            // El sistema anterior generaba min_{FOTO}. Algunos historicos solo
+            // conservan esa copia. No adivinar nombres ni buscar en otros bienes.
+            var thumbnail = fileName.StartsWith("min_", StringComparison.OrdinalIgnoreCase)
+                ? fileName : $"min_{fileName}";
+            filePath = new[]
+            {
+                Path.Combine(folder, placaFolder, thumbnail),
+                Path.Combine(folder, thumbnail)
+            }.FirstOrDefault(System.IO.File.Exists);
+
+            if (filePath is not null)
+                logger.LogWarning("Foto original ausente para placa {Placa}, archivo {Foto}. Se sirve miniatura historica {Ruta}",
+                    numeroPlaca, fileName, filePath);
+            else
+            {
+                logger.LogWarning("No se encontro foto ni miniatura. Placa {Placa}, archivo {Foto}, carpeta configurada {Carpeta}, ruta esperada {Ruta}",
+                    numeroPlaca, fileName, folder, originalPaths[0]);
+                var placeholder = Path.Combine(folder, "no-product-image.png");
+                filePath = System.IO.File.Exists(placeholder) ? placeholder : null;
+            }
         }
+        if (filePath is null) return NotFound();
 
         var provider = new FileExtensionContentTypeProvider();
         if (!provider.TryGetContentType(filePath, out var contentType))
@@ -208,18 +230,73 @@ public class BmBienesFotosController(
             var openError = await BmDb.TryOpenAsync(cn, "BM");
             if (openError is not null) return BmDb.InvalidList<BmBienFotoResponse>(openError);
 
-            using var cmd = BmDb.StoredProcedure("BM.SP_BM_FOTO_GET_PLACA", cn);
-            cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
-            cmd.Parameters.Add("p_NumeroPlaca", OracleDbType.Varchar2).Value = BmDb.DbValue(numeroPlaca);
-            cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
-
-            return await BmDb.ExecuteListAsync(cmd, MapFoto);
+            var current = await ReadFotosAsync(cn, empresa, numeroPlaca);
+            if (!current.IsValid) return current;
+            var added = await SyncFolderAsync(cn, empresa, numeroPlaca, current.Data ?? []);
+            // Una carpeta inaccesible o un SP de sincronizacion pendiente de instalar
+            // nunca impide mostrar la consulta que ya funcionaba.
+            if (!added) return current;
+            try
+            {
+                var refreshed = await ReadFotosAsync(cn, empresa, numeroPlaca);
+                return refreshed.IsValid ? refreshed : current;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "No se pudo refrescar fotos sincronizadas de {Placa}", numeroPlaca);
+                return current;
+            }
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error al consultar fotos del bien con placa {NumeroPlaca}", numeroPlaca);
             return BmDb.InvalidList<BmBienFotoResponse>($"Error tecnico al consultar las fotos del bien: {ex.Message}");
         }
+    }
+
+    private static async Task<OssmmasoftVerticalSlice.Helpers.ResultDto<List<BmBienFotoResponse>>> ReadFotosAsync(
+        OracleConnection cn, int empresa, string placa)
+    {
+        using var cmd = BmDb.StoredProcedure("BM.SP_BM_FOTO_GET_PLACA", cn);
+        cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
+        cmd.Parameters.Add("p_NumeroPlaca", OracleDbType.Varchar2).Value = BmDb.DbValue(placa);
+        cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
+        return await BmDb.ExecuteListAsync(cmd, MapFoto);
+    }
+
+    private async Task<bool> SyncFolderAsync(OracleConnection cn, int empresa, string placa,
+        List<BmBienFotoResponse> current)
+    {
+        var added = false;
+        try
+        {
+            var files = BmFotosFolder.GetPhotos(BmDb.GetBmFilesPath(config), placa);
+            static string Key(string name)
+            {
+                var leaf = Path.GetFileName(name.Replace('\\', '/'));
+                return leaf.StartsWith("min_", StringComparison.OrdinalIgnoreCase) ? leaf[4..] : leaf;
+            }
+            var known = current.Select(photo => Key(photo.Foto)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var budget = System.Diagnostics.Stopwatch.StartNew();
+            foreach (var file in files.Where(file => !known.Contains(file)))
+            {
+                // Carpetas grandes se completan en consultas sucesivas, sin monopolizar la pantalla.
+                if (budget.Elapsed > TimeSpan.FromSeconds(2)) break;
+                using var cmd = BmDb.StoredProcedure("BM.SP_BM_FOTO_SYNC", cn);
+                cmd.CommandTimeout = 2;
+                cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
+                cmd.Parameters.Add("p_NumeroPlaca", OracleDbType.Varchar2).Value = placa;
+                cmd.Parameters.Add("p_Foto", OracleDbType.Varchar2).Value = file;
+                var result = cmd.Parameters.Add("p_Agregadas", OracleDbType.Int32, ParameterDirection.Output);
+                await cmd.ExecuteNonQueryAsync();
+                added |= result.Value?.ToString() == "1";
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Sincronizacion de fotos omitida para placa {Placa}; se conservan datos existentes", placa);
+        }
+        return added;
     }
 
     private static BmBienFotoResponse MapFoto(IDataReader reader)
