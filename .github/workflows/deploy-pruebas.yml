@@ -1,0 +1,31 @@
+name: Publicar pruebas
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pruebas-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/develop' && vars.QA_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Compilar y empaquetar
+        run: bash .github/scripts/build-qa.sh
+      - name: Publicar y comprobar servicio
+        env:
+          QA_SSH_HOST: ${{ vars.QA_SSH_HOST }}
+          QA_SSH_USER: ${{ vars.QA_SSH_USER }}
+          QA_SSH_PRIVATE_KEY: ${{ secrets.QA_SSH_PRIVATE_KEY }}
+          QA_SSH_KNOWN_HOSTS: ${{ secrets.QA_SSH_KNOWN_HOSTS }}
+        run: bash .github/scripts/deploy-qa.sh vertical "$RUNNER_TEMP/qa-artifact.tar.gz"
