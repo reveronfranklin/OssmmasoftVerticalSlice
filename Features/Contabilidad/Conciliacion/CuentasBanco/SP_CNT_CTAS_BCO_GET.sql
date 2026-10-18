@@ -1,0 +1,60 @@
+-- Requerimiento 44: consulta de cuentas sin estado de comprobante.
+CREATE OR REPLACE PROCEDURE CNT.SP_CNT_CTAS_BCO_GET (
+    p_CODIGO_BANCO       IN  NUMBER,
+    p_SOLO_CONFIGURADAS  IN  NUMBER,
+    p_SEARCH_TEXT        IN  VARCHAR2,
+    p_CODIGO_EMPRESA     IN  NUMBER,
+    p_ResultSet          OUT SYS_REFCURSOR,
+    p_Message            OUT VARCHAR2
+) AS
+BEGIN
+    OPEN p_ResultSet FOR
+        SELECT
+            c.CODIGO_CUENTA_BANCO,
+            c.CODIGO_BANCO,
+            NVL(b.NOMBRE, '') AS BANCO,
+            c.TIPO_CUENTA_ID,
+            NVL(c.NO_CUENTA, '') AS NO_CUENTA,
+            NVL(c.FORMATO_MASCARA, '') AS FORMATO_MASCARA,
+            c.DENOMINACION_FUNCIONAL_ID,
+            NVL(d.DESCRIPCION, '') AS DENOMINACION_FUNCIONAL,
+            NVL(c.CODIGO, '') AS CODIGO,
+            NVL(c.PRINCIPAL, 0) AS PRINCIPAL,
+            NVL(c.RECAUDADORA, 0) AS RECAUDADORA,
+            c.CODIGO_MAYOR,
+            NVL(m.DENOMINACION, '') AS MAYOR,
+            c.CODIGO_AUXILIAR,
+            NVL(a.DENOMINACION, '') AS AUXILIAR,
+            NVL(c.SEARCH_TEXT, '') AS SEARCH_TEXT,
+            c.CODIGO_EMPRESA
+        FROM SIS.SIS_CUENTAS_BANCOS c
+        INNER JOIN SIS.SIS_BANCOS b
+            ON b.CODIGO_BANCO = c.CODIGO_BANCO
+           AND b.CODIGO_EMPRESA = c.CODIGO_EMPRESA
+        LEFT JOIN SIS.SIS_DESCRIPTIVAS d
+            ON d.DESCRIPCION_ID = c.DENOMINACION_FUNCIONAL_ID
+        LEFT JOIN CNT.CNT_MAYORES m
+            ON m.CODIGO_MAYOR = c.CODIGO_MAYOR
+           AND m.CODIGO_EMPRESA = c.CODIGO_EMPRESA
+        LEFT JOIN CNT.CNT_AUXILIARES a
+            ON a.CODIGO_AUXILIAR = c.CODIGO_AUXILIAR
+           AND a.CODIGO_EMPRESA = c.CODIGO_EMPRESA
+        WHERE c.CODIGO_EMPRESA = p_CODIGO_EMPRESA
+          AND (p_CODIGO_BANCO IS NULL OR c.CODIGO_BANCO = p_CODIGO_BANCO)
+          AND (NVL(p_SOLO_CONFIGURADAS, 0) = 0 OR (c.CODIGO_MAYOR IS NOT NULL AND c.CODIGO_AUXILIAR IS NOT NULL))
+          AND (
+                p_SEARCH_TEXT IS NULL
+             OR TRIM(p_SEARCH_TEXT) IS NULL
+             OR UPPER(b.NOMBRE) LIKE '%' || UPPER(TRIM(p_SEARCH_TEXT)) || '%'
+             OR UPPER(NVL(c.NO_CUENTA, '')) LIKE '%' || UPPER(TRIM(p_SEARCH_TEXT)) || '%'
+             OR UPPER(NVL(c.CODIGO, '')) LIKE '%' || UPPER(TRIM(p_SEARCH_TEXT)) || '%'
+             OR UPPER(NVL(c.SEARCH_TEXT, '')) LIKE '%' || UPPER(TRIM(p_SEARCH_TEXT)) || '%'
+          )
+        ORDER BY b.NOMBRE, c.NO_CUENTA;
+
+    p_Message := 'OK';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SQLERRM;
+END;
+/
