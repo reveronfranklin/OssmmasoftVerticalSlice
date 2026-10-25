@@ -10,6 +10,8 @@ DECLARE
     v_fila ADM.ADM_RETENCIONES_OP%ROWTYPE;
     v_iva VARCHAR2(100);
     v_por VARCHAR2(100);
+    v_tipo NUMBER;
+    v_titulo NUMBER;
 BEGIN
     SAVEPOINT fix_iva_op;
     SELECT CODIGO_ORDEN_PAGO INTO v_op
@@ -61,8 +63,26 @@ BEGIN
         RAISE_APPLICATION_ERROR(-20005, 'Los campos EXTRA estan ocupados; requiere revision');
     END IF;
 
+    SELECT TITULO_ID INTO v_titulo FROM ADM.ADM_DESCRIPTIVAS
+     WHERE DESCRIPCION_ID = v_fila.TIPO_RETENCION_ID;
+    SELECT COUNT(*), MIN(DESCRIPCION_ID) INTO v_cantidad, v_tipo
+      FROM ADM.ADM_DESCRIPTIVAS
+     WHERE CODIGO = 'IVA' AND TITULO_ID = v_titulo
+       AND (
+         (LENGTH(DESCRIPCION) - NVL(LENGTH(REPLACE(DESCRIPCION, '%', '')), 0) = 1 AND
+          REGEXP_LIKE(REGEXP_REPLACE(REGEXP_SUBSTR(DESCRIPCION,
+            '[0-9]+([.,][0-9]+)?[[:space:]]*%'), '[[:space:]%]', ''),
+            '^8([.,]0+)?$'))
+         OR (INSTR(NVL(DESCRIPCION, ' '), '%') = 0 AND
+             REGEXP_LIKE(TRIM(EXTRA1), '^8([.,]0+)?$'))
+       );
+    IF v_cantidad <> 1 THEN
+        RAISE_APPLICATION_ERROR(-20006, 'Tipo de retencion IVA 8% ausente o duplicado en catalogo');
+    END IF;
+
     UPDATE ADM.ADM_RETENCIONES_OP
-       SET EXTRA1 = '672', EXTRA2 = '8', EXTRA3 = 'I.V.A. (8%)',
+       SET TIPO_RETENCION_ID = v_tipo,
+           EXTRA1 = '672', EXTRA2 = '8', EXTRA3 = 'I.V.A. (8%)',
            EXTRA4 = 'IVA_DOCUMENTO'
      WHERE CODIGO_RETENCION_OP = v_ret;
     DBMS_OUTPUT.PUT_LINE('OP 18409: alicuota de retencion vinculada a documento 25705. Pendiente COMMIT.');
