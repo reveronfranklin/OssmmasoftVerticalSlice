@@ -12,6 +12,8 @@ DECLARE
     v_por VARCHAR2(100);
     v_tipo NUMBER;
     v_titulo NUMBER;
+    v_concepto NUMBER;
+    v_estatus VARCHAR2(100);
 BEGIN
     SAVEPOINT fix_iva_op;
     SELECT CODIGO_ORDEN_PAGO INTO v_op
@@ -80,8 +82,17 @@ BEGIN
         RAISE_APPLICATION_ERROR(-20006, 'Tipo de retencion IVA 8% ausente o duplicado en catalogo');
     END IF;
 
+    SELECT CODIGO INTO v_estatus FROM ADM.ADM_DESCRIPTIVAS
+     WHERE DESCRIPCION_ID = v_doc.ESTATUS_FISCO_ID;
+    SELECT COUNT(*), MIN(CODIGO_RETENCION) INTO v_cantidad, v_concepto
+      FROM ADM.ADM_RETENCIONES
+     WHERE TIPO_RETENCION_ID = v_tipo AND EXTRA1 = v_estatus;
+    IF v_cantidad <> 1 THEN
+        RAISE_APPLICATION_ERROR(-20007, 'Concepto IVA 8% ausente o duplicado; instalar CONFIG_RET_IVA_8.sql');
+    END IF;
+
     UPDATE ADM.ADM_RETENCIONES_OP
-       SET TIPO_RETENCION_ID = v_tipo,
+       SET TIPO_RETENCION_ID = v_tipo, CODIGO_RETENCION = v_concepto,
            EXTRA1 = '672', EXTRA2 = '8', EXTRA3 = 'I.V.A. (8%)',
            EXTRA4 = 'IVA_DOCUMENTO'
      WHERE CODIGO_RETENCION_OP = v_ret;
