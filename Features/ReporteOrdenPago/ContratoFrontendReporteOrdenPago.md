@@ -121,6 +121,16 @@ Devuelve la informacion usada para construir el PDF. Es util para diagnostico y 
 
 ## Integracion Frontend Esperada
 
+### Integridad IVA del documento (requerimiento 46)
+
+Las retenciones automaticas con `EXTRA4 = 'IVA_DOCUMENTO'` obtienen su
+`descripcion` de `EXTRA3`, persistida desde la alicuota del documento. El
+`porRetencion` es el porcentaje retenido sobre el impuesto y se mantiene
+separado de la alicuota. Ejemplo: `100% I.V.A. (8%)`.
+Las filas legacy sin marca mantienen la descripcion del catalogo hasta su
+reconciliacion. Instalar la version actualizada de `SP_REP_ORD_PAGO_RET_GET.sql`.
+No cambian rutas, request, response ni el visor PDF.
+
 Pantalla actual:
 
 - `NextOssmasoft/src/adm/ordenesPago/forms/viewer/FormViewerPdf.tsx`
