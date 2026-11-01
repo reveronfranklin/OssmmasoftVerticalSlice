@@ -41,7 +41,9 @@ real del titulo 72):
   "sexo": "F",
   "nivelEducativo": 0,
   "grado": 0,
-  "estadoSaludId": 7201
+  "estadoSaludId": 7201,
+  "numeroComunicacion": "+58 412 1234567",
+  "email": "familiar@example.com"
 }
 ```
 
@@ -91,6 +93,8 @@ pueden aparecer con sus valores por defecto):
     "sexo": "F",
     "nivelEducativo": 0,
     "grado": 0,
+    "numeroComunicacion": "+58 412 1234567",
+    "email": "familiar@example.com",
     "estadoSaludId": 7201,
     "estadoSaludDescripcion": "Descripcion del catalogo"
   }],
@@ -156,3 +160,36 @@ no participan de ese protocolo y requieren evitar altas simultaneas durante la
 transicion. No se modifica la aplicacion legacy en este requerimiento.
 
 Scripts y codigo no se han instalado ni ejecutado contra Oracle en esta entrega.
+
+## Contacto de familiares - Requerimiento 47
+
+Create y Update reciben `numeroComunicacion` y `email`; Create/Update devuelven
+ambos campos en el objeto `data` y GetByPersona en cada elemento del arreglo.
+No cambian rutas, metodo POST, autenticacion, ResultDto ni paginacion.
+En C# corresponden a `NumeroComunicacion` y `Email`.
+
+- Ambos campos son opcionales y solo admiten texto o null. Se recortan espacios
+  exteriores; vacio se normaliza a null. Las respuestas sin dato incluyen null.
+- Create omitido/null/vacio: sin dato. Update omitido: conserva el dato existente;
+  null o vacio explicito: limpia solo ese campo.
+- Numero de comunicacion: hasta 50 caracteres; preserva prefijos, ceros iniciales
+  y separadores. Email: hasta 100 caracteres y formato de direccion de correo.
+- UI y backend validan antes de guardar; errores esperados usan `isValid: false`
+  con mensaje en espanol y no confirman cambios parciales. No se truncan valores.
+- Los formularios permiten alta/edicion; la lista presenta ambos contactos y
+  muestra "Sin especificar" si no existen. Cerrar descarta cambios pendientes.
+
+Ejemplo para limpiar ambos campos dentro del cuerpo completo de Update:
+`"numeroComunicacion": null, "email": null`.
+
+Instalacion incremental para ambientes con requerimiento 42 instalado:
+ejecutar `@INSTALL_RH_FAM_CONTACT.sql` como RH desde esta carpeta. Verifica las
+columnas existentes VARCHAR2(50)/VARCHAR2(100) nullable y recompila el guardado;
+no agrega columnas ni modifica datos. GetByPersona ya selecciona `f.*` y devuelve
+las columnas existentes sin necesitar cambios de SQL.
+
+Coordinar instalacion y publicacion: la API nueva requiere la firma nueva de
+SP_RH_FAM_SAVE. El reverso requiere restaurar juntos procedimiento y API anteriores,
+conservando columnas y datos. El instalador completo INSTALL_RH_FAM.sql tambien
+usa la firma nueva; verificar previamente las columnas de contacto existentes.
+No se ejecutaron scripts contra Oracle durante esta implementacion.

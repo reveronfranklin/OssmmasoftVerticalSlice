@@ -1,5 +1,6 @@
 using System.Data;
 using System.Globalization;
+using System.Net.Mail;
 using System.Security.Claims;
 using System.Text.Json;
 using Oracle.ManagedDataAccess.Client;
@@ -10,7 +11,8 @@ namespace OssmmasoftVerticalSlice.Features.RhFamiliares;
 
 public record RhFamiliarRequest(int CodigoPersona, int CodigoFamiliar, int CedulaFamiliar,
     string Nacionalidad, string Nombre, string Apellido, string FechaNacimientoString,
-    int ParienteId, string Sexo, int NivelEducativo, int Grado, JsonElement EstadoSaludId = default);
+    int ParienteId, string Sexo, int NivelEducativo, int Grado, JsonElement EstadoSaludId = default,
+    JsonElement NumeroComunicacion = default, JsonElement Email = default);
 public record RhFamiliarFilter(int CodigoPersona);
 public record RhFamiliarDelete(int CodigoFamiliar);
 public record RhFecha(string Year, string Month, string Day);
@@ -18,7 +20,7 @@ public record RhFamiliarResponse(int CodigoPersona, int CodigoFamiliar, int Cedu
     string Nacionalidad, string Nombre, string Apellido, DateTime FechaNacimiento,
     string FechaNacimientoString, RhFecha FechaNacimientoObj, string Edad, int ParienteId,
     string ParienteDescripcion, string Sexo, int NivelEducativo, int Grado,
-    int? EstadoSaludId, string EstadoSaludDescripcion);
+    int? EstadoSaludId, string EstadoSaludDescripcion, string? NumeroComunicacion, string? Email);
 
 internal static class RhFamiliaresDb
 {
@@ -40,7 +42,9 @@ internal static class RhFamiliaresDb
             date.ToString("dd/MM/yyyy"), new(date.ToString("yyyy"), date.ToString("MM"), date.ToString("dd")),
             years > 0 ? $"{years} Años" : $"{Math.Max(0, months)} Meses", Number("PARIENTE_ID"),
             Text("PARIENTE_DESCRIPCION"), Text("SEXO"), Number("NIVEL_EDUCATIVO_ID"), Number("GRADO"),
-            r.IsDBNull(r.GetOrdinal("ESTADO_SALUD_ID")) ? null : Number("ESTADO_SALUD_ID"), Text("ESTADO_SALUD_DESCRIPCION"));
+            r.IsDBNull(r.GetOrdinal("ESTADO_SALUD_ID")) ? null : Number("ESTADO_SALUD_ID"), Text("ESTADO_SALUD_DESCRIPCION"),
+            r.IsDBNull(r.GetOrdinal("NUMERO_COMUNICACION")) ? null : Text("NUMERO_COMUNICACION"),
+            r.IsDBNull(r.GetOrdinal("EMAIL")) ? null : Text("EMAIL"));
     }
 
     internal static async Task<ResultDto<T>> Execute<T>(ConnectionDB db, IConfiguration config,
@@ -69,6 +73,21 @@ internal static class RhFamiliaresDb
         catch (Exception ex) { return Fail($"Error tecnico: {ex.Message}"); }
     }
 
+    private static bool TryContact(JsonElement field, int maxLength, bool isEmail, out string? value)
+    {
+        value = null;
+        if (field.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null) return true;
+        if (field.ValueKind != JsonValueKind.String) return false;
+        var text = field.GetString()!.Trim();
+        if (text.Length == 0) return true;
+        if (text.Length > maxLength) return false;
+        if (isEmail && (!MailAddress.TryCreate(text, out var address)
+            || address.Address != text || !text.Contains('@')
+            || text.Any(char.IsWhiteSpace))) return false;
+        value = text;
+        return true;
+    }
+
     internal static Task<ResultDto<RhFamiliarResponse>> Save(ConnectionDB db, IConfiguration config,
         RhFamiliarRequest request, bool create, ClaimsPrincipal user)
     {
@@ -92,6 +111,10 @@ internal static class RhFamiliaresDb
                 return Task.FromResult(Fail("Estado de salud invalido."));
             estado = id;
         }
+        if (!TryContact(request.NumeroComunicacion, 50, false, out var numero))
+            return Task.FromResult(Fail("Numero de comunicacion debe ser texto de hasta 50 caracteres."));
+        if (!TryContact(request.Email, 100, true, out var email))
+            return Task.FromResult(Fail("Correo electronico invalido o mayor a 100 caracteres."));
         return Execute(db, config, "RH.SP_RH_FAM_SAVE", cmd =>
         {
             cmd.Parameters.Add("p_CREAR", OracleDbType.Int32).Value = create ? 1 : 0;
@@ -108,6 +131,10 @@ internal static class RhFamiliaresDb
             cmd.Parameters.Add("p_GRADO", OracleDbType.Int32).Value = request.Grado;
             cmd.Parameters.Add("p_ESTADO", OracleDbType.Int32).Value = DbValue(estado);
             cmd.Parameters.Add("p_ESTADO_PRESENTE", OracleDbType.Int32).Value = specified ? 1 : 0;
+            cmd.Parameters.Add("p_NUMERO", OracleDbType.Varchar2).Value = DbValue(numero);
+            cmd.Parameters.Add("p_NUMERO_PRESENTE", OracleDbType.Int32).Value = request.NumeroComunicacion.ValueKind == JsonValueKind.Undefined ? 0 : 1;
+            cmd.Parameters.Add("p_EMAIL", OracleDbType.Varchar2).Value = DbValue(email);
+            cmd.Parameters.Add("p_EMAIL_PRESENTE", OracleDbType.Int32).Value = request.Email.ValueKind == JsonValueKind.Undefined ? 0 : 1;
             cmd.Parameters.Add("p_LOGIN", OracleDbType.Varchar2).Value = DbValue(user.FindFirstValue(ClaimTypes.Name) ?? user.FindFirstValue("unique_name"));
             cmd.Parameters.Add("p_RESULT", OracleDbType.RefCursor, ParameterDirection.Output);
         }, async cmd =>
