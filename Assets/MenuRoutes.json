@@ -117,5 +117,9 @@
   "/apps/user/view/connection",
   "/apps/user/view/notification",
   "/apps/user/view/overview",
-  "/apps/user/view/security"
+  "/apps/user/view/security",
+  "/dashboards/analytics",
+  "/dashboards/crm",
+  "/dashboards/ecommerce",
+  "/dashboards/presupuesto"
 ]

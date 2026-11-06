@@ -5,8 +5,8 @@ import re
 from pathlib import Path
 
 
-def page_routes(page: Path, frontend: Path) -> set[str]:
-    route = '/apps/' + page.relative_to(frontend).as_posix()[:-4]
+def page_routes(page: Path, frontend: Path, prefix: str = '/apps/') -> set[str]:
+    route = prefix + page.relative_to(frontend).as_posix()[:-4]
     if route.endswith('/index'):
         route = route[:-6]
     if '[' not in route:
@@ -34,12 +34,15 @@ def page_routes(page: Path, frontend: Path) -> set[str]:
 
 def main():
     project = Path(__file__).resolve().parents[1]
-    frontend = project.parent / 'NextOssmasoft' / 'src' / 'pages' / 'apps'
+    pages = project.parent / 'NextOssmasoft' / 'src' / 'pages'
+    frontend = pages / 'apps'
     if not frontend.is_dir():
         raise SystemExit(f'Frontend no encontrado: {frontend}')
     routes = set()
-    for page in frontend.rglob('*.tsx'):
-        routes.update(page_routes(page, frontend))
+    for directory in ['apps', 'dashboards']:
+        section = pages / directory
+        for page in section.rglob('*.tsx'):
+            routes.update(page_routes(page, section, f'/{directory}/'))
     output = project / 'Assets' / 'MenuRoutes.json'
     output.write_text(json.dumps(sorted(routes), indent=2) + '\n')
     print(f'{len(routes)} rutas exactas en {output}')

@@ -69,7 +69,7 @@ public static class SisMenuModel
     }
 
     public static bool IsInternalPath(string path) => path.Length == 0 ||
-        path.StartsWith("/apps/", StringComparison.Ordinal) && !path.Contains("//") && !path.Contains('\\') && !path.Contains("..") && !path.Contains('?') && !path.Contains('#');
+        (path.StartsWith("/apps/", StringComparison.Ordinal) || path.StartsWith("/dashboards/", StringComparison.Ordinal)) && !path.Contains("//") && !path.Contains('\\') && !path.Contains("..") && !path.Contains('?') && !path.Contains('#');
 
     public static List<SisMenuLegacyNode> ParseLegacy(IReadOnlyList<SisMenuSource> sources, ISet<string> knownRoutes)
     {
@@ -84,8 +84,12 @@ public static class SisMenuModel
             string Text(string key) => !item.TryGetProperty(key, out var value) || value.ValueKind == JsonValueKind.Null ? "" :
                 value.ValueKind == JsonValueKind.String ? value.GetString()! : throw new InvalidOperationException($"{key} debe ser texto.");
             var title = Text("title"); var path = Text("path"); var icon = Text("icon");
-            if (string.IsNullOrWhiteSpace(title) || title.Length > 120 || path.Length > 300 || icon.Length > 100 || !IsInternalPath(path))
-                throw new InvalidOperationException($"Opcion invalida: {title}.");
+            if (string.IsNullOrWhiteSpace(title) || title.Length > 120)
+                throw new InvalidOperationException($"Titulo vacio o mayor de 120 caracteres: {title}.");
+            if (path.Length > 300 || !IsInternalPath(path))
+                throw new InvalidOperationException($"Ruta interna invalida en '{title}': {path}.");
+            if (icon.Length > 100)
+                throw new InvalidOperationException($"Icono mayor de 100 caracteres en '{title}'.");
             if (path.Length > 0 && !knownRoutes.Contains(path.TrimEnd('/')))
                 throw new InvalidOperationException($"Ruta sin validar en el catalogo: {path}.");
             var perms = new List<string>();
