@@ -134,3 +134,76 @@ ninguna solicitud se duplica entre ambas APIs.
 
 No eliminar el endpoint legacy ni las vistas al probar el reverso. El nuevo
 procedimiento puede permanecer instalado: es de lectura y no cambia datos.
+
+## Requerimiento 51 Recibo individual desde la ficha
+
+La ficha reutiliza RhReciboPagoPdfHandler, RhReciboPagoPdfGenerator y el mismo
+logo/formato del generador migrado. No existe otro motor ni plantilla de recibo.
+Se agrega una entrada especifica de historico individual para exigir persona y
+forzar p_SOLO_HIST=1; la ruta general /pdf conserva su prioridad temporal actual.
+
+Ambas operaciones son POST, requieren Bearer y el mismo control de autenticacion
+del slice. La empresa se obtiene de settings:EmpresaConfig, nunca del cuerpo.
+Se mantiene el alcance de autorizacion existente del generador de recibos; no se
+introducen roles nuevos ni se concede acceso por la sola visibilidad del boton.
+
+### POST /api/RhReciboPago/GetHistoricoPersona
+
+```json
+{"codigoPersona":1234}
+```
+
+Respuesta ilustrativa:
+
+```json
+{
+  "isValid":true,
+  "message":"success",
+  "cantidadRegistros":1,
+  "data":[{
+    "id":"1234:12:5678",
+    "codigoPersona":1234,
+    "codigoTipoNomina":12,
+    "codigoPeriodo":5678,
+    "tipoNomina":"NOMINA DE CONTRATADOS",
+    "fechaNomina":"2025-01-15T00:00:00",
+    "fechaNominaString":"15/01/2025"
+  }]
+}
+```
+
+Devuelve una fila por persona/tipo/periodo, ordenada por fecha descendente. Agrupa
+movimientos y oficinas del mismo periodo en el recibo individual. FechaNomina es
+MAX(FECHA_NOMINA) del grupo y sirve para presentar, no identificar el periodo.
+La identidad incluye IDs reales; periodos de igual fecha siguen siendo filas
+diferentes. El listado no se pagina en servidor; la ficha conserva la paginacion
+local (7, 10, 25 o 50 filas). Persona ausente/cero/negativa devuelve ResultDto
+invalido antes de consultar Oracle. Sin datos devuelve un arreglo vacio valido.
+
+### POST /api/RhReciboPago/pdfHistoricoPersona
+
+```json
+{"codigoPersona":1234,"codigoTipoNomina":12,"codigoPeriodo":5678}
+```
+
+Los tres IDs son enteros obligatorios mayores de cero. No admite lote, filtro de
+oficina actual de la ficha ni envio de correo. Solo consulta movimientos historicos
+para la persona/empresa/tipo/periodo. Si el trabajador tuvo movimientos en varias
+oficinas durante ese periodo, el mismo PDF incluye sus secciones individuales;
+no incluye otros trabajadores. No deriva IDs desde cedula, fecha ni linkData.
+
+Exito: bytes application/pdf, Content-Disposition inline, Cache-Control no-store.
+Fallos esperados: HTTP 200 con ResultDto isValid=false/message. La autenticacion
+invalida conserva el comportamiento del middleware. No hay fallback a temporal
+ni a AppReport. La ficha usa estas rutas verticales incluso cuando el generador
+general se configure explicitamente en modo legacy.
+
+El frontend valida Blob, Content-Type y firma %PDF-, usa DialogReportInfo y la URL
+objeto del visor compartido. Cancela/rechaza respuestas al cambiar persona,
+impide solicitudes simultaneas desde boton/doble clic y libera URL al cerrar,
+reemplazar o desmontar. Los errores se muestran sin abrir documentos anteriores.
+
+Instalacion adicional: INSTALL_RECIBO_PERSONA.sql, bloque unico para DBeaver con
+esquema activo RH. Incluye el procedimiento de lectura ya existente sin cambiar
+su contrato y SP_RH_REC_PERS_RES_GET para el nuevo resumen. No modifica datos ni
+crea tablas. Instalar SQL y publicar backend antes de publicar frontend.

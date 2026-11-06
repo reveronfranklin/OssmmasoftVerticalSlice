@@ -8,9 +8,9 @@ namespace OssmmasoftVerticalSlice.Features.RhReciboPago;
 public class RhReciboPagoPdfHandler(ConnectionDB db, IConfiguration config, IWebHostEnvironment environment,
     ILogger<RhReciboPagoPdfHandler> logger)
 {
-    public async Task<ResultDto<byte[]>> HandleAsync(RhReciboPagoFilter filter, CancellationToken ct = default)
+    public async Task<ResultDto<byte[]>> HandleAsync(RhReciboPagoFilter filter, CancellationToken ct = default, bool historicoOnly = false)
     {
-        var data = await RhReciboPagoDb.ReadAsync(db, config, filter, false, ct);
+        var data = await RhReciboPagoDb.ReadAsync(db, config, filter, historicoOnly, ct);
         if (!data.IsValid || data.Data is null) return RhReciboPagoDb.Fail<byte[]>(data.Message);
         if (data.Data.Lineas.Count == 0) return RhReciboPagoDb.Fail<byte[]>("No hay recibos para los filtros seleccionados.");
         try
@@ -56,6 +56,18 @@ public class RhReciboPagoPdfHandler(ConnectionDB db, IConfiguration config, IWeb
 public class RhReciboPagoPdfController(ConnectionDB db, IConfiguration config, IWebHostEnvironment environment,
     ILogger<RhReciboPagoPdfHandler> logger) : ControllerBase
 {
+    [HttpPost("pdfHistoricoPersona")]
+    public async Task<IActionResult> PdfHistoricoPersona(RhReciboPersonaFilter value, CancellationToken ct)
+    {
+        if (value.Validate() is { } error) return Ok(RhReciboPagoDb.Fail<byte[]>(error));
+        var result = await new RhReciboPagoPdfHandler(db, config, environment, logger)
+            .HandleAsync(value.ToFilter(), ct, historicoOnly: true);
+        if (!result.IsValid) return Ok(result);
+        Response.Headers.CacheControl = "no-store";
+        Response.Headers.ContentDisposition = "inline; filename=recibo-historico-persona.pdf";
+        return File(result.Data!, "application/pdf");
+    }
+
     [HttpPost("pdf")]
     public async Task<IActionResult> Pdf(RhReciboPagoFilter filter, CancellationToken ct)
     {
