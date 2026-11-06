@@ -45,7 +45,7 @@ public record SisSegCloneUserResponse(int CodigoUsuarioOrigen, int CodigoUsuario
 [ApiController]
 [Authorize]
 [Route("api/SisSeguridad")]
-public class SisSeguridadController(ConnectionDB connectionDB, IConfiguration config) : ControllerBase
+public partial class SisSeguridadController(ConnectionDB connectionDB, IConfiguration config) : ControllerBase
 {
     [HttpPost("getCatalogos")]
     public async Task<IActionResult> GetCatalogos()

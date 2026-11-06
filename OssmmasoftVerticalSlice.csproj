@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Update="Assets/MenuRoutes.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Assets/Reports/**/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 

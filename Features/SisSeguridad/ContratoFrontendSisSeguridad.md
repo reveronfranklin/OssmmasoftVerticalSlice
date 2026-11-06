@@ -636,3 +636,73 @@ La cache conserva el formato actual:
 - El seed inicial publica Soporte dentro del arbol `Sistema`; por eso el registro legacy actualizado usa `DESCRIPCION = 'SIS'`.
 - `IS_SUPERUSER = 1` recibe todos los menus y permisos activos.
 - La validacion actual de permisos de Soporte puede seguir leyendo `JSON_MENU`.
+
+## Requerimiento 50 Menu simple por roles
+
+Todos los endpoints siguientes son POST bajo /api/SisSeguridad, requieren Bearer
+JWT valido y resuelven la empresa de settings:EmpresaConfig. La identidad se
+obtiene del login firmado del JWT, sin seleccionar usuario por refresh token ni
+por login enviado. Salvo getMiMenu, requieren superusuario o
+soporte.usuarios.configurar. El actor nunca se acepta del cuerpo.
+
+| Ruta | Cuerpo | data de ResultDto |
+| --- | --- | --- |
+| getMenuSimple | {} | version, menus, roles, asignaciones, permisos, rolPermisos, menuPermisos, usuariosPorRol, modulos |
+| getMiMenu | {} | codigoUsuario, estrategia, version, menu, origenes, roles |
+| simularMenuUsuario | { codigoUsuario } | Igual a getMiMenu para el usuario objetivo, solo administradores |
+| saveMenuRolSimple | { codigoRol, codigoMod, clave, nombre, descripcion, activo, menus: [id], versionEsperada, permisos?: [id] } | Identificador del rol |
+| saveRolesUsuarioSimple | { codigoUsuario, roles: [id], versionEsperada } | Identificador del usuario |
+| saveOpcionSimple | { codigoMenu, codigoMod, codigoPadre, titulo, path, icono, orden, activo, versionEsperada } | Identificador de la opcion |
+| analizarMigracionMenu | { codigoUsuario } | codigoUsuario, version, hashOrigen, puedeMigrar, mensaje, menuAntes, opciones, permisos |
+| aplicarMigracionMenu | { codigoUsuario, hashOrigen, versionEsperada } | Sesion/menu comparado del usuario migrado |
+| setEstrategiaMenu | { codigoUsuario, vertical, versionEsperada } | Identificador del usuario |
+| getMigracionMenu | { codigoUsuario, page: 1, pageSize: 10 } | Lista del historial: codigoMigracion, hashOrigen, fecha, usuarioActor, version |
+
+Catalogo: menus usa { id, mod, parent, title, path, icon, order, active }; roles usa
+{ id, mod, key, name, description, active }; asignaciones usa { role, menu }.
+Permisos: { id, key }; rolPermisos: { role, perm }; menuPermisos: { menu, perm }.
+usuariosPorRol es un diccionario con clave ID del rol y cantidad global asignada.
+modulos conserva el DTO existente codigoMod/codigo/nombre/icono/orden/activo.
+
+Ejemplo saveMenuRolSimple:
+
+```json
+{"codigoRol":12,"codigoMod":3,"clave":"RH_OPERADOR","nombre":"Operador RH","descripcion":"Recibos y consultas","activo":true,"menus":[34,35],"versionEsperada":7}
+```
+
+Omitir permisos conserva las acciones del rol. Enviar permisos: [] las retira,
+solo desde la edicion avanzada explicita. Copiar opciones se hace en la seleccion
+local con vista previa y modos agregar/reemplazar; usa el mismo guardado atomico,
+sin una mutacion anticipada ni copia implicita de acciones. Para crear rol usar
+codigoRol=0 y una clave nueva; la identidad clave/modulo de uno existente es inmutable.
+
+Ejemplo getMiMenu:
+
+```json
+{"isValid":true,"message":"OK","data":{"codigoUsuario":42,"estrategia":"vertical","version":8,"menu":[{"title":"Nomina","children":[{"title":"Recibos","path":"/apps/rh/recibos"}]}],"origenes":[{"codigoMenu":35,"roles":[12]}],"roles":[12]}}
+```
+
+Estrategias: legacy (todavia sin migracion), vertical, compatibilidad (reverso de
+lectura con asignaciones vigentes) e inactivo (menu vacio). No agregar Reportes en
+cliente para vertical/compatibilidad: el servidor decide sus opciones. Los campos
+menu usan title/path/icon/children/permissions compatibles con Materio. Los padres
+estructurales no incluyen path cuando su pagina no fue seleccionada.
+
+Los menus/catalogos no se paginan. getMigracionMenu devuelve page, totalPage y
+cantidadRegistros; pageSize se limita a 1..100. La lista de usuarios sigue usando
+SisUsuarios/GetAll y su paginacion existente. La simulacion de sesion no guarda.
+
+Errores esperados: HTTP 200 con isValid=false/message; JWT invalido usa la
+respuesta de autenticacion del middleware. Datos obsoletos requieren recargar;
+JSON invalido, conflicto codigo/login, ruta desconocida o perfil cambiado impiden
+migrar. Analisis valido puede tener puedeMigrar=false con mensaje de incidencia;
+no habilitar Aplicar en ese caso. Instalador faltante informa error, sin retorno
+a otro endpoint ni menu de emergencia.
+
+Guardar actualiza caches compatibles, auditoria y revision en una transaccion.
+Invalidar consultas de catalogo/simulacion y emitir sis-menu-changed al terminar.
+La sesion borra menu al cambiar identidad, limpia la cache administrativa al
+cambiar usuario y rechaza respuestas anteriores. Refresca al enfocar y cada 60 s.
+
+Ver SimpleMenu/README.md para instalacion, cierre de escritores anteriores,
+secuencias, perfil exacto y alcance de autorizacion de las APIs existentes.

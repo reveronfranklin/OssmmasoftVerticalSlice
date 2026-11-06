@@ -1,9 +1,12 @@
-PROMPT Creando tablas SIS Seguridad normalizada
+-- Creando tablas SIS Seguridad normalizada
 
 DECLARE
   v_count NUMBER;
 BEGIN
-  SELECT COUNT(1) INTO v_count FROM user_tables WHERE table_name = 'OSS_MOD';
+  IF SYS_CONTEXT('USERENV','CURRENT_SCHEMA') <> 'SIS' THEN
+    RAISE_APPLICATION_ERROR(-20010,'Seleccione SIS como esquema activo antes de ejecutar este bloque.');
+  END IF;
+  SELECT COUNT(1) INTO v_count FROM all_tables WHERE owner='SIS' AND table_name = 'OSS_MOD';
   IF v_count = 0 THEN
     EXECUTE IMMEDIATE '
       CREATE TABLE OSS_MOD (
@@ -20,7 +23,7 @@ BEGIN
       )';
   END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_tables WHERE table_name = 'OSS_MENU';
+  SELECT COUNT(1) INTO v_count FROM all_tables WHERE owner='SIS' AND table_name = 'OSS_MENU';
   IF v_count = 0 THEN
     EXECUTE IMMEDIATE '
       CREATE TABLE OSS_MENU (
@@ -39,7 +42,7 @@ BEGIN
       )';
   END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_tables WHERE table_name = 'OSS_PERM';
+  SELECT COUNT(1) INTO v_count FROM all_tables WHERE owner='SIS' AND table_name = 'OSS_PERM';
   IF v_count = 0 THEN
     EXECUTE IMMEDIATE '
       CREATE TABLE OSS_PERM (
@@ -56,7 +59,7 @@ BEGIN
       )';
   END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_tables WHERE table_name = 'OSS_MENU_PERM';
+  SELECT COUNT(1) INTO v_count FROM all_tables WHERE owner='SIS' AND table_name = 'OSS_MENU_PERM';
   IF v_count = 0 THEN
     EXECUTE IMMEDIATE '
       CREATE TABLE OSS_MENU_PERM (
@@ -67,7 +70,7 @@ BEGIN
       )';
   END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_tables WHERE table_name = 'OSS_ROL';
+  SELECT COUNT(1) INTO v_count FROM all_tables WHERE owner='SIS' AND table_name = 'OSS_ROL';
   IF v_count = 0 THEN
     EXECUTE IMMEDIATE '
       CREATE TABLE OSS_ROL (
@@ -84,7 +87,7 @@ BEGIN
       )';
   END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_tables WHERE table_name = 'OSS_ROL_MENU';
+  SELECT COUNT(1) INTO v_count FROM all_tables WHERE owner='SIS' AND table_name = 'OSS_ROL_MENU';
   IF v_count = 0 THEN
     EXECUTE IMMEDIATE '
       CREATE TABLE OSS_ROL_MENU (
@@ -95,7 +98,7 @@ BEGIN
       )';
   END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_tables WHERE table_name = 'OSS_ROL_PERM';
+  SELECT COUNT(1) INTO v_count FROM all_tables WHERE owner='SIS' AND table_name = 'OSS_ROL_PERM';
   IF v_count = 0 THEN
     EXECUTE IMMEDIATE '
       CREATE TABLE OSS_ROL_PERM (
@@ -106,7 +109,7 @@ BEGIN
       )';
   END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_tables WHERE table_name = 'OSS_USR_ROL';
+  SELECT COUNT(1) INTO v_count FROM all_tables WHERE owner='SIS' AND table_name = 'OSS_USR_ROL';
   IF v_count = 0 THEN
     EXECUTE IMMEDIATE '
       CREATE TABLE OSS_USR_ROL (
@@ -122,7 +125,7 @@ BEGIN
       )';
   END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_tables WHERE table_name = 'OSS_USR_PERM';
+  SELECT COUNT(1) INTO v_count FROM all_tables WHERE owner='SIS' AND table_name = 'OSS_USR_PERM';
   IF v_count = 0 THEN
     EXECUTE IMMEDIATE '
       CREATE TABLE OSS_USR_PERM (
@@ -139,7 +142,7 @@ BEGIN
       )';
   END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_tables WHERE table_name = 'OSS_SEG_AUD';
+  SELECT COUNT(1) INTO v_count FROM all_tables WHERE owner='SIS' AND table_name = 'OSS_SEG_AUD';
   IF v_count = 0 THEN
     EXECUTE IMMEDIATE '
       CREATE TABLE OSS_SEG_AUD (
@@ -158,88 +161,91 @@ END;
 DECLARE
   v_count NUMBER;
 BEGIN
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'PK_OSS_MOD';
+  IF SYS_CONTEXT('USERENV','CURRENT_SCHEMA') <> 'SIS' THEN
+    RAISE_APPLICATION_ERROR(-20010,'Seleccione SIS como esquema activo antes de ejecutar este bloque.');
+  END IF;
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'PK_OSS_MOD';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_MOD ADD CONSTRAINT PK_OSS_MOD PRIMARY KEY (CODIGO_MOD)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'UQ_OSS_MOD_COD';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'UQ_OSS_MOD_COD';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_MOD ADD CONSTRAINT UQ_OSS_MOD_COD UNIQUE (CODIGO)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'PK_OSS_MENU';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'PK_OSS_MENU';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_MENU ADD CONSTRAINT PK_OSS_MENU PRIMARY KEY (CODIGO_MENU)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'FK_OSS_MENU_MOD';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'FK_OSS_MENU_MOD';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_MENU ADD CONSTRAINT FK_OSS_MENU_MOD FOREIGN KEY (CODIGO_MOD) REFERENCES OSS_MOD (CODIGO_MOD)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'FK_OSS_MENU_PAD';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'FK_OSS_MENU_PAD';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_MENU ADD CONSTRAINT FK_OSS_MENU_PAD FOREIGN KEY (CODIGO_PADRE) REFERENCES OSS_MENU (CODIGO_MENU)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'PK_OSS_PERM';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'PK_OSS_PERM';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_PERM ADD CONSTRAINT PK_OSS_PERM PRIMARY KEY (CODIGO_PERM)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'UQ_OSS_PERM_CLV';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'UQ_OSS_PERM_CLV';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_PERM ADD CONSTRAINT UQ_OSS_PERM_CLV UNIQUE (CLAVE)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'FK_OSS_PERM_MOD';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'FK_OSS_PERM_MOD';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_PERM ADD CONSTRAINT FK_OSS_PERM_MOD FOREIGN KEY (CODIGO_MOD) REFERENCES OSS_MOD (CODIGO_MOD)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'PK_OSS_MENU_PERM';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'PK_OSS_MENU_PERM';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_MENU_PERM ADD CONSTRAINT PK_OSS_MENU_PERM PRIMARY KEY (CODIGO_MENU, CODIGO_PERM)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'FK_OSS_MPERM_MENU';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'FK_OSS_MPERM_MENU';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_MENU_PERM ADD CONSTRAINT FK_OSS_MPERM_MENU FOREIGN KEY (CODIGO_MENU) REFERENCES OSS_MENU (CODIGO_MENU)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'FK_OSS_MPERM_PERM';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'FK_OSS_MPERM_PERM';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_MENU_PERM ADD CONSTRAINT FK_OSS_MPERM_PERM FOREIGN KEY (CODIGO_PERM) REFERENCES OSS_PERM (CODIGO_PERM)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'PK_OSS_ROL';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'PK_OSS_ROL';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_ROL ADD CONSTRAINT PK_OSS_ROL PRIMARY KEY (CODIGO_ROL)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'UQ_OSS_ROL_CLV';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'UQ_OSS_ROL_CLV';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_ROL ADD CONSTRAINT UQ_OSS_ROL_CLV UNIQUE (CLAVE)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'FK_OSS_ROL_MOD';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'FK_OSS_ROL_MOD';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_ROL ADD CONSTRAINT FK_OSS_ROL_MOD FOREIGN KEY (CODIGO_MOD) REFERENCES OSS_MOD (CODIGO_MOD)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'PK_OSS_ROL_MENU';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'PK_OSS_ROL_MENU';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_ROL_MENU ADD CONSTRAINT PK_OSS_ROL_MENU PRIMARY KEY (CODIGO_ROL, CODIGO_MENU)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'FK_OSS_RMENU_ROL';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'FK_OSS_RMENU_ROL';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_ROL_MENU ADD CONSTRAINT FK_OSS_RMENU_ROL FOREIGN KEY (CODIGO_ROL) REFERENCES OSS_ROL (CODIGO_ROL)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'FK_OSS_RMENU_MENU';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'FK_OSS_RMENU_MENU';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_ROL_MENU ADD CONSTRAINT FK_OSS_RMENU_MENU FOREIGN KEY (CODIGO_MENU) REFERENCES OSS_MENU (CODIGO_MENU)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'PK_OSS_ROL_PERM';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'PK_OSS_ROL_PERM';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_ROL_PERM ADD CONSTRAINT PK_OSS_ROL_PERM PRIMARY KEY (CODIGO_ROL, CODIGO_PERM)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'FK_OSS_RPERM_ROL';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'FK_OSS_RPERM_ROL';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_ROL_PERM ADD CONSTRAINT FK_OSS_RPERM_ROL FOREIGN KEY (CODIGO_ROL) REFERENCES OSS_ROL (CODIGO_ROL)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'FK_OSS_RPERM_PERM';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'FK_OSS_RPERM_PERM';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_ROL_PERM ADD CONSTRAINT FK_OSS_RPERM_PERM FOREIGN KEY (CODIGO_PERM) REFERENCES OSS_PERM (CODIGO_PERM)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'PK_OSS_USR_ROL';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'PK_OSS_USR_ROL';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_USR_ROL ADD CONSTRAINT PK_OSS_USR_ROL PRIMARY KEY (CODIGO_USR_ROL)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'UQ_OSS_USR_ROL';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'UQ_OSS_USR_ROL';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_USR_ROL ADD CONSTRAINT UQ_OSS_USR_ROL UNIQUE (CODIGO_USUARIO, CODIGO_ROL, CODIGO_EMPRESA)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'FK_OSS_UROL_ROL';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'FK_OSS_UROL_ROL';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_USR_ROL ADD CONSTRAINT FK_OSS_UROL_ROL FOREIGN KEY (CODIGO_ROL) REFERENCES OSS_ROL (CODIGO_ROL)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'PK_OSS_USR_PERM';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'PK_OSS_USR_PERM';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_USR_PERM ADD CONSTRAINT PK_OSS_USR_PERM PRIMARY KEY (CODIGO_USR_PERM)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'UQ_OSS_USR_PERM';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'UQ_OSS_USR_PERM';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_USR_PERM ADD CONSTRAINT UQ_OSS_USR_PERM UNIQUE (CODIGO_USUARIO, CODIGO_PERM, CODIGO_EMPRESA)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'CK_OSS_UPERM_TIPO';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'CK_OSS_UPERM_TIPO';
   IF v_count = 0 THEN EXECUTE IMMEDIATE q'[ALTER TABLE OSS_USR_PERM ADD CONSTRAINT CK_OSS_UPERM_TIPO CHECK (TIPO IN ('ALLOW', 'DENY'))]'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'FK_OSS_UPERM_PERM';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'FK_OSS_UPERM_PERM';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_USR_PERM ADD CONSTRAINT FK_OSS_UPERM_PERM FOREIGN KEY (CODIGO_PERM) REFERENCES OSS_PERM (CODIGO_PERM)'; END IF;
 
-  SELECT COUNT(1) INTO v_count FROM user_constraints WHERE constraint_name = 'PK_OSS_SEG_AUD';
+  SELECT COUNT(1) INTO v_count FROM all_constraints WHERE owner='SIS' AND constraint_name = 'PK_OSS_SEG_AUD';
   IF v_count = 0 THEN EXECUTE IMMEDIATE 'ALTER TABLE OSS_SEG_AUD ADD CONSTRAINT PK_OSS_SEG_AUD PRIMARY KEY (CODIGO_AUD)'; END IF;
 END;
 /
@@ -248,7 +254,10 @@ DECLARE
   v_count NUMBER;
   v_dups NUMBER;
 BEGIN
-  SELECT COUNT(1) INTO v_count FROM user_indexes WHERE index_name = 'IDX_OSS_USR_ROL_U01';
+  IF SYS_CONTEXT('USERENV','CURRENT_SCHEMA') <> 'SIS' THEN
+    RAISE_APPLICATION_ERROR(-20010,'Seleccione SIS como esquema activo antes de ejecutar este bloque.');
+  END IF;
+  SELECT COUNT(1) INTO v_count FROM all_indexes WHERE owner='SIS' AND index_name = 'IDX_OSS_USR_ROL_U01';
   IF v_count = 0 THEN
     SELECT COUNT(1)
       INTO v_dups
@@ -266,4 +275,4 @@ BEGIN
 END;
 /
 
-PROMPT Tablas SIS Seguridad normalizada listas
+-- Tablas SIS Seguridad normalizada listas
