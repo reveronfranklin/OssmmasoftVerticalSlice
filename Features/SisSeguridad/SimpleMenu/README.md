@@ -98,3 +98,9 @@ comprueba CURRENT_SCHEMA y detecta conflictos de tipo antes de crear objetos.
 PRECHECK_MENU_SIMPLE.sql permite diagnosticar cuenta/esquema y OSS_MOD sin DDL.
 En DBeaver ejecutar el archivo actualizado completo, deteniendo ante el primer
 error; no continuar desde una sentencia CREATE TABLE aislada.
+
+Las rutas repetidas en legacy se admiten: repetir una URL no implica conflicto.
+Se conservan las ocurrencias del mismo perfil, incluidas sus ubicaciones, orden
+y permisos. Las copias equivalentes aportadas por roles distintos se fusionan
+en la union. No es necesario depurar el JSON del usuario para eliminar enlaces
+que ya formaban parte de su menu.

@@ -45,9 +45,24 @@ public static class SisMenuModel
         var permKeys = permissions.Where(x => permIds.Contains(x.Id)).ToDictionary(x => x.Id, x => x.Key);
         // Profiles can retain a different ordering of the same option. Merge equivalent
         // presentation nodes when roles are combined, preserving all permission sources.
+        // Repeated links in one legacy profile are intentional presentation
+        // occurrences. Only copies contributed by different roles are merged.
+        var contributors=selected.ToDictionary(id=>id,_=>new HashSet<int>());
+        foreach(var origin in origins)
+        {
+            for(int? id=origin.Key; id is int current; id=byId[current].Parent)
+                contributors[current].UnionWith(origin.Value);
+        }
+        var occurrences=new Dictionary<int,int>();
+        foreach(var siblings in nodes.Where(n=>selected.Contains(n.Id)).GroupBy(n=>new {n.Parent,n.Mod,n.Title,n.Path,n.Icon}))
+        {
+            var ordered=siblings.OrderBy(n=>n.Order).ThenBy(n=>n.Id).ToList();
+            foreach(var node in ordered)
+                occurrences[node.Id]=contributors[node.Id].Select(role=>ordered.Where(n=>contributors[n.Id].Contains(role)).Select(n=>n.Id).ToList().IndexOf(node.Id)).DefaultIfEmpty(0).Max();
+        }
         var keys = new Dictionary<int,string>();
         string Key(SisMenuNode node) => keys.TryGetValue(node.Id,out var key) ? key : keys[node.Id] = Hash(JsonSerializer.Serialize(new {
-            node.Mod, Parent=node.Parent is int p ? Key(byId[p]) : "", node.Title,node.Path,node.Icon }));
+            node.Mod, Parent=node.Parent is int p ? Key(byId[p]) : "", node.Title,node.Path,node.Icon, Occurrence=occurrences[node.Id] }));
         var classes=nodes.Where(x=>selected.Contains(x.Id)).GroupBy(Key).ToDictionary(x=>x.Key,x=>x.OrderBy(n=>n.Order).ThenBy(n=>n.Id).ToList());
         JsonObject Build(List<SisMenuNode> variants)
         {
@@ -126,12 +141,6 @@ public static class SisMenuModel
         List<SisMenuLegacyNode> RemoveReports(List<SisMenuLegacyNode> list) => list.Where(x => x.Path.TrimEnd('/') != ReportsPath)
             .Select(x => x with { Children = RemoveReports(x.Children) }).ToList();
         roots = RemoveReports(roots);
-        IEnumerable<SisMenuLegacyNode> Walk(IEnumerable<SisMenuLegacyNode> list)
-        {
-            foreach(var item in list) { yield return item; foreach(var child in Walk(item.Children)) yield return child; }
-        }
-        var duplicate=Walk(roots).Where(x=>x.Path.Length>0).GroupBy(x=>x.Path,StringComparer.Ordinal).FirstOrDefault(x=>x.Count()>1);
-        if(duplicate is not null) throw new InvalidOperationException($"Ruta duplicada en el origen: {duplicate.Key}. Conciliar antes de migrar.");
         roots.Add(new("SIS", "Reportes", ReportsPath, "mdi:shield-account-outline", roots.Count, [], []));
         return roots;
     }
