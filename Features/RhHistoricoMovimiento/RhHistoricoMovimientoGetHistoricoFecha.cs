@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Oracle.ManagedDataAccess.Client;
 using OssmmasoftVerticalSlice.ContextDB;
@@ -21,7 +22,8 @@ public record RhHistoricoMovimientoGetHistoricoFechaQuery(
     int PageSize,
     string? TipoSort,
     string? SortColumn,
-    int CodigoProceso
+    int CodigoProceso,
+    string? SearchText = null
 );
 
 public record RhHistoricoMovimientoResponse(
@@ -76,10 +78,10 @@ public record RhHistoricoMovimientoResponse(
     string SearchText
 );
 
-public class RhHistoricoMovimientoGetHistoricoFechaHandler(ConnectionDB _connectionDB)
+public class RhHistoricoMovimientoGetHistoricoFechaHandler(ConnectionDB _connectionDB, IConfiguration _configuration)
 {
     public async Task<ResultDto<List<RhHistoricoMovimientoResponse>>> HandleAsync(
-        RhHistoricoMovimientoGetHistoricoFechaQuery query)
+        RhHistoricoMovimientoGetHistoricoFechaQuery query, CancellationToken cancellationToken = default)
     {
         if (query.Desde == default)
         {
@@ -111,11 +113,30 @@ public class RhHistoricoMovimientoGetHistoricoFechaHandler(ConnectionDB _connect
             return BuildInvalidResult("Debe seleccionar una persona.", query.Page);
         }
 
+        if (!int.TryParse(_configuration["settings:EmpresaConfig"], out var empresa) || empresa <= 0)
+            return BuildInvalidResult("EmpresaConfig debe ser un numero valido.", query.Page);
+
+        if (query.Page < 0 || query.PageSize < 0)
+            return BuildInvalidResult("Paginacion invalida.", query.Page);
+        if ((query.CodigoTipoNomina?.Any(x => x is null || x.CodigoTipoNomina <= 0) ?? false)
+            || (query.CodigoConcepto?.Any(x => x is null || x.CodigoConcepto <= 0) ?? false))
+            return BuildInvalidResult("Filtros de nomina o concepto invalidos.", query.Page);
+        var sortColumn = (query.SortColumn ?? "fechaNominaMov").Trim().ToLowerInvariant();
+        if (sortColumn is "full_name") sortColumn = "fullname";
+        var sort = (query.TipoSort ?? "desc").Trim().ToLowerInvariant();
+        var columns = new[] { "fechanominamov", "fechanomina", "fullname", "tiponomina",
+            "sueldo", "monto", "codigo", "denominacion", "unidadejecutora", "cedula" };
+        if (!columns.Contains(sortColumn) || sort is not ("asc" or "desc"))
+            return BuildInvalidResult("Ordenamiento no soportado.", query.Page);
+        var search = query.SearchText?.Trim();
+        if (search?.Length > 200)
+            return BuildInvalidResult("La busqueda admite hasta 200 caracteres.", query.Page);
+
         using var cn = _connectionDB.GetRhConnection();
 
         try
         {
-            await cn.OpenAsync();
+            await cn.OpenAsync(cancellationToken);
         }
         catch (Exception ex)
         {
@@ -130,7 +151,14 @@ public class RhHistoricoMovimientoGetHistoricoFechaHandler(ConnectionDB _connect
         using var cmd = new OracleCommand("RH.SP_RH_HISTORICO_MOV_MASIVO_GET", cn);
         cmd.CommandType = CommandType.StoredProcedure;
         cmd.BindByName = true;
+        cmd.Parameters.Add("p_empresa", OracleDbType.Int32).Value = empresa;
 
+        var exportLimit = int.TryParse(_configuration["settings:HistoricoExportMaxRows"], out var configuredLimit)
+            && configuredLimit > 0 ? Math.Min(configuredLimit, 100000) : 20000;
+        cmd.Parameters.Add("p_limite_export", OracleDbType.Int32).Value = exportLimit;
+        cmd.Parameters.Add("p_sort_column", OracleDbType.Varchar2).Value = sortColumn;
+        cmd.Parameters.Add("p_sort", OracleDbType.Varchar2).Value = sort;
+        cmd.Parameters.Add("p_search", OracleDbType.Varchar2).Value = DbValue(search);
         cmd.Parameters.Add("p_desde", OracleDbType.Date).Value = query.Desde.Date;
         cmd.Parameters.Add("p_hasta", OracleDbType.Date).Value = query.Hasta.Date;
         cmd.Parameters.Add("p_codigo_persona", OracleDbType.Int32).Value = isIndividual ? query.CodigoPersona : 0;
@@ -146,9 +174,9 @@ public class RhHistoricoMovimientoGetHistoricoFechaHandler(ConnectionDB _connect
 
         try
         {
-            using (var reader = await cmd.ExecuteReaderAsync())
+            using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
             {
-                while (await reader.ReadAsync())
+                while (await reader.ReadAsync(cancellationToken))
                 {
                     list.Add(MapHistorico(reader));
                 }
@@ -165,7 +193,8 @@ public class RhHistoricoMovimientoGetHistoricoFechaHandler(ConnectionDB _connect
                 IsValid = isSuccess,
                 LinkData = string.Empty,
                 Message = isSuccess ? string.Empty : dbMessage,
-                Page = query.Page
+                Page = query.Page,
+                TotalPage = query.PageSize > 0 ? (int)Math.Ceiling(totalRecords / (double)Math.Clamp(query.PageSize, 1, 500)) : (totalRecords > 0 ? 1 : 0)
             };
         }
         catch (Exception ex)
@@ -301,16 +330,17 @@ public class RhHistoricoMovimientoGetHistoricoFechaHandler(ConnectionDB _connect
     }
 }
 
+[Authorize]
 [ApiController]
 [Route("api/RhHistoricoMovimiento")]
-public class RhHistoricoMovimientoGetHistoricoFechaController(ConnectionDB _connectionDB) : ControllerBase
+public class RhHistoricoMovimientoGetHistoricoFechaController(ConnectionDB _connectionDB, IConfiguration _configuration) : ControllerBase
 {
     [HttpPost]
     [Route("GetHistoricoFecha")]
-    public async Task<IActionResult> GetHistoricoFecha(RhHistoricoMovimientoGetHistoricoFechaQuery value)
+    public async Task<IActionResult> GetHistoricoFecha(RhHistoricoMovimientoGetHistoricoFechaQuery value, CancellationToken cancellationToken)
     {
-        var handler = new RhHistoricoMovimientoGetHistoricoFechaHandler(_connectionDB);
-        var historico = await handler.HandleAsync(value);
+        var handler = new RhHistoricoMovimientoGetHistoricoFechaHandler(_connectionDB, _configuration);
+        var historico = await handler.HandleAsync(value, cancellationToken);
 
         return Ok(historico);
     }

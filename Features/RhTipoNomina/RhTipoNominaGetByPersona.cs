@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Oracle.ManagedDataAccess.Client;
 using OssmmasoftVerticalSlice.ContextDB;
@@ -22,10 +23,10 @@ public record RhTipoNominaByPersonaResponse(
     decimal SueldoMinimo
 );
 
-public class RhTipoNominaGetByPersonaHandler(ConnectionDB _connectionDB)
+public class RhTipoNominaGetByPersonaHandler(ConnectionDB _connectionDB, IConfiguration _configuration)
 {
     public async Task<ResultDto<List<RhTipoNominaByPersonaResponse>>> HandleAsync(
-        RhTipoNominaGetByPersonaQuery query)
+        RhTipoNominaGetByPersonaQuery query, CancellationToken cancellationToken = default)
     {
         if (query.Desde == default)
         {
@@ -42,11 +43,14 @@ public class RhTipoNominaGetByPersonaHandler(ConnectionDB _connectionDB)
             return BuildInvalidResult("Fecha Hasta no puede ser menor que Fecha Desde");
         }
 
+        if (!int.TryParse(_configuration["settings:EmpresaConfig"], out var empresa) || empresa <= 0)
+            return BuildInvalidResult("EmpresaConfig debe ser un numero valido.");
+
         using var cn = _connectionDB.GetRhConnection();
 
         try
         {
-            await cn.OpenAsync();
+            await cn.OpenAsync(cancellationToken);
         }
         catch (Exception ex)
         {
@@ -60,8 +64,10 @@ public class RhTipoNominaGetByPersonaHandler(ConnectionDB _connectionDB)
         using var cmd = new OracleCommand("RH.SP_RH_TN_BY_PERSONA_GET", cn);
         cmd.CommandType = CommandType.StoredProcedure;
         cmd.BindByName = true;
+        cmd.Parameters.Add("p_empresa", OracleDbType.Int32).Value = empresa;
 
         cmd.Parameters.Add("p_codigo_persona", OracleDbType.Int32).Value = query.CodigoPersona;
+        cmd.Parameters.Add("p_sin_fecha", OracleDbType.Int32).Value = query.SinRestriccionFecha ? 1 : 0;
         cmd.Parameters.Add("p_desde", OracleDbType.Date).Value = query.Desde.Date;
         cmd.Parameters.Add("p_hasta", OracleDbType.Date).Value = query.Hasta.Date;
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
@@ -72,9 +78,9 @@ public class RhTipoNominaGetByPersonaHandler(ConnectionDB _connectionDB)
 
         try
         {
-            using (var reader = await cmd.ExecuteReaderAsync())
+            using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
             {
-                while (await reader.ReadAsync())
+                while (await reader.ReadAsync(cancellationToken))
                 {
                     list.Add(new RhTipoNominaByPersonaResponse(
                         reader.SafeGetInt32("CODIGO_TIPO_NOMINA"),
@@ -139,16 +145,17 @@ public class RhTipoNominaGetByPersonaHandler(ConnectionDB _connectionDB)
     }
 }
 
+[Authorize]
 [ApiController]
 [Route("api/RhTipoNomina")]
-public class RhTipoNominaGetByPersonaController(ConnectionDB _connectionDB) : ControllerBase
+public class RhTipoNominaGetByPersonaController(ConnectionDB _connectionDB, IConfiguration _configuration) : ControllerBase
 {
     [HttpPost]
     [Route("GetTipoNominaByCodigoPersona")]
-    public async Task<IActionResult> GetTipoNominaByCodigoPersona(RhTipoNominaGetByPersonaQuery value)
+    public async Task<IActionResult> GetTipoNominaByCodigoPersona(RhTipoNominaGetByPersonaQuery value, CancellationToken cancellationToken)
     {
-        var handler = new RhTipoNominaGetByPersonaHandler(_connectionDB);
-        var result = await handler.HandleAsync(value);
+        var handler = new RhTipoNominaGetByPersonaHandler(_connectionDB, _configuration);
+        var result = await handler.HandleAsync(value, cancellationToken);
 
         return Ok(result);
     }
