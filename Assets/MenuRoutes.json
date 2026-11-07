@@ -103,6 +103,7 @@
   "/apps/rh/tipoNomina",
   "/apps/rh/variaciones/variaciones_masivas",
   "/apps/roles",
+  "/apps/sis/correos",
   "/apps/sis/seguridad",
   "/apps/sis/usuario-rol",
   "/apps/sis/usuarios",

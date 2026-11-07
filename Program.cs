@@ -138,6 +138,7 @@ builder.Services.AddScoped<PreviewCntAutomaticoHandler>();
 builder.Services.AddScoped<ConfirmCntAutomaticoHandler>();
 builder.Services.AddScoped<GetCntMayorAnaliticoHandler>();
 builder.Services.AddScoped<GetCntMovimientoAuxiliarHandler>();
+builder.Services.AddSingleton<IEmailManualSender, EmailSmtpSender>();
 builder.Services.AddHostedService<EmailQueueWorker>();
 builder.Services.AddCors(options =>
 {
