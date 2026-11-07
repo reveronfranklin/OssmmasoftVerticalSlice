@@ -42,14 +42,14 @@ JSON camelCase y envoltura ResultDto habitual: isValid, message, data. 401 sin
 sesion, 403 sin permiso; errores esperados con isValid=false y mensaje seguro.
 JSON mal formado puede producir 400. Claves GUID canonicas en minusculas; mantener
 la misma solicitud y contenido al reintentar por un fallo de red. Distinta solicitud
-no evita el control global de duplicados por recibo/version.
+permite un nuevo envio del mismo recibo/version. Una misma solicitud GUID sigue siendo idempotente.
 
 Analizar no envia. Nomina/periodo positivos, oficina cero (todas) o positiva,
 1..100 personas positivas sin duplicados, limite efectivo configurable hasta 100.
 Una persona ajena a los filtros rechaza el analisis completo. Sin correo o invalido
 se marca OMITIDO. Al confirmar se comprueba revision, actor, vencimiento (15 minutos),
 correo y version del recibo. Un cambio exige nuevo analisis. La seleccion vacia nunca
-significa todos. Los duplicados concurrentes se excluyen atomicamente al confirmar.
+significa todos. Cada analisis nuevo puede confirmar el mismo recibo aunque existan entregas anteriores; la repeticion de una misma confirmacion no crea otro envio.
 
 El modelo de lote incluye loteId, revision, estado, motivo, codigoTipoNomina,
 codigoPeriodo, codigoIcp, creado, vence, habilitado, total, conteos, items, page,
@@ -96,3 +96,26 @@ existente; los filtros limpian seleccion.
 La revision permite quitar personas mediante nuevo analisis. El historial permite
 recuperar el lote despues de recargar sin almacenar borradores o PDFs en localStorage.
 Cerrar el navegador no cancela los envios confirmados.
+
+
+Cambio de politica (2026-11-07): se retiro el bloqueo por empresa/persona/nomina/
+periodo/huella. Los envios anteriores no causan OMITIDO en un analisis nuevo, incluso
+si cambia o se conserva el correo. El flujo especializado reenviarRecibo tambien
+permite varias solicitudes nuevas desde un mismo item aceptado, sin exigir que sea
+el ultimo. Mantiene su permiso y motivo propios. Las comprobaciones de contacto,
+recibo, empresa, autenticacion y limites SMTP siguen vigentes.
+Los lotes historicos omitidos no se alteran: crear un analisis nuevo.
+Instalacion incremental RH: INSTALL_R53_REPETIR.sql y publicar API.
+
+La unicidad de solicitud se aplica solamente a valores no nulos mediante el indice
+UX_RRM_SOL. Se retira UK_RRM_SOL, cuya combinacion de columnas en Oracle impedia
+coexistir a varios analisis sin confirmar del mismo actor. No se eliminan lotes.
+
+Verificacion en pruebas: dos analisis simultaneos del mismo recibo, confirmacion
+independiente de ambos, repeticion idempotente de confirmacion, rechazo de otra
+solicitud sobre un lote ya confirmado y dos reenvios distintos desde el mismo
+original. Todo revertido sin dejar lotes ni correos de prueba. Diez pruebas locales
+de recibos satisfactorias. Backups privados del paquete anterior al cambio:
+`/srv/ossmmasoft-pruebas/shared/config/backups/receipt-repeat-20261107T203855Z.json`;
+instalacion de indice y paquete validada con respaldo adicional
+`receipt-repeat-20261107T204326Z.json` en ese mismo directorio.

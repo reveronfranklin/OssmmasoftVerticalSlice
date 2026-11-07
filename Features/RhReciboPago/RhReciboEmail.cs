@@ -62,7 +62,6 @@ public class RhReciboEmailController(ConnectionDB db,IConfiguration config,IWebH
                 return EmailManualRules.Fail<ReciboEmailLote>("La seleccion contiene una persona ajena a la consulta autorizada.");
             var contact=await Contact(cn,company,person,Ct);
             var json=RhReciboEmailRules.Serialize(source);var hash=RhReciboEmailRules.Hash(json);var message=contact.Error;
-            if(message.Length==0 && await Previous(cn,company,person,value.CodigoTipoNomina,value.CodigoPeriodo,hash,Ct)>0) message="Recibo con envio anterior. Consulte el lote original para reintentar o reenviar.";
             rows.Add((person,lines[0].Nombre,contact.Correo,message,json,hash));
         }
         var id=Guid.NewGuid().ToString("D");

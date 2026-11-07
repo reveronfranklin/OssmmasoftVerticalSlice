@@ -11,6 +11,12 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 // Registrar nuestra clase de conexión
 builder.Services.AddScoped<ConnectionDB>();
+// R54: metadata-only comparison; no production execution identity is registered.
+builder.Services.AddSingleton<OssmmasoftVerticalSlice.Features.DatabaseDeployment.DeploymentMetadata>();
+builder.Services.AddSingleton<OssmmasoftVerticalSlice.Features.DatabaseDeployment.DeploymentStore>();
+builder.Services.AddSingleton<OssmmasoftVerticalSlice.Features.DatabaseDeployment.DeploymentQueue>();
+builder.Services.AddScoped<OssmmasoftVerticalSlice.Features.DatabaseDeployment.DeploymentHandler>();
+builder.Services.AddHostedService<OssmmasoftVerticalSlice.Features.DatabaseDeployment.DeploymentWorker>();
 builder.Services.AddSingleton<OssmmasoftVerticalSlice.Features.BienesMunicipales.BmReplicaEstado>();
 builder.Services.AddHostedService<OssmmasoftVerticalSlice.Features.BienesMunicipales.BmReplicaManualWorker>();
 builder.Services.AddScoped<OssmmasoftVerticalSlice.Features.BienesMunicipales.BmReplicaConteoService>();

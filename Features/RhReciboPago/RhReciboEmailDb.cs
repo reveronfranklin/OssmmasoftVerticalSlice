@@ -28,12 +28,6 @@ internal static class RrmDb
         while(await reader.ReadAsync(ct)) rows.Add(new(reader.SafeGetInt32("CODIGO_COMUNICACION"),reader.SafeGetString("CORREO"),reader.SafeGetInt32("PRINCIPAL")==1));
         return RhReciboEmailRules.ResolveContact(rows);
     }
-    internal static async Task<int> Previous(OracleConnection cn,int company,int persona,int nomina,int periodo,string hash,CancellationToken ct)
-    {
-        using var cmd=Cmd(cn,"PREVIO",null,N("p_EMPRESA",company),N("p_PERSONA",persona),N("p_NOMINA",nomina),N("p_PERIODO",periodo),S("p_HASH",hash));
-        var output=cmd.Parameters.Add("p_ID",OracleDbType.Int32,ParameterDirection.Output);await cmd.ExecuteNonQueryAsync(ct);
-        return SupportDb.GetIntOutput(output);
-    }
     private static byte[] Blob(OracleDataReader reader,string name)
     {
         using var value=reader.GetOracleBlob(reader.GetOrdinal(name));

@@ -1,0 +1,86 @@
+global using Microsoft.Extensions.Configuration;
+global using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.FileProviders;
+using OssmmasoftVerticalSlice.Features.DatabaseDeployment;
+int count=0;
+void Check(bool valid,string label){if(!valid)throw new Exception(label);count++;}
+void Reject(Action fn,string label){try{fn();}catch(InvalidOperationException){count++;return;}throw new Exception(label);}
+async Task RejectAsync(Func<Task> fn,string label){try{await fn();}catch(InvalidOperationException){count++;return;}throw new Exception(label);}
+DeploymentObject Obj(string name,string ddl,string type="PROCEDURE",string owner="RH",string status="VALID",params DeploymentDependency[] dependencies)=>new(owner,type,name,status,ddl,dependencies.ToList(),[]);
+Check(!DeploymentRules.SchemaAllowed("BMC",["RH","BMC"]),"Hard exclusion BMC");
+Check(!DeploymentRules.SchemaAllowed("RHC",["RHC"]),"Hard exclusion RHC");
+Check(DeploymentRules.SchemaAllowed("CNT",["CNT"]),"CNT enabled");
+Check(!DeploymentRules.SchemaAllowed("SYS",["SYS"]),"System excluded");
+var normal=DeploymentRules.Normalize("create procedure P as begin null; end; -- comment", "PROCEDURE");
+Check(normal==DeploymentRules.Normalize("CREATE  PROCEDURE p AS /* description */ BEGIN NULL; END;", "PROCEDURE"),"Formatting ignored outside literals");
+Check(DeploymentRules.Normalize("SELECT 'a  b' FROM dual","VIEW")!=DeploymentRules.Normalize("SELECT 'a b' FROM dual","VIEW"),"Literal whitespace preserved");
+Check(DeploymentRules.Normalize("SELECT q'[a  b]' FROM dual","VIEW")!=DeploymentRules.Normalize("SELECT q'[a b]' FROM dual","VIEW"),"Oracle alternative literal preserved");
+Check(DeploymentRules.Normalize("SELECT /*+ INDEX(T X) */ * FROM T","VIEW")!=DeploymentRules.Normalize("SELECT * FROM T","VIEW"),"Hints preserved");
+Check(DeploymentRules.Normalize("CREATE SEQUENCE S START WITH 9999999999999999999999999999 INCREMENT BY 1;","SEQUENCE")==DeploymentRules.Normalize("CREATE SEQUENCE S START WITH 3 INCREMENT BY 1;","SEQUENCE"),"Sequence current counter ignored");
+var old=Obj("P","CREATE OR REPLACE PROCEDURE P AS BEGIN NULL; END;");
+var changed=old with {Ddl="CREATE OR REPLACE PROCEDURE P AS BEGIN x; END;"};
+var newView=Obj("V","CREATE OR REPLACE VIEW V AS SELECT 1 FROM DUAL;","VIEW");
+var extra=Obj("LEGACY","CREATE PROCEDURE LEGACY AS BEGIN NULL; END;");
+var diffs=DeploymentRules.Compare([changed,newView],[old,extra]);
+Check(diffs.Single(x=>x.Name=="P").Estado=="MODIFICADO","Changed code detected");
+Check(diffs.Single(x=>x.Name=="V").Estado=="NUEVO","New object detected");
+Check(diffs.Single(x=>x.Name=="LEGACY").Estado=="SOLO_PRODUCCION","Production-only retained");
+Check(DeploymentRules.Compare([old with{Ddl="",Status="NO_ACCESIBLE_ORA_31603"}],[old])[0].Estado=="NO_COMPARABLE","Inaccessible is not missing");
+Check(DeploymentRules.Compare([old with{Status="INVALID"}],[old])[0].Estado=="INVALIDO","Invalid visible");
+var record=new DeploymentRecord{Id=Guid.NewGuid().ToString("D"),Actor=3,Status="COMPLETO",Source=[changed,newView],Target=[old,extra],Differences=diffs,RequestHash="one",TargetIdentities=[new("2","PROD","RH")]};
+var plan=DeploymentPlanBuilder.Build(record,[changed.Key,newView.Key],"version-a");
+Check(plan.Script.Contains("CREATE OR REPLACE PROCEDURE") && plan.Script.Contains("\n/"),"PLSQL terminator");
+Check(!plan.Script.Contains("DROP ") && !plan.Script.Contains("LEGACY"),"No production-only deletion");
+Check(plan.Hash!=DeploymentPlanBuilder.Build(withRecord(),[newView.Key],"version-a").Hash,"Plan bound to selection");
+DeploymentRecord withRecord()=>record;
+Reject(()=>DeploymentPlanBuilder.Build(record,[extra.Key],""),"Cannot select deletion");
+Reject(()=>DeploymentPlanBuilder.Build(record,[changed.Key,changed.Key],""),"Duplicate selection rejected");
+var dependency=Obj("EXCLUDED_REF","CREATE PROCEDURE EXCLUDED_REF AS BEGIN NULL; END;",dependencies:[new("BMC","X","TABLE")]);
+var depRecord=new DeploymentRecord{Status="COMPLETO",Source=[dependency],Differences=DeploymentRules.Compare([dependency],[])};
+var depPlan=DeploymentPlanBuilder.Build(depRecord,[dependency.Key],"");
+Check(depPlan.Items[0].Manual && !depPlan.Script.Split('\n').Any(x=>x.StartsWith("CREATE")),"Excluded dependency never executable in plan");
+var spec=Obj("PKG","CREATE PACKAGE PKG AS PROCEDURE P; END;","PACKAGE");
+var body=Obj("PKG","CREATE PACKAGE BODY PKG AS PROCEDURE P IS BEGIN NULL; END; END;","PACKAGE BODY");
+var pkgRecord=new DeploymentRecord{Status="COMPLETO",Source=[spec,body],Differences=DeploymentRules.Compare([spec,body],[])};
+var pkgPlan=DeploymentPlanBuilder.Build(pkgRecord,[body.Key,spec.Key],"");
+Check(pkgPlan.Items[0].Key==spec.Key,"Spec before body");
+var metadataConfig=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{
+ ["DatabaseDeployment:AllowedSchemas:0"]="BMC",["DatabaseDeployment:AllowedSchemas:1"]="RHC",
+ ["DatabaseDeployment:Pruebas:ConnectionStrings:BMC"]="NEVER PARSE THIS",["DatabaseDeployment:Pruebas:ConnectionStrings:RHC"]="NEVER PARSE THIS"}).Build();
+var metadata=new DeploymentMetadata(metadataConfig);
+foreach(var schema in new[]{"BMC","RHC"}){
+ var result=await metadata.Check(schema,true,CancellationToken.None);
+ Check(!result.Validado && result.Mensaje.Contains("excluido"),"Excluded before connection creation: "+schema);
+}
+var tmp=Path.Combine(Path.GetTempPath(),"r54-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(tmp);
+try{
+ var env=new TestEnvironment{ContentRootPath=Path.Combine(tmp,"app")};
+ var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{["DatabaseDeployment:StoragePath"]=Path.Combine(tmp,"private"),["DatabaseDeployment:Enabled"]="true"}).Build();
+ var store=new DeploymentStore(config,env);
+ var data=new DeploymentRecord{Id=Guid.NewGuid().ToString("D"),Actor=3,RequestHash="same",Schemas=["CNT"],Types=["TABLE"]};
+ Check((await store.Create(data,CancellationToken.None)).Created,"New job stored");
+ Check(!(await store.Create(data,CancellationToken.None)).Created,"Same job idempotent");
+ await RejectAsync(async()=>await store.Create(new DeploymentRecord{Id=data.Id,Actor=4,RequestHash="same"},CancellationToken.None),"Cross-actor key rejected");
+ await RejectAsync(async()=>await store.Create(new DeploymentRecord{Id=data.Id,Actor=3,RequestHash="other"},CancellationToken.None),"Changed request rejected");
+ Check((await store.List(4)).Count==0 && (await store.List(3)).Count==1,"History owned by actor");
+ await RejectAsync(async()=>await store.Read("../../outside"),"Traversal rejected");
+ var publicConfig=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{["DatabaseDeployment:StoragePath"]=Path.Combine(env.ContentRootPath,"wwwroot","history")}).Build();
+ await RejectAsync(async()=>await new DeploymentStore(publicConfig,env).Read(Guid.NewGuid().ToString("D")),"Public storage rejected");
+ data.Status="COMPLETO";data.Source=[newView];data.Differences=DeploymentRules.Compare(data.Source,[]);await store.Save(data,CancellationToken.None);
+ var prepared=await Task.WhenAll(store.Prepare(data.Id,3,[newView.Key],"v1"),store.Prepare(data.Id,3,[newView.Key],"v1"));
+ Check(prepared[0].Id==prepared[1].Id && (await store.Read(data.Id))!.Plans.Count==1,"Concurrent preparation is idempotent");
+ await RejectAsync(async()=>await store.Prepare(data.Id,4,[newView.Key],"v1"),"Cross-actor plan rejected");
+ if(!OperatingSystem.IsWindows()){
+  Directory.CreateDirectory(env.ContentRootPath);var link=Path.Combine(tmp,"public-link");Directory.CreateSymbolicLink(link,env.ContentRootPath);
+  var linked=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{["DatabaseDeployment:StoragePath"]=Path.Combine(link,"history")}).Build();
+  await RejectAsync(async()=>await new DeploymentStore(linked,env).Read(Guid.NewGuid().ToString("D")),"Symlink to application storage rejected");
+ }
+ var privateFile=Path.Combine(tmp,"private-config.json");await File.WriteAllTextAsync(privateFile,"""{"ConnectionStrings":{"Business":"must-not-override"},"DatabaseDeployment":{"Enabled":true,"Pruebas":{"ExpectedDatabaseId":"42"}}}""");
+ var main=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{["ConnectionStrings:Business"]="original",["DatabaseDeployment:PrivateConfigPath"]=privateFile}).Build();
+ var options=DeploymentOptions.Read(main);Check(options.Enabled && options.Pruebas.ExpectedDatabaseId=="42" && main["ConnectionStrings:Business"]=="original","Private feature configuration cannot override business");
+}finally{Directory.Delete(tmp,true);}
+Console.WriteLine($"{count} comprobaciones R54 satisfactorias. Sin conexion a Oracle ni ejecucion DDL.");
+sealed class TestEnvironment:IWebHostEnvironment
+{
+ public string ApplicationName{get;set;}="R54";public string EnvironmentName{get;set;}="Test";public string WebRootPath{get;set;}="";public IFileProvider WebRootFileProvider{get;set;}=new NullFileProvider();public string ContentRootPath{get;set;}="";public IFileProvider ContentRootFileProvider{get;set;}=new NullFileProvider();
+}

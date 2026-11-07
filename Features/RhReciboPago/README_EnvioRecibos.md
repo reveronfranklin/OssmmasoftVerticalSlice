@@ -68,14 +68,16 @@ con token. Un resultado se sincroniza a RH y solo despues se confirma su consumo
 en SIS, comparando estado y solicitud para no perder transiciones concurrentes.
 Generaciones interrumpidas se recuperan tras 30 minutos; envios SMTP interrumpidos
 pasan a INCIERTO, sin reencolar. Se conserva el mismo PDF para un reintento seguro.
-Los duplicados se reservan por empresa/persona/nomina/periodo/huella bajo bloqueo
-por empresa. Reenvios conservan relacion al item anterior y motivo.
+Se permiten envios repetidos del mismo recibo mediante nuevos analisis/solicitudes.
+La misma solicitud se confirma una sola vez. Reenvios conservan relacion al item
+anterior y motivo; no se exige que el item sea el ultimo. RH_REC_MAIL_GUARD se
+conserva como tabla historica, pero ya no bloquea entregas.
 
 Un fallo de conexion/autenticacion pausa el limitador SMTP de la empresa y los
 lotes activos. Corregir el problema, luego Reanudar desde un lote propio pausado. La accion
 libera SMTP y todos los lotes pausados de la empresa (incluidos pendientes manuales
 ya autorizados), como informa el boton; los items ERROR
-se reintentan explicitamente. No reenvia exitosos ni estados INCIERTO. Una pausa
+se reintentan explicitamente. No reintenta automaticamente exitosos ni estados INCIERTO; un envio nuevo puede iniciarse por decision del usuario. Una pausa
 puede propagarse al lote en el siguiente ciclo. Una cuota diaria agotada conserva
 los pendientes para el siguiente dia; ampliar el limite requiere acuerdo de cuota.
 
