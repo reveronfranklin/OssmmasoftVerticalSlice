@@ -444,6 +444,19 @@ internal static class SupportSecurity
     private static async Task<HashSet<string>> GetNormalizedPermissionsAsync(OracleConnection connection, int usuarioId, int empresa)
     {
         var permissions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // R50 keeps legacy behavior until the user has a validated migration.
+        var simple = false;
+        using (var exists = new OracleCommand("SELECT COUNT(*) FROM ALL_TABLES WHERE OWNER='SIS' AND TABLE_NAME='OSS_SEG_MENU_CTL'", connection))
+        {
+            if (SupportDb.ToInt32(await exists.ExecuteScalarAsync()) > 0)
+            {
+                using var mode = new OracleCommand("SELECT COUNT(*) FROM SIS.OSS_SEG_MENU_CTL WHERE CODIGO_USUARIO=:p_USER AND CODIGO_EMPRESA=:p_EMPRESA", connection) { BindByName = true };
+                mode.Parameters.Add("p_USER", OracleDbType.Int32).Value = usuarioId;
+                mode.Parameters.Add("p_EMPRESA", OracleDbType.Int32).Value = empresa;
+                simple = SupportDb.ToInt32(await mode.ExecuteScalarAsync()) > 0;
+            }
+        }
+        var activeRoleFilter = simple ? " AND EXISTS (SELECT 1 FROM SIS.OSS_ROL r JOIN SIS.OSS_MOD m ON m.CODIGO_MOD=r.CODIGO_MOD WHERE r.CODIGO_ROL=ur.CODIGO_ROL AND r.ACTIVO=1 AND m.ACTIVO=1) " : "";
 
         using (var cmd = new OracleCommand(@"
             SELECT p.CLAVE
@@ -453,7 +466,7 @@ internal static class SupportSecurity
              WHERE ur.CODIGO_USUARIO = :p_USUARIO_ID
                AND ur.CODIGO_EMPRESA = :p_CODIGO_EMPRESA
                AND NVL(ur.ACTIVO, 1) = 1
-               AND NVL(p.ACTIVO, 1) = 1", connection)
+               AND NVL(p.ACTIVO, 1) = 1" + activeRoleFilter, connection)
         {
             BindByName = true
         })
@@ -534,7 +547,7 @@ internal static class SupportSecurity
         return permissions.OrderBy(x => x).ToList();
     }
 
-    private static async Task<bool> IsSuperUserAsync(OracleConnection connection, int usuarioId, int empresa)
+    internal static async Task<bool> IsSuperUserAsync(OracleConnection connection, int usuarioId, int empresa)
     {
         using var cmd = new OracleCommand(@"
             SELECT NVL(IS_SUPERUSER, 0)

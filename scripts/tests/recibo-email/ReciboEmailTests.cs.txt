@@ -1,0 +1,94 @@
+using System.Text;
+using MimeKit;
+using OssmmasoftVerticalSlice.Features.Email;
+using OssmmasoftVerticalSlice.Features.RhReciboPago;
+
+namespace OssmmasoftVerticalSlice.Tests.RhReciboPago;
+
+public class ReciboEmailTests
+{
+    [Fact]
+    public void AUniqueNonPrincipalEmailIsUsable()
+    {
+        var result=RhReciboEmailRules.ResolveContact([new(1837," gmarmoto@example.com ",false)]);
+        Assert.Equal("gmarmoto@example.com",result.Correo);Assert.Empty(result.Error);
+    }
+    [Fact]
+    public void MultipleEmailsNeedOneUnambiguousPrincipal()
+    {
+        Assert.NotEmpty(RhReciboEmailRules.ResolveContact([new(1,"a@example.com",false),new(2,"b@example.com",false)]).Error);
+        Assert.Equal("b@example.com",RhReciboEmailRules.ResolveContact([new(1,"a@example.com",false),new(2,"b@example.com",true)]).Correo);
+        Assert.NotEmpty(RhReciboEmailRules.ResolveContact([new(1,"a@example.com",true),new(2,"b@example.com",true)]).Error);
+    }
+    [Fact]
+    public void InvalidPrincipalDoesNotSilentlyFallBack()
+    {
+        Assert.NotEmpty(RhReciboEmailRules.ResolveContact([new(1,"invalid",true),new(2,"good@example.com",false)]).Error);
+        Assert.NotEmpty(RhReciboEmailRules.ResolveContact([]).Error);
+        Assert.NotEmpty(RhReciboEmailRules.ResolveContact([new(1,"",true),new(2,"good@example.com",false)]).Error);
+        Assert.NotEmpty(RhReciboEmailRules.ResolveContact([new(1,"test@example.com\r\nBcc: a@example.com",false)]).Error);
+    }
+    [Fact]
+    public void SameAddressRecordsAreNotAmbiguous()
+    {
+        var result=RhReciboEmailRules.ResolveContact([new(1,"A@example.com",false),new(2,"a@example.com",false)]);
+        Assert.Empty(result.Error);
+    }
+    private static ReciboEmailFuente Source(params RhReciboLinea[] lines) => new(new(lines,false,"Nomina"),13,101,20,500,"logo-hash");
+    private static RhReciboLinea Line() => new(){CodigoEmpresa=13,CodigoPersona=101,CodigoTipoNomina=20,CodigoPeriodo=500,CodigoIcp=30,Monto=10};
+    [Fact]
+    public void MixedWorkersCompaniesPeriodsAndTemporaryReceiptsAreRejected()
+    {
+        var line=Line();Assert.True(RhReciboEmailRules.ValidSource(Source(line),13,101,20,500,30));
+        foreach(var wrong in new[]{line with{CodigoPersona=102},line with{CodigoEmpresa=14},line with{CodigoPeriodo=501},line with{CodigoTipoNomina=21},line with{CodigoIcp=31}})
+            Assert.False(RhReciboEmailRules.ValidSource(Source(line,wrong),13,101,20,500,30));
+        var temporary=Source(line) with{Datos=new([line],true,"Nomina")};
+        Assert.False(RhReciboEmailRules.ValidSource(temporary,13,101,20,500));
+        Assert.False(RhReciboEmailRules.ValidSource(Source(),13,101,20,500));
+    }
+    [Fact]
+    public void SnapshotHashDetectsModifiedPayrollAndSurvivesSerialization()
+    {
+        var original=RhReciboEmailRules.Serialize(Source(Line()));
+        var changed=RhReciboEmailRules.Serialize(Source(Line() with{Monto=11}));
+        Assert.NotEqual(RhReciboEmailRules.Hash(original),RhReciboEmailRules.Hash(changed));
+        Assert.Equal(RhReciboEmailRules.Serialize(Source(Line(),Line() with{Monto=12})),RhReciboEmailRules.Serialize(Source(Line() with{Monto=12},Line())));
+        var restored=System.Text.Json.JsonSerializer.Deserialize<ReciboEmailFuente>(original)!;
+        Assert.Equal(original,RhReciboEmailRules.Serialize(restored));
+    }
+    private static EmailManualDelivery Delivery(EmailPdfAttachment? attachment) => new(1,13,"token",["worker@example.com"],[],[],"Recibo","Texto","from@example.com","Ossmmasoft","id@example.com",attachment,true);
+    private static EmailPdfAttachment Pdf() {var bytes=Encoding.UTF8.GetBytes("%PDF-test-content");return new("recibo_101_20_500.pdf",bytes,RhReciboEmailRules.Hash(bytes));}
+    [Fact]
+    public void ReceiptMimeCarriesExactlyOnePdfAndOneRecipient()
+    {
+        var pdf=Pdf();using var mime=EmailSmtpSender.BuildMessage(Delivery(pdf));
+        Assert.Single(mime.To);Assert.Empty(mime.Cc);Assert.Empty(mime.Bcc);
+        var part=Assert.IsType<MimePart>(Assert.Single(mime.Attachments));
+        Assert.Equal("application/pdf",part.ContentType.MimeType);Assert.Equal(pdf.Name,part.FileName);
+        using var stream=new MemoryStream();part.Content.DecodeTo(stream);Assert.Equal(pdf.Content,stream.ToArray());
+    }
+    [Fact]
+    public void MissingWrongOversizedOrForgedAttachmentCannotBeSent()
+    {
+        Assert.Throws<InvalidOperationException>(()=>EmailSmtpSender.BuildMessage(Delivery(null)));
+        var pdf=Pdf();
+        foreach(var bad in new[]{pdf with{Name="../../receipt.pdf"},pdf with{Sha256="bad"},pdf with{Content="not-pdf"u8.ToArray()},pdf with{Content=new byte[RhReciboEmailRules.MaxPdfBytes+1]}})
+            Assert.False(EmailSmtpSender.ValidAttachment(bad));
+        Assert.Throws<InvalidOperationException>(()=>EmailSmtpSender.BuildMessage(Delivery(pdf) with{Cc=["other@example.com"]}));
+        Assert.Throws<InvalidOperationException>(()=>EmailSmtpSender.BuildMessage(Delivery(pdf) with{Para=["a@example.com","b@example.com"]}));
+    }
+    [Fact]
+    public void ManualTextMailKeepsWorkingWithoutAnAttachment()
+    {
+        using var message=EmailSmtpSender.BuildMessage(Delivery(null) with{RequiresPdf=false});
+        Assert.Empty(message.Attachments);Assert.Equal("Texto",message.TextBody);
+    }
+    [Fact]
+    public void IncompleteAndUncertainLotsHaveDifferentStates()
+    {
+        Assert.Equal("PROCESANDO",RhReciboEmailRules.LotState("ACTIVO",["ACEPTADO_SMTP","EN_COLA"]));
+        Assert.Equal("FINALIZADO_INCIDENCIAS",RhReciboEmailRules.LotState("ACTIVO",["ACEPTADO_SMTP","INCIERTO"]));
+        Assert.Equal("FINALIZADO",RhReciboEmailRules.LotState("ACTIVO",["ACEPTADO_SMTP"]));
+        Assert.Equal("PAUSADO",RhReciboEmailRules.LotState("PAUSADO",["PENDIENTE"]));
+    }
+}

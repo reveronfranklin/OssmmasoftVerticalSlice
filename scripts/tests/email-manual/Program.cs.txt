@@ -1,0 +1,35 @@
+using OssmmasoftVerticalSlice.Features.Email;
+using MimeKit;
+using System.Text;
+using Microsoft.Extensions.Configuration;
+
+int count=0;
+void Check(bool condition,string name) { if(!condition) throw new Exception(name); count++; }
+var key=Guid.NewGuid().ToString();
+EmailManualCommand Valid() => new(key,new(){"a@example.com"},"Prueba","Hola");
+Check(EmailManualRules.Normalize(Valid()).IsValid,"Valid request");
+Check(!EmailManualRules.Normalize(Valid() with {Solicitud="bad"}).IsValid,"Invalid idempotency key");
+Check(!EmailManualRules.Normalize(Valid() with {Para=new(){"a@example.com\r\n"}}).IsValid,"Header injection");
+Check(!EmailManualRules.Normalize(Valid() with {Asunto="Test\r\nBcc: other@example.com"}).IsValid,"Subject injection");
+Check(!EmailManualRules.Normalize(Valid() with {Asunto=new string('é',126)}).IsValid,"UTF8 byte limit");
+Check(!EmailManualRules.Normalize(Valid() with {Mensaje=new string('x',10001)}).IsValid,"Body limit");
+Check(!EmailManualRules.Normalize(Valid() with {Para=Enumerable.Repeat("a@example.com",21).ToList()}).IsValid,"Recipient cap");
+var normalized=EmailManualRules.Normalize(Valid() with {Cc=new(){"A@example.com","b@example.com"},Cco=new(){"b@example.com","c@example.com"}}).Data!;
+Check(normalized.Para.Count==1 && normalized.Cc.Count==1 && normalized.Cco.Count==1,"Global deduplication");
+Check(EmailManualRules.Normalize(Valid()).Data!.Huella!=EmailManualRules.Normalize(Valid() with{Mensaje="Otro"}).Data!.Huella,"Content fingerprint");
+var delivery=new EmailManualDelivery(1,13,key,new(){"to@example.com"},new(){"cc@example.com"},new(){"hidden@example.com"},"Asunto","Texto","from@example.com","Ossmmasoft","id@example.com");
+using(var mime=EmailSmtpSender.BuildMessage(delivery)) {
+ Check(mime.Bcc.Mailboxes.Single().Address=="hidden@example.com","Bcc kept for SMTP envelope");
+ using var stream=new MemoryStream(); mime.WriteTo(EmailSmtpSender.MessageFormat(),stream);
+ var wire=Encoding.UTF8.GetString(stream.ToArray());
+ Check(!wire.Contains("hidden@example.com") && !wire.Contains("Bcc:"),"Bcc omitted from wire headers");
+ Check(wire.Contains("To:") && wire.Contains("Cc:"),"To/CC headers");
+}
+var sender=new EmailSmtpSender();
+var result=await sender.SendAsync(new EmailSettings{Enabled=false},delivery,CancellationToken.None);
+Check(result.Estado=="ERROR","Disabled sender never connects");
+var bad=new EmailSettings{Enabled=true,Host="localhost",Port=465,Security="StartTls",Username="u@example.com",Password="placeholder",FromEmail="from@example.com"};
+Check(bad.Validate()!=null,"465 requires implicit TLS");
+Check((await sender.SendAsync(bad,delivery,CancellationToken.None)).Estado=="ERROR","Invalid configuration never connects");
+Check(!EmailSettings.Read(new ConfigurationBuilder().Build()).Enabled,"Safe disabled default");
+Console.WriteLine($"{count} email checks passed; no SMTP connections or real messages.");

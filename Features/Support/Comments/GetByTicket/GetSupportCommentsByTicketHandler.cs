@@ -24,7 +24,7 @@ public class GetSupportCommentsByTicketHandler(ConnectionDB connectionDB, IConfi
             return new ResultDto<List<SupportCommentResponse>>(null!) { IsValid = false, Message = ticketAccess.Message };
         }
 
-        return await childRowsReader.ReadAsync("SIS.SP_SOP_COMM_GET_TKT", value.TicketId, reader => new SupportCommentResponse(
+        return await childRowsReader.ReadAsync("SIS.SP_SOP_COMM_VISIBLE", value.TicketId, reader => new SupportCommentResponse(
             reader.SafeGetInt32("COMENTARIO_ID"),
             reader.SafeGetInt32("TICKET_ID"),
             reader.SafeGetInt32("USUARIO_ID"),
@@ -32,6 +32,6 @@ public class GetSupportCommentsByTicketHandler(ConnectionDB connectionDB, IConfi
             reader.SafeGetString("COMENTARIO"),
             SupportDb.SafeGetFlag(reader, "ES_INTERNO"),
             Convert.ToDateTime(reader.GetValue(reader.GetOrdinal("FECHA_COMENTARIO")))
-        ));
+        ), visibilityUser: value.UsuarioId);
     }
 }

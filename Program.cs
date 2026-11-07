@@ -11,6 +11,12 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 // Registrar nuestra clase de conexión
 builder.Services.AddScoped<ConnectionDB>();
+// R54: metadata-only comparison; no production execution identity is registered.
+builder.Services.AddSingleton<OssmmasoftVerticalSlice.Features.DatabaseDeployment.DeploymentMetadata>();
+builder.Services.AddSingleton<OssmmasoftVerticalSlice.Features.DatabaseDeployment.DeploymentStore>();
+builder.Services.AddSingleton<OssmmasoftVerticalSlice.Features.DatabaseDeployment.DeploymentQueue>();
+builder.Services.AddScoped<OssmmasoftVerticalSlice.Features.DatabaseDeployment.DeploymentHandler>();
+builder.Services.AddHostedService<OssmmasoftVerticalSlice.Features.DatabaseDeployment.DeploymentWorker>();
 builder.Services.AddSingleton<OssmmasoftVerticalSlice.Features.BienesMunicipales.BmReplicaEstado>();
 builder.Services.AddHostedService<OssmmasoftVerticalSlice.Features.BienesMunicipales.BmReplicaManualWorker>();
 builder.Services.AddScoped<OssmmasoftVerticalSlice.Features.BienesMunicipales.BmReplicaConteoService>();
@@ -30,6 +36,8 @@ builder.Services.AddScoped<NotifyExpiredSupportSlaHandler>();
 builder.Services.AddScoped<GetSupportCatalogsHandler>();
 builder.Services.AddScoped<SupportTicketHandlerSupport>();
 builder.Services.AddScoped<CreateSupportTicketHandler>();
+builder.Services.AddScoped<SupportTicketAutomation>();
+builder.Services.AddScoped<SupportTicketEvents>();
 builder.Services.AddScoped<GetSupportTicketsHandler>();
 builder.Services.AddScoped<GetSupportTicketByIdHandler>();
 builder.Services.AddScoped<AssignSupportTicketHandler>();
@@ -138,6 +146,7 @@ builder.Services.AddScoped<PreviewCntAutomaticoHandler>();
 builder.Services.AddScoped<ConfirmCntAutomaticoHandler>();
 builder.Services.AddScoped<GetCntMayorAnaliticoHandler>();
 builder.Services.AddScoped<GetCntMovimientoAuxiliarHandler>();
+builder.Services.AddSingleton<IEmailManualSender, EmailSmtpSender>();
 builder.Services.AddHostedService<EmailQueueWorker>();
 builder.Services.AddCors(options =>
 {

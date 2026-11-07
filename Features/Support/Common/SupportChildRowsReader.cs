@@ -7,7 +7,7 @@ namespace OssmmasoftVerticalSlice.Features.Support;
 
 public class SupportChildRowsReader(ConnectionDB connectionDB, IConfiguration config)
 {
-    public async Task<ResultDto<List<T>>> ReadAsync<T>(string procedure, int ticketId, Func<IDataReader, T> map)
+    public async Task<ResultDto<List<T>>> ReadAsync<T>(string procedure, int ticketId, Func<IDataReader, T> map, int visibilityUser = 0)
     {
         if (!SupportDb.TryGetEmpresa(config, out int empresa, out string errorMessage))
         {
@@ -16,7 +16,14 @@ public class SupportChildRowsReader(ConnectionDB connectionDB, IConfiguration co
 
         using var cn = connectionDB.GetSisConnection();
         await cn.OpenAsync();
+        var includeInternal = false;
+        if (visibilityUser > 0)
+        {
+            var permissions = await SupportSecurity.GetPermissionsAsync(cn, visibilityUser, empresa);
+            includeInternal = SupportSecurity.HasAny(permissions, SupportSecurity.CommentInternal);
+        }
         using var cmd = new OracleCommand(procedure, cn) { CommandType = CommandType.StoredProcedure, BindByName = true };
+        if (visibilityUser > 0) cmd.Parameters.Add("p_VER_INTERNO", OracleDbType.Int32).Value = includeInternal ? 1 : 0;
         cmd.Parameters.Add("p_TICKET_ID", OracleDbType.Int32).Value = ticketId;
         cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
         cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);

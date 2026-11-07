@@ -1,0 +1,99 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Data;
+using Oracle.ManagedDataAccess.Client;
+using Microsoft.Extensions.Configuration;
+using OssmmasoftVerticalSlice.Features.Support;
+
+const string key="SOP_SOLICITANTE_13";
+var apply=args.Contains("apply");
+var published="/srv/ossmmasoft-pruebas/current/vertical";
+var config=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();
+int company=int.Parse(config["settings:EmpresaConfig"]!);
+if(company!=13)throw new Exception("Empresa distinta al alcance autorizado.");
+System.Runtime.Loader.AssemblyLoadContext.Default.Resolving+=(_,n)=>{var f=Path.Combine(published,n.Name+".dll");return File.Exists(f)?System.Runtime.Loader.AssemblyLoadContext.Default.LoadFromAssemblyPath(f):null;};
+using var cn=new OracleConnection(config.GetConnectionString("DefaultConnectionSIS"));await cn.OpenAsync();
+OracleTransaction? tx=null;
+OracleCommand Sql(string sql,params (string,object)[] args){var c=new OracleCommand(sql,cn){BindByName=true,Transaction=tx,CommandTimeout=60};foreach(var(k,v) in args)c.Parameters.Add(k,v is int?OracleDbType.Int32:OracleDbType.Varchar2).Value=v;return c;}
+OracleCommand Proc(string name)=>new("SIS.PKG_OSS_MENU_SIMPLE."+name,cn){BindByName=true,CommandType=CommandType.StoredProcedure,Transaction=tx,CommandTimeout=60};
+void N(OracleCommand cmd,string n,object? v)=>cmd.Parameters.Add(n,OracleDbType.Int32).Value=v??DBNull.Value;
+void S(OracleCommand cmd,string n,string? v)=>cmd.Parameters.Add(n,OracleDbType.Varchar2).Value=v is null?DBNull.Value:v;
+void C(OracleCommand cmd,string n,string v)=>cmd.Parameters.Add(n,OracleDbType.Clob).Value=v;
+async Task<List<User>> Users(){var users=new List<User>();using var cmd=Sql("SELECT CODIGO_USUARIO,LOGIN,NVL(STATUS,'') STATUS,NVL(IS_SUPERUSER,0) SUPER FROM SIS.SIS_USUARIOS WHERE CODIGO_EMPRESA=:c ORDER BY CODIGO_USUARIO",("c",company));using var r=await cmd.ExecuteReaderAsync();while(await r.ReadAsync())users.Add(new(r.GetInt32(0),r.GetString(1),r.IsDBNull(2)?"":r.GetString(2),r.GetInt32(3)==1));return users;}
+async Task<List<Row>> Sources(User u){var rows=new List<Row>();using var cmd=Sql("SELECT CODIGO_USUARIO_ROL,CODIGO_USUARIO,USUARIO,DESCRIPCION,JSON_MENU FROM SIS.OSS_USUARIO_ROL WHERE CODIGO_USUARIO=:u OR UPPER(TRIM(USUARIO))=:l ORDER BY CODIGO_USUARIO_ROL",("u",u.Id),("l",u.Login.Trim().ToUpperInvariant()));using var r=await cmd.ExecuteReaderAsync();while(await r.ReadAsync())rows.Add(new(r.GetInt32(0),r.GetInt32(1),r.GetString(2),r.GetString(3),r.IsDBNull(4)?"[]":r.GetString(4)));if(rows.Any(x=>x.User!=u.Id || !x.Login.Trim().Equals(u.Login.Trim(),StringComparison.OrdinalIgnoreCase)))throw new Exception($"Conflicto de propietario: usuario {u.Id}");return rows;}
+async Task<Dictionary<int,HashSet<string>>> EffectiveAll(List<User> users){
+ var sets=users.ToDictionary(x=>x.Id,x=>new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+ using(var q=Sql(@"SELECT ur.CODIGO_USUARIO,p.CLAVE FROM SIS.OSS_USR_ROL ur JOIN SIS.OSS_ROL_PERM rp ON rp.CODIGO_ROL=ur.CODIGO_ROL JOIN SIS.OSS_PERM p ON p.CODIGO_PERM=rp.CODIGO_PERM WHERE ur.CODIGO_EMPRESA=:c AND NVL(ur.ACTIVO,1)=1 AND NVL(p.ACTIVO,1)=1 AND (NOT EXISTS(SELECT 1 FROM SIS.OSS_SEG_MENU_CTL ct WHERE ct.CODIGO_USUARIO=ur.CODIGO_USUARIO AND ct.CODIGO_EMPRESA=ur.CODIGO_EMPRESA) OR EXISTS(SELECT 1 FROM SIS.OSS_ROL ro JOIN SIS.OSS_MOD mo ON mo.CODIGO_MOD=ro.CODIGO_MOD WHERE ro.CODIGO_ROL=ur.CODIGO_ROL AND ro.ACTIVO=1 AND mo.ACTIVO=1))",("c",company)))using(var r=await q.ExecuteReaderAsync())while(await r.ReadAsync())if(sets.TryGetValue(r.GetInt32(0),out var set))set.Add(r.GetString(1));
+ using(var q=Sql("SELECT up.CODIGO_USUARIO,p.CLAVE,up.TIPO FROM SIS.OSS_USR_PERM up JOIN SIS.OSS_PERM p ON p.CODIGO_PERM=up.CODIGO_PERM WHERE up.CODIGO_EMPRESA=:c AND NVL(up.ACTIVO,1)=1 AND NVL(p.ACTIVO,1)=1",("c",company)))using(var r=await q.ExecuteReaderAsync())while(await r.ReadAsync())if(sets.TryGetValue(r.GetInt32(0),out var set)){if(r.GetString(2).Equals("DENY",StringComparison.OrdinalIgnoreCase))set.Remove(r.GetString(1));else set.Add(r.GetString(1));}
+ var asm=System.Runtime.Loader.AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.Combine(published,"OssmmasoftVerticalSlice.dll"));var extract=asm.GetType("OssmmasoftVerticalSlice.Features.Support.SupportSecurity")!.GetMethod("ExtractPermissions",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Static,null,[typeof(string),typeof(ISet<string>)],null)!;
+ using(var q=Sql("SELECT u.CODIGO_USUARIO,DBMS_LOB.SUBSTR(r.JSON_MENU,4000,1) FROM SIS.OSS_USUARIO_ROL r JOIN SIS.SIS_USUARIOS u ON u.CODIGO_USUARIO=r.CODIGO_USUARIO WHERE u.CODIGO_EMPRESA=:c AND NVL(u.STATUS,'1') IN ('1','A')",("c",company)))using(var r=await q.ExecuteReaderAsync())while(await r.ReadAsync())if(sets.TryGetValue(r.GetInt32(0),out var set))extract.Invoke(null,[r.IsDBNull(1)?"":r.GetString(1),set]);
+ return sets;
+}
+async Task<(string Mode,JsonArray Menu)> Session(int user){var a=System.Runtime.Loader.AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.Combine(published,"OssmmasoftVerticalSlice.dll"));var db=a.GetType("OssmmasoftVerticalSlice.ContextDB.ConnectionDB")!.GetConstructors().Single().Invoke([config]);var h=a.GetType("OssmmasoftVerticalSlice.Features.SisSeguridad.SisMenuSimpleHandler")!;var t=(Task)h.GetMethod("Session")!.Invoke(h.GetConstructors().Single().Invoke([db,config]),[user])!;await t;var result=t.GetType().GetProperty("Result")!.GetValue(t)!;if(!(bool)result.GetType().GetProperty("IsValid")!.GetValue(result)!)throw new Exception($"Sesion no verificable: {user}");var d=result.GetType().GetProperty("Data")!.GetValue(result)!;return((string)d.GetType().GetProperty("Estrategia")!.GetValue(d)!,(JsonArray)d.GetType().GetProperty("Menu")!.GetValue(d)!);}
+async Task<bool> Vertical(int user){using var c=Sql("SELECT COUNT(*) FROM SIS.OSS_SEG_MENU_CTL WHERE CODIGO_EMPRESA=:c AND CODIGO_USUARIO=:u AND ACTIVO=1",("c",company),("u",user));return Convert.ToInt32(await c.ExecuteScalarAsync())>0;}
+try {
+ using var revisionQuery=Sql("SELECT VERSION FROM SIS.OSS_SEG_MENU_REV WHERE ID=1");var expectedRevision=Convert.ToInt32(await revisionQuery.ExecuteScalarAsync());
+ var users=await Users();var targets=users.Where(x=>!x.Super).ToList();
+ var original=new List<Backup>();var plans=new List<Plan>();var beforePermissions=await EffectiveAll(targets);
+ foreach(var user in targets){
+  var rows=await Sources(user);original.Add(new(user,rows));
+  if(await Vertical(user.Id))continue;
+  var arrays=new List<JsonArray>();var repaired=0;
+  var validRows=new List<Row>();
+  foreach(var row in rows){
+   try{
+    var json=row.Json;
+    if(user.Id==699 && row.Id==13){var marker="\"/apps/soporte/tickets\"}\n    {";if(!json.Contains(marker))throw new InvalidOperationException("La fuente a corregir cambio.");json=json.Replace(marker,"\"/apps/soporte/tickets\"},\n    {");repaired++;}
+    if(user.Id==699 && row.Id==27){var parsed=SupportRequesterMenu.Parse(json);arrays.Add(parsed.Menu);if(parsed.Repaired)repaired++;}else arrays.Add(JsonNode.Parse(json)!.AsArray());
+    validRows.Add(row);
+   }
+   catch(Exception ex) when(ex is JsonException or InvalidOperationException){Console.WriteLine($"Fuente JSON invalida conservada sin cambios: usuario={user.Id}, fila={row.Id}");}
+  }
+  if(arrays.Count==0)arrays.Add(new JsonArray());
+  SupportRequesterMenu.Ensure(arrays);
+  plans.Add(new(user,validRows,arrays,repaired));
+ }
+ Console.WriteLine($"Alcance: empresa={company}, usuarios={targets.Count}, activos={targets.Count(x=>x.Status is "1" or "A" or "")}, superusuarios excluidos={users.Count(x=>x.Super)}, reparaciones JSON={plans.Sum(x=>x.Repaired)}");
+ if(!apply){Console.WriteLine("Inspeccion completa; no se aplicaron cambios.");return 0;}
+ var dir="/srv/ossmmasoft-pruebas/shared/config/backups";Directory.CreateDirectory(dir);var backup=Path.Combine(dir,$"soporte-solicitantes-{DateTime.UtcNow:yyyyMMddTHHmmssZ}.json");
+ using(var f=new FileStream(backup,new FileStreamOptions{Mode=FileMode.CreateNew,Access=FileAccess.Write,UnixCreateMode=UnixFileMode.UserRead|UnixFileMode.UserWrite}))await JsonSerializer.SerializeAsync(f,new{Company=company,Users=users,Profiles=original,Permissions=beforePermissions});
+
+ // Reject stale snapshots and changed source data before any mutation.
+ if(JsonSerializer.Serialize(users)!=JsonSerializer.Serialize(await Users()))throw new Exception("Usuarios cambiaron durante la inspeccion.");
+ foreach(var entry in original)if(JsonSerializer.Serialize(entry.Rows)!=JsonSerializer.Serialize(await Sources(entry.User)))throw new Exception($"Menu cambio: usuario {entry.User.Id}");
+ tx=cn.BeginTransaction();using(var guard=Proc("LOCK_REV")){N(guard,"p_EXPECTED",expectedRevision);guard.Parameters.Add("p_REV",OracleDbType.Int32,ParameterDirection.Output);await guard.ExecuteNonQueryAsync();}
+ var menus=new List<int>();int mod=0;
+ foreach(var path in SupportRequesterMenu.Paths){using var q=Sql("SELECT CODIGO_MENU,CODIGO_MOD FROM SIS.OSS_MENU WHERE PATH=:p AND ACTIVO=1 AND CODIGO_MOD=(SELECT MIN(CODIGO_MOD) FROM SIS.OSS_MOD WHERE CODIGO='SIS' AND ACTIVO=1) ORDER BY CODIGO_MENU",("p",path));using var r=await q.ExecuteReaderAsync();if(!await r.ReadAsync())throw new Exception("Opcion de soporte SIS inexistente.");menus.Add(r.GetInt32(0));mod=r.GetInt32(1);}
+ var perms=new List<int>();foreach(var permission in SupportRequesterMenu.Permissions){using var q=Sql("SELECT CODIGO_PERM FROM SIS.OSS_PERM WHERE CLAVE=:p AND ACTIVO=1",("p",permission));var id=await q.ExecuteScalarAsync();if(id is null)throw new Exception("Permiso de soporte inexistente.");perms.Add(Convert.ToInt32(id));}
+ int role=0;using(var q=Sql("SELECT CODIGO_ROL FROM SIS.OSS_ROL WHERE CLAVE=:k",("k",key))){var id=await q.ExecuteScalarAsync();if(id is not null)role=Convert.ToInt32(id);}
+ if(role==0){using var cmd=Proc("SAVE_ROLE");var outId=cmd.Parameters.Add("p_ID",OracleDbType.Int32,ParameterDirection.InputOutput);outId.Value=0;N(cmd,"p_MOD",mod);S(cmd,"p_KEY",key);S(cmd,"p_NAME","Solicitante de Soporte (13)");S(cmd,"p_DESC","Crear tickets, consultar sus propios casos y comentarios publicos.");N(cmd,"p_ACTIVE",1);C(cmd,"p_MENUS",string.Join(',',menus));C(cmd,"p_PERMS",string.Join(',',perms));N(cmd,"p_SET_PERMS",1);N(cmd,"p_ACTOR",0);await cmd.ExecuteNonQueryAsync();role=int.Parse(outId.Value.ToString()!);}
+ else {
+  using(var q=Sql("SELECT COUNT(*) FROM SIS.OSS_ROL WHERE CODIGO_ROL=:r AND ACTIVO=1",("r",role)))if(Convert.ToInt32(await q.ExecuteScalarAsync())!=1)throw new Exception("Rol reservado inactivo.");
+  foreach(var pair in new[]{("SIS.OSS_ROL_PERM","CODIGO_PERM",perms),("SIS.OSS_ROL_MENU","CODIGO_MENU",menus)}){var ids=new HashSet<int>();using var q=Sql($"SELECT {pair.Item2} FROM {pair.Item1} WHERE CODIGO_ROL=:r",("r",role));using(var r=await q.ExecuteReaderAsync())while(await r.ReadAsync())ids.Add(r.GetInt32(0));if(!ids.SetEquals(pair.Item3))throw new Exception("El rol reservado fue modificado; no sobrescribir.");}
+ }
+ var exceptions=0;var assigned=0;
+ using(var q=Sql("UPDATE SIS.OSS_USR_ROL ur SET ACTIVO=1,USUARIO_UPD=0,FECHA_UPD=SYSDATE WHERE CODIGO_EMPRESA=:c AND CODIGO_ROL=:r AND EXISTS(SELECT 1 FROM SIS.SIS_USUARIOS u WHERE u.CODIGO_USUARIO=ur.CODIGO_USUARIO AND u.CODIGO_EMPRESA=:c AND NVL(u.IS_SUPERUSER,0)<>1)",("c",company),("r",role)))await q.ExecuteNonQueryAsync();
+ using(var q=Sql("INSERT INTO SIS.OSS_USR_ROL(CODIGO_USR_ROL,CODIGO_USUARIO,CODIGO_ROL,CODIGO_EMPRESA,ACTIVO,USUARIO_INS,FECHA_INS) SELECT SIS.SEQ_OSS_SM_UR.NEXTVAL,u.CODIGO_USUARIO,:r,:c,1,0,SYSDATE FROM SIS.SIS_USUARIOS u WHERE u.CODIGO_EMPRESA=:c AND NVL(u.IS_SUPERUSER,0)<>1 AND NOT EXISTS(SELECT 1 FROM SIS.OSS_USR_ROL ur WHERE ur.CODIGO_USUARIO=u.CODIGO_USUARIO AND ur.CODIGO_EMPRESA=:c AND ur.CODIGO_ROL=:r)",("c",company),("r",role)))await q.ExecuteNonQueryAsync();assigned=targets.Count;
+ foreach(var perm in perms){using var q=Sql("DELETE FROM SIS.OSS_USR_PERM up WHERE CODIGO_EMPRESA=:c AND CODIGO_PERM=:p AND ACTIVO=1 AND UPPER(TRIM(TIPO))='DENY' AND EXISTS(SELECT 1 FROM SIS.SIS_USUARIOS u WHERE u.CODIGO_USUARIO=up.CODIGO_USUARIO AND u.CODIGO_EMPRESA=:c AND NVL(u.IS_SUPERUSER,0)<>1)",("c",company),("p",perm));exceptions+=await q.ExecuteNonQueryAsync();}
+ int edited=0,inserted=0;
+ foreach(var plan in plans){
+  if(plan.Rows.Count==0){using var cmd=Proc("WRITE_CACHE");N(cmd,"p_USER",plan.User.Id);N(cmd,"p_EMPRESA",company);S(cmd,"p_MOD","SIS");C(cmd,"p_JSON",plan.Arrays[0].ToJsonString());await cmd.ExecuteNonQueryAsync();inserted++;}
+  else for(int i=0;i<plan.Rows.Count;i++){var json=plan.Arrays[i].ToJsonString();
+   bool unchanged=false;try{unchanged=JsonNode.Parse(plan.Rows[i].Json)!.ToJsonString()==json;}catch(JsonException){}
+   if(unchanged)continue;using var q=Sql("UPDATE SIS.OSS_USUARIO_ROL SET JSON_MENU=:j WHERE CODIGO_USUARIO_ROL=:id AND CODIGO_USUARIO=:u",("id",plan.Rows[i].Id),("u",plan.User.Id));C(q,"j",json);if(await q.ExecuteNonQueryAsync()!=1)throw new Exception("No se actualizo una unica fuente legacy.");edited++;}
+ }
+ var afterPermissions=await EffectiveAll(targets);
+ foreach(var user in targets){var expected=beforePermissions[user.Id].ToHashSet(StringComparer.OrdinalIgnoreCase);expected.UnionWith(SupportRequesterMenu.Permissions);var after=afterPermissions[user.Id];if(!after.SetEquals(expected))throw new Exception($"Cambio de permisos fuera de alcance: usuario {user.Id}; agregados no solicitados={string.Join(',',after.Except(expected))}; faltantes={string.Join(',',expected.Except(after))}");}
+ if(JsonSerializer.Serialize(users)!=JsonSerializer.Serialize(await Users()))throw new Exception("Los estados de las cuentas cambiaron.");
+ using(var audit=Proc("FINISH")){N(audit,"p_EMPRESA",company);N(audit,"p_USER",null);N(audit,"p_ACTOR",0);S(audit,"p_ACTION","SOPORTE_SOLICITANTES");C(audit,"p_DETAIL",$"Autorizado: crear y seguir tickets propios para no superusuarios. Rol={role}; usuarios={assigned}; fuentes editadas={edited}; nuevas={inserted}; JSON reparados={plans.Sum(x=>x.Repaired)}; DENY solicitados retirados={exceptions}; backup={Path.GetFileName(backup)}");await audit.ExecuteNonQueryAsync();}
+ using(var reset=Proc("RESET_WRITE"))await reset.ExecuteNonQueryAsync();tx.Commit();tx.Dispose();tx=null;
+ Console.WriteLine($"Confirmado: rol={role}; asignados={assigned}; JSON editados={edited}; nuevas fuentes={inserted}; respaldo={backup}");
+ var verified=0;foreach(var user in targets.Where(x=>x.Status is "1" or "A" or "")){var current=await Session(user.Id);var paths=SupportRequesterMenu.Nodes(current.Menu).Select(x=>(x["path"]?.GetValue<string>()??"").TrimEnd('/')).ToHashSet();if(!SupportRequesterMenu.Paths.All(paths.Contains))throw new Exception($"Menu soporte incompleto tras aplicar: usuario {user.Id}");verified++;}
+ Console.WriteLine($"Menus activos verificados={verified}; superusuarios sin asignar y cuentas conservadas.");
+} catch(Exception ex){try{tx?.Rollback();}catch{}Console.WriteLine(ex is OracleException o?$"Operacion detenida ORA-{o.Number}":"Operacion detenida: "+ex.Message);return 1;}
+finally{tx?.Dispose();}
+return 0;
+record User(int Id,string Login,string Status,bool Super);
+record Row(int Id,int User,string Login,string Module,string Json);
+record Backup(User User,List<Row> Rows);
+record Plan(User User,List<Row> Rows,List<JsonArray> Arrays,int Repaired);

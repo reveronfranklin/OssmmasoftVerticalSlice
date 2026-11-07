@@ -24,7 +24,7 @@ public class GetSupportHistoryByTicketHandler(ConnectionDB connectionDB, IConfig
             return new ResultDto<List<SupportHistoryResponse>>(null!) { IsValid = false, Message = ticketAccess.Message };
         }
 
-        return await childRowsReader.ReadAsync("SIS.SP_SOP_HIST_GET_TKT", value.TicketId, reader => new SupportHistoryResponse(
+        return await childRowsReader.ReadAsync("SIS.SP_SOP_HIST_VISIBLE", value.TicketId, reader => new SupportHistoryResponse(
             reader.SafeGetInt32("HISTORIAL_ID"),
             reader.SafeGetInt32("TICKET_ID"),
             reader.SafeGetString("TIPO_CAMBIO"),
@@ -34,6 +34,6 @@ public class GetSupportHistoryByTicketHandler(ConnectionDB connectionDB, IConfig
             reader.SafeGetString("COMENTARIO"),
             reader.SafeGetInt32("USUARIO_ID"),
             Convert.ToDateTime(reader.GetValue(reader.GetOrdinal("FECHA_CAMBIO")))
-        ));
+        ), visibilityUser: value.UsuarioId);
     }
 }
