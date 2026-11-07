@@ -1,0 +1,27 @@
+using System.Text.Json.Nodes;
+using OssmmasoftVerticalSlice.Features.Support;
+int count=0;
+void Check(bool ok,string message){if(!ok)throw new Exception(message);count++;}
+void Reject(Action action,string message){try{action();}catch{count++;return;}throw new Exception(message);}
+var empty=new JsonArray();SupportRequesterMenu.Ensure([empty]);
+Check(empty.Count==1,"One Sistema group");
+var nodes=SupportRequesterMenu.Nodes(empty).ToList();
+Check(SupportRequesterMenu.Paths.All(p=>nodes.Any(n=>n["path"]?.GetValue<string>()==p)),"Tickets and notifications");
+Check(!nodes.Any(n=>(n["path"]?.GetValue<string>()??"").Contains("configuracion")),"No administration added");
+Check(!nodes.Any(n=>(n["path"]?.GetValue<string>()??"").Contains("dashboard")),"No dashboard added");
+var before=empty.ToJsonString();SupportRequesterMenu.Ensure([empty]);Check(before==empty.ToJsonString(),"Idempotency");
+var existing=JsonNode.Parse("""[{"title":"Sistema","children":[{"title":"Usuarios","path":"/apps/sis/usuarios","permissions":["existing.permission"]},{"title":"Soporte","children":[{"title":"Tickets","path":"/apps/soporte/tickets"}]}]}]""")!.AsArray();
+var old=SupportRequesterMenu.Nodes(existing).Single(x=>x["title"]!.GetValue<string>()=="Usuarios").ToJsonString();
+SupportRequesterMenu.Ensure([existing]);
+Check(existing.Count==1,"Reuse Sistema");
+Check(SupportRequesterMenu.Nodes(existing).Count(n=>n["title"]!.GetValue<string>()=="Soporte")==1,"Reuse Soporte");
+Check(SupportRequesterMenu.Nodes(existing).Count(n=>n["path"]?.GetValue<string>()=="/apps/soporte/tickets")==1,"No duplicated tickets");
+Check(SupportRequesterMenu.Nodes(existing).Single(n=>n["title"]!.GetValue<string>()=="Usuarios").ToJsonString()==old,"Existing option preserved");
+var first=new JsonArray();var second=JsonNode.Parse("""[{"title":"Sistema","children":[{"title":"Roles","path":"/apps/sis/usuario-rol"}]}]""")!.AsArray();
+SupportRequesterMenu.Ensure([first,second]);Check(first.Count==0 && second.Count==1,"Reuse Sistema across source rows");
+var fixedJson=SupportRequesterMenu.Parse("""[{"title":"Nomina","children":[{"title":"X","path":"/apps/rh/x"}]}""");
+Check(fixedJson.Repaired && fixedJson.Menu[0]!["children"]![0]!["path"]!.GetValue<string>()=="/apps/rh/x","Repair missing closing delimiter only");
+Reject(()=>SupportRequesterMenu.Parse("[{\"title\":\"unterminated"),"Do not invent text");
+Reject(()=>SupportRequesterMenu.Parse("[{\"title\":"),"Do not invent values");
+Reject(()=>SupportRequesterMenu.Parse("[{\"title\":\"X\", prep"),"Invalid structure remains rejected");
+Console.WriteLine($"{count} support provisioning checks passed; no database or SMTP accessed.");

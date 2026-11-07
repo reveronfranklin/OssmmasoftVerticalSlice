@@ -7,7 +7,7 @@ using System.Security.Claims;
 
 namespace OssmmasoftVerticalSlice.Features.Support;
 
-public class CreateSupportTicketHandler(ConnectionDB connectionDB, IConfiguration config, SupportTicketHandlerSupport support)
+public class CreateSupportTicketHandler(ConnectionDB connectionDB, IConfiguration config, SupportTicketHandlerSupport support, SupportTicketAutomation automation)
 {
     public async Task<ResultDto<int>> HandleAsync(SupportTicketCreateCommand value, ClaimsPrincipal user, HttpRequest request)
     {
@@ -21,6 +21,19 @@ public class CreateSupportTicketHandler(ConnectionDB connectionDB, IConfiguratio
         if (!permission.IsValid)
         {
             return new ResultDto<int>(0) { IsValid = false, Message = permission.Message };
+        }
+
+        if (!SupportDb.TryGetEmpresa(config, out var empresa, out var error))
+            return new ResultDto<int>(0) { IsValid = false, Message = error };
+        using (var cn = connectionDB.GetSisConnection())
+        {
+            try { await cn.OpenAsync(); } catch { return new ResultDto<int>(0) { IsValid = false, Message = "No se pudo conectar con SIS." }; }
+            if (!await SupportSecurity.IsSuperUserAsync(cn, value.CreatedBy, empresa))
+            {
+                if (value.UsuarioSolicitanteId != value.CreatedBy)
+                    return new ResultDto<int>(0) { IsValid = false, Message = "Solo puede crear tickets como solicitante de su propia cuenta." };
+                return await automation.Create(value);
+            }
         }
 
         return await support.ExecuteScalarAsync("SIS.SP_SOP_TKT_INS", cmd =>

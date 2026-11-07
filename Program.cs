@@ -30,6 +30,7 @@ builder.Services.AddScoped<NotifyExpiredSupportSlaHandler>();
 builder.Services.AddScoped<GetSupportCatalogsHandler>();
 builder.Services.AddScoped<SupportTicketHandlerSupport>();
 builder.Services.AddScoped<CreateSupportTicketHandler>();
+builder.Services.AddScoped<SupportTicketAutomation>();
 builder.Services.AddScoped<GetSupportTicketsHandler>();
 builder.Services.AddScoped<GetSupportTicketByIdHandler>();
 builder.Services.AddScoped<AssignSupportTicketHandler>();

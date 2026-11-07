@@ -547,7 +547,7 @@ internal static class SupportSecurity
         return permissions.OrderBy(x => x).ToList();
     }
 
-    private static async Task<bool> IsSuperUserAsync(OracleConnection connection, int usuarioId, int empresa)
+    internal static async Task<bool> IsSuperUserAsync(OracleConnection connection, int usuarioId, int empresa)
     {
         using var cmd = new OracleCommand(@"
             SELECT NVL(IS_SUPERUSER, 0)
