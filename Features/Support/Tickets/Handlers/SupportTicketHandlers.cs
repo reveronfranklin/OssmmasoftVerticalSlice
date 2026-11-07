@@ -205,7 +205,7 @@ public class AssignSupportTicketHandler(ConnectionDB connectionDB, IConfiguratio
     }
 }
 
-public class ChangeSupportTicketStatusHandler(ConnectionDB connectionDB, IConfiguration config, SupportTicketHandlerSupport support)
+public class ChangeSupportTicketStatusHandler(ConnectionDB connectionDB, IConfiguration config, SupportTicketHandlerSupport support, SupportTicketEvents events)
 {
     public async Task<ResultDto<string>> HandleAsync(SupportTicketStatusCommand value, ClaimsPrincipal user, HttpRequest request)
     {
@@ -221,17 +221,12 @@ public class ChangeSupportTicketStatusHandler(ConnectionDB connectionDB, IConfig
             return permission;
         }
 
-        return await support.ExecuteMessageAsync("SIS.SP_SOP_TKT_STATUS_UPD", cmd =>
-        {
-            cmd.Parameters.Add("p_TICKET_ID", OracleDbType.Int32).Value = value.TicketId;
-            cmd.Parameters.Add("p_ESTADO_ID", OracleDbType.Int32).Value = value.EstadoId;
-            cmd.Parameters.Add("p_UPDATED_BY", OracleDbType.Int32).Value = value.UpdatedBy;
-            cmd.Parameters.Add("p_COMENTARIO", OracleDbType.Varchar2).Value = SupportDb.StringDbValue(value.Comentario);
-        });
+        var result = await events.Execute(value.TicketId, value.UpdatedBy, "ESTADO", value.Comentario, value.EstadoId);
+        return new ResultDto<string>(result.IsValid ? "OK" : "") { IsValid = result.IsValid, Message = result.Message };
     }
 }
 
-public class CloseSupportTicketHandler(ConnectionDB connectionDB, IConfiguration config, SupportTicketHandlerSupport support)
+public class CloseSupportTicketHandler(ConnectionDB connectionDB, IConfiguration config, SupportTicketHandlerSupport support, SupportTicketEvents events)
 {
     public async Task<ResultDto<string>> HandleAsync(SupportTicketCloseCommand value, ClaimsPrincipal user, HttpRequest request)
     {
@@ -247,11 +242,7 @@ public class CloseSupportTicketHandler(ConnectionDB connectionDB, IConfiguration
             return permission;
         }
 
-        return await support.ExecuteMessageAsync("SIS.SP_SOP_TKT_CLOSE", cmd =>
-        {
-            cmd.Parameters.Add("p_TICKET_ID", OracleDbType.Int32).Value = value.TicketId;
-            cmd.Parameters.Add("p_UPDATED_BY", OracleDbType.Int32).Value = value.UpdatedBy;
-            cmd.Parameters.Add("p_OBSERVACION_RESOLUCION", OracleDbType.Varchar2).Value = SupportDb.StringDbValue(value.ObservacionResolucion);
-        });
+        var result = await events.Execute(value.TicketId, value.UpdatedBy, "CIERRE", value.ObservacionResolucion);
+        return new ResultDto<string>(result.IsValid ? "OK" : "") { IsValid = result.IsValid, Message = result.Message };
     }
 }

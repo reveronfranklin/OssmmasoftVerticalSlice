@@ -1,0 +1,18 @@
+using OssmmasoftVerticalSlice.Features.Support;
+var cases = new (string Name, int Actor, int Requester, int? Responsible, bool Internal, bool Authorized, int[] Expected)[] {
+ ("Comentario publico del solicitante",1,1,2,false,false,[2]),
+ ("Respuesta publica del responsable",2,1,2,false,false,[1]),
+ ("Cambio de estatus por tercero",3,1,2,false,false,[1,2]),
+ ("Interno de otro agente",3,1,2,true,true,[2]),
+ ("Interno propio sin autocopia",2,1,2,true,true,[]),
+ ("Interno sin permiso del destinatario",3,1,2,true,false,[]),
+ ("Nunca enviar interno al solicitante",3,1,1,true,true,[]),
+ ("Ticket sin responsable",3,1,null,false,false,[1]),
+ ("Sin duplicar participante",3,1,1,false,false,[1]),
+ ("Interno sin responsable",3,1,null,true,true,[])
+};
+foreach(var c in cases) {
+ var actual=SupportEventRules.Recipients(c.Actor,c.Requester,c.Responsible,c.Internal,c.Authorized);
+ if(!actual.SequenceEqual(c.Expected))throw new Exception(c.Name);
+}
+Console.WriteLine($"{cases.Length} comprobaciones de destinatarios y privacidad satisfactorias. Sin acceso a Oracle ni SMTP.");
