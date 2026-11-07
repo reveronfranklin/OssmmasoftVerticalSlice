@@ -12,7 +12,7 @@ public record RhReciboFecha(string Year, string Month, string Day);
 public record RhReciboResumen(int Id, int CodigoTipoNomina, int CodigoPeriodo, int Periodo,
     DateTime FechaNomina, string FechaNominaString, RhReciboFecha FechaNominaObj,
     string CodigoIcpConcat, int CodigoIcp, string Denominacion, int CodigoPersona,
-    string Nombre, string DescripcionPeriodo);
+    string Nombre, string DescripcionPeriodo, string Correo = "", string EstadoCorreo = "");
 public record RhReciboOficina(string CodigoIcpConcat, int CodigoIcp, string Denominacion);
 public record RhReciboDatos(IReadOnlyList<RhReciboLinea> Lineas, bool EsTemporal, string TipoNomina);
 

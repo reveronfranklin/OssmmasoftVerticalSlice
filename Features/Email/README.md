@@ -10,7 +10,8 @@ el certificado se valida normalmente. No hay fallback inseguro.
    abrir `Sql/INSTALL_R52_EMAIL.sql`, seleccionar TODO y ejecutar como UNA
    sentencia en DBeaver. No agregar `/`, SET ni otros comandos SQL*Plus.
    El instalador crea/amplia SIS_EMAIL_QUEUE, crea PKG_EMAIL_MANUAL y registra
-   menu/permiso R50. Es repetible y conserva datos; DDL realiza commit implicito.
+   menu/permiso R50 dentro de Sistema. Si la opcion ya existe, corrige su padre
+   conservando su identificador y asignaciones. Es repetible y conserva datos; DDL realiza commit implicito.
    No borrar objetos existentes para resolver un conflicto: revisar tipo/esquema.
 2. Verificar que PACKAGE y PACKAGE BODY de SIS.PKG_EMAIL_MANUAL estan VALID;
    consultar ALL_ERRORS si no compilan. El instalador detiene su flujo al fallar,

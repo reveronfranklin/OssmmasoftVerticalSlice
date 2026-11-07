@@ -1,10 +1,11 @@
 using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhReciboPago;
 using OssmmasoftVerticalSlice.Features.Support;
 
 namespace OssmmasoftVerticalSlice.Features.Email;
 
 public class EmailQueueWorker(IServiceScopeFactory scopes, IConfiguration config, IEmailManualSender sender,
-    ILogger<EmailQueueWorker> logger) : BackgroundService
+    ILogger<EmailQueueWorker> logger, IWebHostEnvironment environment) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -18,13 +19,22 @@ public class EmailQueueWorker(IServiceScopeFactory scopes, IConfiguration config
                     using var scope = scopes.CreateScope();
                     using var cn = scope.ServiceProvider.GetRequiredService<ConnectionDB>().GetSisConnection();
                     await cn.OpenAsync(stoppingToken);
-                    // Exclusively manual R52 requests. Never consume the old support/backlog queue.
-                    var email = await EmailManualDb.Claim(cn,empresa,stoppingToken);
+                    var receipts = config.GetValue("settings:RhReciboEmail:Enabled", false);
+                    if (receipts)
+                    {
+                        try { await RhReciboEmailProcessor.Tick(scope.ServiceProvider.GetRequiredService<ConnectionDB>(),config,environment,empresa,settings,stoppingToken); }
+                        catch (Exception ex) when (!stoppingToken.IsCancellationRequested) { logger.LogWarning("No se pudo preparar/reconciliar recibos ({Type}).",ex.GetType().Name); }
+                    }
+                    // R53 shares the limiter and transport with R52; other legacy origins remain excluded.
+                    var email = receipts
+                        ? await EmailReciboDb.Claim(cn,empresa,Math.Clamp(config.GetValue("settings:RhReciboEmail:MaxDailyMessages",200),1,10000),Math.Clamp(config.GetValue("settings:RhReciboEmail:IntervalSeconds",10),10,3600),stoppingToken)
+                        : await EmailManualDb.Claim(cn,empresa,stoppingToken);
                     if (email is not null)
                     {
                         var outcome = await sender.SendAsync(settings,email,stoppingToken);
-                        await EmailManualDb.Finish(cn,email,outcome,stoppingToken);
-                        logger.LogInformation("Correo manual {Id}: {State}.",email.EmailId,outcome.Estado);
+                        if (receipts) await EmailReciboDb.Finish(cn,email,outcome,stoppingToken);
+                        else await EmailManualDb.Finish(cn,email,outcome,stoppingToken);
+                        logger.LogInformation("Correo {Id}: {State}.",email.EmailId,outcome.Estado);
                     }
                 }
             }
