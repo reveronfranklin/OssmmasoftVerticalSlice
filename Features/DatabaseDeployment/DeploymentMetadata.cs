@@ -57,6 +57,58 @@ public class DeploymentMetadata(IConfiguration config, ILogger<DeploymentMetadat
         if (owner is not null) cmd.Parameters.Add("owner", OracleDbType.Varchar2).Value = owner;
         return cmd;
     }
+    // No CLOB locator crosses the wire: Oracle returns only bounded VARCHAR2 and numbers.
+    // Re-evaluate metadata per fragment; fail if its length changes during capture.
+    private static async Task<string> ReadDefinition(OracleConnection cn,string schema,string type,string name,int limit,CancellationToken ct)
+    {
+        const string sql="""
+            DECLARE
+              v_ddl CLOB;
+              v_part VARCHAR2(4000);
+            BEGIN
+              v_ddl:=DBMS_METADATA.GET_DDL(:type,:name,:owner);
+              :total:=NVL(DBMS_LOB.GETLENGTH(v_ddl),0);
+              IF :total<=:max_chars THEN
+                v_part:=DBMS_LOB.SUBSTR(v_ddl,1000,:offset_chars);
+                :part:=v_part;
+                :next_chars:=:offset_chars+NVL(LENGTH(v_part),0);
+              ELSE
+                :part:=NULL;
+                :next_chars:=:offset_chars;
+              END IF;
+              IF DBMS_LOB.ISTEMPORARY(v_ddl)=1 THEN DBMS_LOB.FREETEMPORARY(v_ddl); END IF;
+            EXCEPTION WHEN OTHERS THEN
+              IF DBMS_LOB.ISTEMPORARY(v_ddl)=1 THEN DBMS_LOB.FREETEMPORARY(v_ddl); END IF;
+              RAISE;
+            END;
+            """;
+        var text=new System.Text.StringBuilder();var offset=1;int? length=null;
+        while(true)
+        {
+            ct.ThrowIfCancellationRequested();
+            using var cmd=Query(cn,sql,schema);
+            cmd.Parameters.Add("type",OracleDbType.Varchar2).Value=type;
+            cmd.Parameters.Add("name",OracleDbType.Varchar2).Value=name;
+            cmd.Parameters.Add("max_chars",OracleDbType.Int32).Value=limit;
+            cmd.Parameters.Add("offset_chars",OracleDbType.Int32).Value=offset;
+            var total=cmd.Parameters.Add("total",OracleDbType.Int32,ParameterDirection.Output);
+            var next=cmd.Parameters.Add("next_chars",OracleDbType.Int32,ParameterDirection.Output);
+            var part=cmd.Parameters.Add("part",OracleDbType.Varchar2,4000);part.Direction=ParameterDirection.Output;
+            await cmd.ExecuteNonQueryAsync(ct);
+            var size=int.Parse(total.Value.ToString()!,System.Globalization.CultureInfo.InvariantCulture);
+            if(size>limit)throw new InvalidOperationException("Definicion demasiado grande. Compare menos objetos.");
+            if(length is not null && length!=size)throw new InvalidOperationException("La definicion cambio durante su lectura. Inicie otra comparacion.");
+            length=size;
+            if(size==0)throw new InvalidOperationException("Definicion no disponible.");
+            var value=part.Value;
+            var chunk=value is Oracle.ManagedDataAccess.Types.OracleString os?(os.IsNull?"":os.Value):value?.ToString()??"";
+            var following=int.Parse(next.Value.ToString()!,System.Globalization.CultureInfo.InvariantCulture);
+            if(chunk.Length==0 || following<=offset || following>size+1)throw new InvalidOperationException("Lectura incompleta de la definicion. Inicie otra comparacion.");
+            text.Append(chunk);offset=following;
+            if(offset>size)break;
+        }
+        return text.ToString();
+    }
     private static string Text(OracleDataReader r,string name) => r.IsDBNull(r.GetOrdinal(name)) ? "" : r.GetValue(r.GetOrdinal(name)).ToString() ?? "";
     private static int Num(OracleDataReader r,string name) => r.IsDBNull(r.GetOrdinal(name)) ? 0 : Convert.ToInt32(r.GetValue(r.GetOrdinal(name)));
     private static int? Opt(OracleDataReader r,string name) => r.IsDBNull(r.GetOrdinal(name)) ? null : Num(r,name);
@@ -193,12 +245,7 @@ public class DeploymentMetadata(IConfiguration config, ILogger<DeploymentMetadat
             ct.ThrowIfCancellationRequested(); var type=item.Type switch { "PACKAGE"=>"PACKAGE_SPEC", "PACKAGE BODY"=>"PACKAGE_BODY", var t=>t }; string ddl; var status=item.Status;
             try
             {
-                using var q=Query(cn,"SELECT DBMS_METADATA.GET_DDL(:type,:name,:owner) FROM DUAL",schema);
-                q.Parameters.Add("type",OracleDbType.Varchar2).Value=type; q.Parameters.Add("name",OracleDbType.Varchar2).Value=item.Name;
-                using var r=await q.ExecuteReaderAsync(ct); if(!await r.ReadAsync(ct)) throw new InvalidOperationException("Definicion no disponible.");
-                using var clob=r.GetOracleClob(0);
-                if(clob.Length>Math.Clamp(options.MaxDefinitionChars,1000,2000000)) throw new InvalidOperationException("Definicion demasiado grande. Compare menos objetos.");
-                ddl=clob.Value;
+                ddl=await ReadDefinition(cn,schema,type,item.Name,Math.Clamp(options.MaxDefinitionChars,1000,2000000),ct);
             }
             catch(OracleException ex) { ddl="";status=$"NO_ACCESIBLE_ORA_{ex.Number:D5}"; }
             total+=ddl.Length; if(total>Math.Clamp(options.MaxTotalDefinitionChars,10000,32000000)) throw new InvalidOperationException("Metadatos exceden el limite configurado. Compare menos tipos.");

@@ -184,3 +184,16 @@ DDL ni credenciales; errores TTC se identifican expresamente. Un registro ERROR
 visible no demuestra que el fallo sea de disco: ese registro pudo guardarse antes
 y despues de un error de lectura de Oracle. Iniciar una nueva comparacion despues
 de publicar el diagnostico; los historiales anteriores no se reejecutan.
+
+Correccion TTC al leer GET_DDL: la captura obtiene el CLOB solo dentro de un
+bloque PL/SQL anonimo y devuelve fragmentos VARCHAR2 de hasta 1000 caracteres
+junto con longitud y posicion siguiente. No requiere instalar objetos auxiliares,
+no ejecuta el DDL obtenido y no convierte toda la definicion a un VARCHAR2 unico.
+El bloque libera su CLOB temporal. Cada fragmento reconsulta GET_DDL; esto aumenta
+el tiempo de captura para objetos grandes. La lectura rechaza cambios de longitud,
+falta de avance y exceso del limite configurado. No constituye una instantanea
+transaccional: evitar modificar definiciones mientras se compara y revisar el
+plan antes de cualquier ejecucion futura.
+Referencia Oracle 10g: https://docs.oracle.com/cd/B13789_01/appdev.101/b10802/d_lob.htm
+Publicar solo la API e iniciar otra comparacion. La comprobacion real de protocolo
+se realiza en el servidor; la compilacion local no acredita que TTC este resuelto.
