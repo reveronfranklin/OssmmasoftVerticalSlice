@@ -105,3 +105,12 @@ Regeneracion: python3 scripts/build-recibo-email-installer.py.
 Identificadores: bash scripts/check-oracle-identifiers.sh Features/RhReciboPago/Sql.
 Pruebas versionadas: bash scripts/check-recibo-email.sh (10 pruebas xUnit sin SMTP).
 Regresion manual R52: bash scripts/check-email-manual.sh.
+
+## Diagnostico de errores de solicitud
+
+La API informa operacion RH (CONTACTOS, NUEVO, ITEM o LEER), codigo Oracle o tipo
+tecnico y referencia. El log conserva pilas sin texto de excepcion, parametros,
+correos, PDF ni credenciales. ORA-20051 conserva el mensaje funcional existente.
+Un fallo al LEER despues de crear/confirmar el lote no demuestra que la operacion
+se haya revertido: consultar historial y estado antes de repetir o confirmar otro.
+La respuesta generica anterior no permite inferir rechazo SMTP ni falta de permisos.

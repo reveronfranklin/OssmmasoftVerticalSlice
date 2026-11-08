@@ -18,8 +18,18 @@ internal static class RrmDb
         return cmd;
     }
     internal static async Task Run(OracleConnection cn,string op,OracleTransaction? tx,CancellationToken ct,params RrmParam[] args)
-    { using var cmd=Cmd(cn,op,tx,args); await cmd.ExecuteNonQueryAsync(ct); }
+    {
+        try { using var cmd=Cmd(cn,op,tx,args); await cmd.ExecuteNonQueryAsync(ct); }
+        catch(Exception ex) when(ex is not OracleException { Number:20051 })
+        { throw new InvalidOperationException("Recibos RH/"+op+" (ejecutar)",ex); }
+    }
     internal static async Task<ReciboEmailDestino> Contact(OracleConnection cn,int company,int persona,CancellationToken ct)
+    {
+        try { return await ContactCore(cn,company,persona,ct); }
+        catch(Exception ex) when(ex is not OracleException { Number:20051 })
+        { throw new InvalidOperationException("Recibos RH/CONTACTOS (leer)",ex); }
+    }
+    private static async Task<ReciboEmailDestino> ContactCore(OracleConnection cn,int company,int persona,CancellationToken ct)
     {
         using var cmd=Cmd(cn,"CONTACTOS",null,N("p_EMPRESA",company),N("p_PERSONA",persona));
         cmd.Parameters.Add("p_ROWS",OracleDbType.RefCursor,ParameterDirection.Output);
@@ -40,6 +50,12 @@ internal static class RrmDb
     internal static RrmLot Head(OracleDataReader r,List<RrmItem> items) => new(r.SafeGetString("LOTE_ID"),r.SafeGetInt32("ACTOR"),r.SafeGetString("REVISION"),r.SafeGetString("ESTADO"),r.SafeGetString("MOTIVO"),
         r.SafeGetInt32("NOMINA"),r.SafeGetInt32("PERIODO"),r.SafeGetInt32("ICP"),r.GetDateTime(r.GetOrdinal("CREADO")),r.GetDateTime(r.GetOrdinal("VENCE")),items);
     internal static async Task<RrmLot?> Read(OracleConnection cn,string id,int company,int actor,CancellationToken ct,OracleTransaction? tx=null)
+    {
+        try { return await ReadCore(cn,id,company,actor,ct,tx); }
+        catch(Exception ex) when(ex is not OracleException { Number:20051 })
+        { throw new InvalidOperationException("Recibos RH/LEER (cabecera o detalle del lote)",ex); }
+    }
+    private static async Task<RrmLot?> ReadCore(OracleConnection cn,string id,int company,int actor,CancellationToken ct,OracleTransaction? tx)
     {
         using var cmd=Cmd(cn,"LEER",tx,S("p_ID",id),N("p_EMPRESA",company),N("p_ACTOR",actor));
         cmd.Parameters.Add("p_HEAD",OracleDbType.RefCursor,ParameterDirection.Output);cmd.Parameters.Add("p_ROWS",OracleDbType.RefCursor,ParameterDirection.Output);
