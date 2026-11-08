@@ -32,7 +32,18 @@ public class RhReciboEmailController(ConnectionDB db,IConfiguration config,IWebH
             return Ok(await action(rh,company,actor));
         }
         catch(OracleException ex) when(ex.Number==20051) { return Ok(EmailManualRules.Fail<T>("Lote vencido, modificado o no disponible para esta accion. Actualice y vuelva a analizar.")); }
-        catch(Exception ex) { logger.LogWarning("Operacion de recibos por correo no completada ({Type}).",ex.GetType().Name);return Ok(EmailManualRules.Fail<T>("No se pudo completar la operacion. Consulte el lote antes de repetir.")); }
+        catch(Exception ex)
+        {
+            var reference=Guid.NewGuid().ToString("N");
+            var cause=ex.InnerException??ex;
+            var stage=ex is InvalidOperationException && ex.Message.StartsWith("Recibos RH/")?ex.Message:"procesar solicitud de recibos";
+            var code=cause is OracleException oracle?$"ORA-{oracle.Number:D5}":cause.GetType().Name;
+            var protocol=cause.Message.Contains("TTC",StringComparison.OrdinalIgnoreCase)?" Error de protocolo TTC.":"";
+            // Technical location only: no bodies, emails, PDFs, parameters or connection strings.
+            logger.LogWarning("Recibos {Reference}; etapa {Stage}; codigo {Code}; tipo {Type}; pila {Stack}; causa {CauseType}; pila causa {CauseStack}",
+                reference,stage,code,ex.GetType().FullName,ex.StackTrace,cause.GetType().FullName,cause.StackTrace);
+            return Ok(EmailManualRules.Fail<T>($"Fallo al {stage} ({code}).{protocol} Consulte el lote antes de repetir. Referencia: {reference}"));
+        }
     }
     private static ResultDto<T> Success<T>(T data) => new(data){IsValid=true,Message="success"};
     private async Task<(string Json,string Hash,string Error)> Source(int company,int person,int nomina,int periodo,int icp,string logoHash)
