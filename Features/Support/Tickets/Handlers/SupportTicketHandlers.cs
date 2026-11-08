@@ -90,16 +90,6 @@ public class GetSupportTicketsHandler(ConnectionDB connectionDB, IConfiguration 
             var responsableId = value.ResponsableId;
             var solicitanteId = value.SolicitanteId;
 
-            if (!canViewAll && canViewAssigned)
-            {
-                responsableId = value.UsuarioId;
-            }
-
-            if (!canViewAll && !canViewAssigned && canViewOwn)
-            {
-                solicitanteId = value.UsuarioId;
-            }
-
             using var cmd = new OracleCommand("SIS.SP_SOP_TKT_GET_ALL", cn) { CommandType = CommandType.StoredProcedure, BindByName = true };
             cmd.Parameters.Add("p_PageSize", OracleDbType.Int32).Value = pageSize;
             cmd.Parameters.Add("p_PageNumber", OracleDbType.Int32).Value = pageNumber;
@@ -113,6 +103,9 @@ public class GetSupportTicketsHandler(ConnectionDB connectionDB, IConfiguration 
             cmd.Parameters.Add("p_FECHA_DESDE", OracleDbType.Date).Value = SupportDb.DbValue(value.FechaDesde);
             cmd.Parameters.Add("p_FECHA_HASTA", OracleDbType.Date).Value = SupportDb.DbValue(value.FechaHasta);
             cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
+            cmd.Parameters.Add("p_USUARIO_VISIBLE", OracleDbType.Int32).Value = canViewAll ? DBNull.Value : value.UsuarioId;
+            cmd.Parameters.Add("p_VER_PROPIOS", OracleDbType.Int32).Value = canViewOwn ? 1 : 0;
+            cmd.Parameters.Add("p_VER_ASIGNADOS", OracleDbType.Int32).Value = canViewAssigned ? 1 : 0;
             cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
             var pMessage = cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
             var pTotalRecords = cmd.Parameters.Add("p_TotalRecords", OracleDbType.Int32, ParameterDirection.Output);

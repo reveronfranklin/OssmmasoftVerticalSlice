@@ -22,7 +22,7 @@ public class SupportConfigurationController(SupportTicketAutomation handler) : C
     public async Task<IActionResult> Save(SupportConfigurationSave value) => Ok(await handler.Configuration(User, Request, value));
 }
 
-public class SupportTicketAutomation(ConnectionDB db, IConfiguration config)
+public class SupportTicketAutomation(ConnectionDB db, IConfiguration config, ILogger<SupportTicketAutomation> logger)
 {
     internal static OracleCommand Command(OracleConnection cn, string name, int company)
     {
@@ -105,6 +105,17 @@ public class SupportTicketAutomation(ConnectionDB db, IConfiguration config)
             return new(SupportDb.GetIntOutput(output)) { IsValid = true, Message = "Ticket creado, asignado al responsable y notificacion de correo pendiente de envio." };
         }
         catch (OracleException ex) when (ex.Number == 20060) { return EmailManualRules.Fail<int>("La configuracion o los contactos cambiaron. Revise el responsable y los correos y vuelva a intentar."); }
-        catch (Exception) { return EmailManualRules.Fail<int>("No se pudo crear y asignar el ticket. No se guardaron cambios; verifique los catalogos y la configuracion de Soporte."); }
+        catch (OracleException ex)
+        {
+            var reference = Guid.NewGuid().ToString("N");
+            logger.LogError("Soporte crear/asignar. Referencia {Reference}; Oracle {Code}; pila {Stack}", reference, ex.Number, ex.StackTrace);
+            return EmailManualRules.Fail<int>($"No se pudo crear y asignar el ticket (ORA-{ex.Number:00000}). No se guardaron cambios. Referencia: {reference}.");
+        }
+        catch (Exception ex)
+        {
+            var reference = Guid.NewGuid().ToString("N");
+            logger.LogError("Soporte crear/asignar. Referencia {Reference}; tipo {Type}; pila {Stack}", reference, ex.GetType().Name, ex.StackTrace);
+            return EmailManualRules.Fail<int>($"No se pudo crear y asignar el ticket. No se guardaron cambios. Referencia: {reference}.");
+        }
     }
 }
