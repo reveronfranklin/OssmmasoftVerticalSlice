@@ -1,4 +1,5 @@
 using System.Data;
+using Microsoft.Extensions.Logging;
 using Oracle.ManagedDataAccess.Client;
 
 namespace OssmmasoftVerticalSlice.Features.DatabaseDeployment;
@@ -48,7 +49,7 @@ public sealed class DeploymentProfile
     public Dictionary<string,string> ConnectionStrings { get; set; } = new();
     public override string ToString() => "Perfil privado de metadatos";
 }
-public class DeploymentMetadata(IConfiguration config)
+public class DeploymentMetadata(IConfiguration config, ILogger<DeploymentMetadata>? logger = null)
 {
     private static OracleCommand Query(OracleConnection cn, string text, string? owner = null)
     {
@@ -84,16 +85,37 @@ public class DeploymentMetadata(IConfiguration config)
         var profile=source?options.Pruebas:options.ProduccionLectura;
         if(!profile.ConnectionStrings.TryGetValue(schema,out var value) || string.IsNullOrWhiteSpace(value)) throw new InvalidOperationException("Perfil de lectura no configurado.");
         var cn=new OracleConnection(value);
+        var stage="abrir conexion";
         try
         {
             await cn.OpenAsync(ct);
+            stage="consultar identidad V$DATABASE";
             var identity=await Identity(cn,schema,ct);
             if(requireExpected && (string.IsNullOrWhiteSpace(profile.Expected(schema)) || identity.DatabaseId!=profile.Expected(schema)))
                 throw new InvalidOperationException("Configure o corrija ExpectedDatabaseId con la identidad verificada del ambiente.");
+            stage="verificar usuario y visibilidad del diccionario";
             var prefix=await Visibility(cn,schema,ct);
+            stage="consultar inventario "+prefix+"OBJECTS";
             using(var owner=Query(cn,$"SELECT COUNT(*) FROM {prefix}OBJECTS WHERE OWNER=:owner",schema))
                 if(Convert.ToInt32(await owner.ExecuteScalarAsync(ct))==0) throw new InvalidOperationException("Esquema sin objetos visibles; no se interpretara como una base vacia.");
             return (cn,identity,prefix);
+        }
+        catch(OracleException ex)
+        {
+            cn.Dispose();
+            var reference=Guid.NewGuid().ToString("N");
+            // Do not log connection strings, exception messages or parameter values.
+            logger?.LogError("Comparador Oracle {Reference}; esquema {Schema}; origen {Source}; etapa {Stage}; codigo {Code}; tipo {Type}; pila {Stack}; causa {InnerType}; pila causa {InnerStack}",
+                reference,schema,source,stage,ex.Number,ex.GetType().FullName,ex.StackTrace,ex.InnerException?.GetType().FullName,ex.InnerException?.StackTrace);
+            var reason=ex.Number switch
+            {
+                1017 => "Credenciales rechazadas. Revise usuario y clave del perfil de este ambiente.",
+                942 or 1031 => "Objeto no visible o permiso insuficiente en esa operacion; verifique la cuenta y base efectivas.",
+                50000 => "Fallo del proveedor Oracle; este codigo no demuestra falta de permisos.",
+                _ => "Fallo de Oracle en esta operacion."
+            };
+            var protocol=ex.Message.Contains("TTC",StringComparison.OrdinalIgnoreCase)?" Se detecto error de protocolo TTC.":"";
+            throw new InvalidOperationException($"Fallo al {stage} (ORA-{ex.Number:D5}). {reason}{protocol} Referencia: {reference}",ex);
         }
         catch { cn.Dispose(); throw; }
     }
@@ -108,7 +130,7 @@ public class DeploymentMetadata(IConfiguration config)
                 string.IsNullOrWhiteSpace(profile.Expected(schema))?"Identidad descubierta. Configure ExpectedDatabaseId antes de comparar.":
                 identity.DatabaseId!=profile.Expected(schema)?"La identidad no coincide con ExpectedDatabaseId. Revise el destino antes de comparar.":"Identidad y acceso al inventario verificados.");
         }
-        catch(OracleException ex) { return new(schema,label,false,false,identity,$"No se pudo consultar metadatos (ORA-{ex.Number:D5}). Revise acceso a V$DATABASE y al diccionario."); }
+        catch(OracleException ex) { return new(schema,label,false,false,identity,$"Fallo de Oracle (ORA-{ex.Number:D5}); no implica necesariamente falta de permisos."); }
         catch(InvalidOperationException ex) { return new(schema,label,false,false,identity,ex.Message); }
     }
     public async Task<(DeploymentIdentity Identity,List<DeploymentObject> Objects)> Capture(string schema,bool source,List<string> types,CancellationToken ct)

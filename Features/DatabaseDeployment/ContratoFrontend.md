@@ -169,3 +169,10 @@ autorizados. Las credenciales de los perfiles nunca se serializan en el historia
 - ESLint y comprobacion TypeScript de los archivos nuevos.
 - Compilacion de frontend; conectividad y comparacion reales quedan para el servidor
   de produccion como indico el usuario. No instalar SQL para probar esta fase.
+
+
+Diagnostico de comprobaciones: los errores de conexion indican la etapa
+(abrir conexion, consultar identidad, verificar visibilidad, inventario), el
+codigo y una referencia para logs tecnicos sin credenciales. ORA-01017 se
+clasifica como credenciales rechazadas; ORA-50000 no se clasifica como falta
+de permisos. Un permiso concedido en una base no acredita acceso en la otra.
