@@ -23,7 +23,7 @@ public class EmailQueueWorker(IServiceScopeFactory scopes, IConfiguration config
                     if (receipts)
                     {
                         try { await RhReciboEmailProcessor.Tick(scope.ServiceProvider.GetRequiredService<ConnectionDB>(),config,environment,empresa,settings,stoppingToken); }
-                        catch (Exception ex) when (!stoppingToken.IsCancellationRequested) { logger.LogWarning("No se pudo preparar/reconciliar recibos ({Type}).",ex.GetType().Name); }
+                        catch (Exception ex) when (!stoppingToken.IsCancellationRequested) { LogFailure("preparar/reconciliar recibos RH",ex); }
                     }
                     // R53 shares the limiter and transport with R52 and SOPORTE_AUTO; legacy origins remain excluded.
                     var email = receipts
@@ -39,9 +39,18 @@ public class EmailQueueWorker(IServiceScopeFactory scopes, IConfiguration config
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
-            catch (Exception ex) { logger.LogWarning("No se pudo procesar la cola manual ({Type}).",ex.GetType().Name); }
+            catch (Exception ex) { LogFailure("procesar cola SMTP SIS",ex); }
             try { await Task.Delay(TimeSpan.FromSeconds(10),stoppingToken); }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
         }
     }
+    private void LogFailure(string stage,Exception ex)
+    {
+        var cause=ex.InnerException??ex;
+        var code=cause is Oracle.ManagedDataAccess.Client.OracleException oracle?$"ORA-{oracle.Number:D5}":cause.GetType().Name;
+        var ttc=cause.Message.Contains("TTC",StringComparison.OrdinalIgnoreCase);
+        logger.LogWarning("Worker correo: {Stage}; codigo {Code}; TTC {Ttc}; tipo {Type}; pila {Stack}; causa {Cause}; pila causa {CauseStack}",
+            stage,code,ttc,ex.GetType().FullName,ex.StackTrace,cause.GetType().FullName,cause.StackTrace);
+    }
+
 }

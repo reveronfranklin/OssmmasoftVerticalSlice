@@ -25,17 +25,27 @@ internal static class EmailReciboDb
         var token=Guid.NewGuid().ToString("D");using var tx=cn.BeginTransaction();using var cmd=Cmd(cn,"TOMAR",company,tx);
         cmd.Parameters.Add("p_TOKEN",OracleDbType.Varchar2).Value=token;cmd.Parameters.Add("p_MAX_DIA",OracleDbType.Int32).Value=maxDay;cmd.Parameters.Add("p_INTERVALO",OracleDbType.Int32).Value=interval;
         cmd.Parameters.Add("p_ROWS",OracleDbType.RefCursor,ParameterDirection.Output);
-        EmailManualDelivery? result=null;
+        EmailManualDelivery? result=null;string file="",hash="";
         using(var r=await cmd.ExecuteReaderAsync(ct)) if(await r.ReadAsync(ct))
         {
-            EmailPdfAttachment? attachment=null;
-            if(!r.IsDBNull(r.GetOrdinal("RH_PDF")))
+            file=r.SafeGetString("RH_ARCHIVO");hash=r.SafeGetString("RH_PDF_HASH");
+            result=new(r.SafeGetInt32("EMAIL_ID"),company,token,EmailManualRules.Addresses(r.SafeGetString("PARA_LIST")),EmailManualRules.Addresses(r.SafeGetString("CC_LIST")),EmailManualRules.Addresses(r.SafeGetString("CCO_LIST")),r.SafeGetString("SUBJECT"),r.SafeGetString("BODY_TEXT"),r.SafeGetString("REMITENTE"),r.SafeGetString("REMITENTE_NOMBRE"),r.SafeGetString("MESSAGE_ID"),null,r.SafeGetString("MODULO_ORIGEN")=="RH_RECIBO_R53");
+        }
+        if(result is not null)
+        {
+            OracleCommand Part()
             {
-                using var blob=r.GetOracleBlob(r.GetOrdinal("RH_PDF"));
-                if(blob.Length>5*1024*1024) throw new InvalidOperationException("Adjunto excede limite.");
-                attachment=new(r.SafeGetString("RH_ARCHIVO"),blob.Value,r.SafeGetString("RH_PDF_HASH"));
+                var part=Cmd(cn,"LOB_PARTE",company,tx);
+                part.Parameters.Add("p_ID",OracleDbType.Int32).Value=result.EmailId;
+                part.Parameters.Add("p_TOKEN",OracleDbType.Varchar2).Value=token;
+                return part;
             }
-            result=new(r.SafeGetInt32("EMAIL_ID"),company,token,EmailManualRules.Addresses(r.SafeGetString("PARA_LIST")),EmailManualRules.Addresses(r.SafeGetString("CC_LIST")),EmailManualRules.Addresses(r.SafeGetString("CCO_LIST")),r.SafeGetString("SUBJECT"),r.SafeGetString("BODY_TEXT"),r.SafeGetString("REMITENTE"),r.SafeGetString("REMITENTE_NOMBRE"),r.SafeGetString("MESSAGE_ID"),attachment,r.SafeGetString("MODULO_ORIGEN")=="RH_RECIBO_R53");
+            var body=await EmailLobParts.Text(Part,ct);
+            var pdf=await EmailLobParts.Pdf(Part,ct);
+            // Read attachment metadata separately: scalar columns only, no LOB locators.
+            // Values were captured from the claim row before closing its reader.
+            if(result.RequiresPdf && pdf is null)throw new InvalidOperationException("Recibo sin PDF adjunto.");
+            result=result with { Body=body,Attachment=pdf is null?null:new EmailPdfAttachment(file,pdf,hash) };
         }
         tx.Commit();return result;
     }
