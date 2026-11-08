@@ -114,3 +114,15 @@ correos, PDF ni credenciales. ORA-20051 conserva el mensaje funcional existente.
 Un fallo al LEER despues de crear/confirmar el lote no demuestra que la operacion
 se haya revertido: consultar historial y estado antes de repetir o confirmar otro.
 La respuesta generica anterior no permite inferir rechazo SMTP ni falta de permisos.
+
+
+Tomas de worker sin LOB por cursor: instalar FIX_R53_WORKER_LOB.sql con API
+DETENIDA y publicar la API actualizada antes de arrancarla. Ambos paquetes
+mantienen TOMAR para metadatos y exponen LOB_PARTE validando empresa/id/token/
+estado. Texto de hasta 2 Mi caracteres y PDF hasta 5 MiB se recuperan antes de
+confirmar la toma: fallo de lectura revierte esa toma, no reenvia ni pierde el
+PDF. SIS sigue registrando intento y resultado por token antes de SMTP.
+Los logs del worker ahora distinguen preparacion RH y procesamiento SIS con pila
+tecnica y codigo, sin parametros, cuerpos ni PDF. Consultar lote existente; no
+resolver un pendiente creando otro lote. No volver a aplicar el parche historico
+LEER despues del parche del worker.

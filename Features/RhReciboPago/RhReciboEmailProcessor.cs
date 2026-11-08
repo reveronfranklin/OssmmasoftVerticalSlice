@@ -31,7 +31,12 @@ internal static class RhReciboEmailProcessor
         using(var tx=rh.BeginTransaction())
         {
             using var cmd=Cmd(rh,"TOMAR",tx,N("p_EMPRESA",company),S("p_TOKEN",token));cmd.Parameters.Add("p_ROWS",OracleDbType.RefCursor,ParameterDirection.Output);
-            using(var reader=await cmd.ExecuteReaderAsync(ct)) if(await reader.ReadAsync(ct)) {item=Item(reader,true);nomina=reader.SafeGetInt32("NOMINA");periodo=reader.SafeGetInt32("PERIODO");lotId=reader.SafeGetString("LOTE_ID");}
+            using(var reader=await cmd.ExecuteReaderAsync(ct)) if(await reader.ReadAsync(ct)) {item=Item(reader);nomina=reader.SafeGetInt32("NOMINA");periodo=reader.SafeGetInt32("PERIODO");lotId=reader.SafeGetString("LOTE_ID");}
+            if(item is not null)
+            {
+                OracleCommand Part() => Cmd(rh,"LOB_PARTE",tx,N("p_EMPRESA",company),N("p_ID",item.Id),S("p_TOKEN",token));
+                item=item with { Fuente=await EmailLobParts.Text(Part,ct),Pdf=await EmailLobParts.Pdf(Part,ct) };
+            }
             tx.Commit();
         }
         if(item is null) return;
