@@ -99,3 +99,13 @@ receptor autorizado, filtrado de comentarios e historial, cambio de estatus,
 cierre, estatus invalido atomico y ausencia de duplicados legacy. Se verifico el
 rollback sin dejar ticket ni correos de prueba. Respaldo privado de definiciones:
 `/srv/ossmmasoft-pruebas/shared/config/backups/support-events-20261107T195302Z.json`.
+
+Diagnostico de creacion: los errores Oracle no previstos devuelven IsValid=false,
+Data=0, codigo ORA y referencia de seguimiento, sin SQL ni datos de contactos.
+Los errores de configuracion previstos conservan su mensaje funcional.
+
+Listado de tickets: GetAll aplica desde backend la union de permisos ver_propios
+(y solicitante autenticado) y ver_asignados (y responsable autenticado). Los filtros
+opcionales se intersectan con ese alcance. ver_todos conserva su alcance actual.
+Instalar 10_FIX_LISTA_SOLICITANTE.sql antes de publicar la API que envia los tres
+parametros de alcance. El frontend no puede escoger usuario visible ni permisos.
