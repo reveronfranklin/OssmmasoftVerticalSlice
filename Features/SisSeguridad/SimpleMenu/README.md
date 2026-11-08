@@ -115,3 +115,24 @@ ILogger del servidor. Se registran tipo y pila tecnica, sin parametros, conexion
 ni contenido del menu. El rollback de una conexion rota no oculta el error inicial.
 Publicar solamente la API para obtener este diagnostico y repetir getMiMenu;
 la correccion de causa depende de la etapa observada en el servidor real.
+
+
+Reparacion para TTC localizado en READ_DATA/LEGACY (leer fila):
+
+1. Respaldar la definicion actual de PKG_OSS_MENU_SIMPLE y ejecutar
+   Sql/FIX_MENU_CLOB_BLOQUE.sql completo como una sentencia en SIS.
+2. Confirmar PACKAGE y PACKAGE BODY VALID y ALL_ERRORS sin errores.
+3. Publicar la API actualizada y reciclar su Application Pool. No requiere
+   cambios del frontend ni ejecutar nuevamente el instalador completo.
+4. Reintentar getMiMenu y comprobar tambien Analizar migracion.
+
+La API usa LEGACY_META/SOURCE_META para obtener las filas sin locadores CLOB y
+READ_JSON para recuperar JSON_MENU en fragmentos de hasta 500 caracteres.
+El cursor se cierra antes de recuperar los fragmentos. La posicion siguiente se
+calcula en Oracle; no se infiere de las unidades UTF-16 de .NET. Se verifica
+avance y longitud, y no se usa un SUBSTR unico que recorte el menu a 4000.
+Las operaciones anteriores LEGACY/SOURCE se conservan para permitir instalar
+primero el paquete con la API anterior todavia publicada.
+La causa interna del protocolo TTC no se ha confirmado; este cambio evita la
+transferencia CLOB en el cursor afectado. La validacion real queda pendiente en
+produccion; compilacion local y verificaciones estaticas no la sustituyen.
