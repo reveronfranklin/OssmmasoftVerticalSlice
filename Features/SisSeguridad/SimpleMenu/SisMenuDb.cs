@@ -15,7 +15,7 @@ internal sealed class SisMenuDb(OracleConnection cn, OracleTransaction tx)
     internal async Task<List<Dictionary<string, object>>> Read(string kind, int company = 0, int user = 0)
     {
         using var cmd = Command("READ_DATA");
-        Add(cmd, "p_KIND", kind, OracleDbType.Varchar2); Add(cmd, "p_EMPRESA", company); Add(cmd, "p_USER", user);
+        Add(cmd, "p_KIND", kind is "LEGACY" or "SOURCE" ? kind + "_META" : kind, OracleDbType.Varchar2); Add(cmd, "p_EMPRESA", company); Add(cmd, "p_USER", user);
         cmd.Parameters.Add("p_RESULT", OracleDbType.RefCursor, ParameterDirection.Output);
         var result = new List<Dictionary<string, object>>();
         var stage = "abrir cursor";
@@ -46,7 +46,38 @@ internal sealed class SisMenuDb(OracleConnection cn, OracleTransaction tx)
         {
             throw new InvalidOperationException($"Menu SIS READ_DATA/{kind} ({stage}): {ex.GetType().Name}", ex);
         }
+        if (kind is "LEGACY" or "SOURCE")
+            foreach (var row in result) row["JSON_MENU"] = await ReadJson(Number(row, "CODIGO_USUARIO_ROL"));
         return result;
+    }
+    private async Task<string> ReadJson(int id)
+    {
+        var text = new System.Text.StringBuilder();
+        var offset = 1;
+        int? length = null;
+        try
+        {
+            while (true)
+            {
+                using var cmd = Command("READ_JSON");
+                Add(cmd, "p_ID", id); Add(cmd, "p_OFFSET", offset);
+                var part = cmd.Parameters.Add("p_TEXT", OracleDbType.Varchar2, 4000);
+                part.Direction = ParameterDirection.Output;
+                var total = Output(cmd, "p_TOTAL"); var next = Output(cmd, "p_NEXT");
+                await cmd.ExecuteNonQueryAsync();
+                var size = Int(total);
+                if (length is not null && length != size) throw new InvalidOperationException("El menu cambio durante su lectura. Reintente.");
+                length = size;
+                if (offset > size) break;
+                var value = part.Value;
+                var chunk = value is null or DBNull ? "" : value is Oracle.ManagedDataAccess.Types.OracleString os ? (os.IsNull ? "" : os.Value) : value.ToString() ?? "";
+                var following = Int(next);
+                if (chunk.Length == 0 || following <= offset) throw new InvalidOperationException("Lectura incompleta del menu.");
+                text.Append(chunk); offset = following;
+            }
+            return text.ToString();
+        }
+        catch (Exception ex) { throw new InvalidOperationException("Menu SIS READ_JSON (fragmentos): " + ex.GetType().Name, ex); }
     }
     internal async Task<int> Lock(int? expected)
     {
