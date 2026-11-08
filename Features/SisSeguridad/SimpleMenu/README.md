@@ -104,3 +104,14 @@ Se conservan las ocurrencias del mismo perfil, incluidas sus ubicaciones, orden
 y permisos. Las copias equivalentes aportadas por roles distintos se fusionan
 en la union. No es necesario depurar el JSON del usuario para eliminar enlaces
 que ya formaban parte de su menu.
+
+## Diagnostico de TTC en produccion
+
+Si el paquete y su body estan VALID, ALL_ERRORS esta vacio y JSON_MENU es CLOB,
+no reinstalar ni alterar la columna por el mensaje generico TTC.
+La API identifica ahora LOCK_REV, READ_DATA/<tipo> y la etapa de lectura del
+cursor/fila/columna. Cada fallo incluye una referencia para correlacionar el log
+ILogger del servidor. Se registran tipo y pila tecnica, sin parametros, conexiones
+ni contenido del menu. El rollback de una conexion rota no oculta el error inicial.
+Publicar solamente la API para obtener este diagnostico y repetir getMiMenu;
+la correccion de causa depende de la etapa observada en el servidor real.

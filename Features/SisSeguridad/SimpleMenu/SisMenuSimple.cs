@@ -47,7 +47,7 @@ public partial class SisSeguridadController
     private async Task<IActionResult> SimpleRun<T>(bool admin, Func<SisMenuSimpleHandler, int, Task<ResultDto<T>>> run)
     {
         var access = await SimpleIdentity(admin);
-        return Ok(access.IsValid ? await run(new(connectionDB, config), access.Data) : SimpleFail<T>(access.Message));
+        return Ok(access.IsValid ? await run(new(connectionDB, config, HttpContext.RequestServices.GetRequiredService<ILogger<SisMenuSimpleHandler>>()), access.Data) : SimpleFail<T>(access.Message));
     }
     [HttpPost("getMenuSimple")] public Task<IActionResult> SimpleCatalog() => SimpleRun(true, (h, _) => h.Catalog());
     [HttpPost("getMiMenu")] public Task<IActionResult> MyMenu() => SimpleRun(false, (h, id) => h.Session(id));
@@ -61,7 +61,7 @@ public partial class SisSeguridadController
     [HttpPost("setEstrategiaMenu")] public Task<IActionResult> SimpleMode(SisMenuMode value) => SimpleRun(true, (h, id) => h.SetMode(value, id));
 }
 
-public sealed class SisMenuSimpleHandler(ConnectionDB connectionDB, IConfiguration config)
+public sealed class SisMenuSimpleHandler(ConnectionDB connectionDB, IConfiguration config, ILogger<SisMenuSimpleHandler> logger)
 {
     private static ResultDto<T> Ok<T>(T data) => new(data) { IsValid = true, Message = "OK" };
     private async Task<ResultDto<T>> Run<T>(Func<SisMenuDb, OracleConnection, int, Task<T>> action, int? expected = null, bool write = false)
@@ -84,8 +84,13 @@ public sealed class SisMenuSimpleHandler(ConnectionDB connectionDB, IConfigurati
         catch (Exception ex)
         {
             try { await new SisMenuDb(cn, tx).Execute("RESET_WRITE"); } catch { /* Preserve original failure. */ }
-            tx.Rollback();
-            return new(default!) { IsValid = false, Message = ex is OracleException ? $"Operacion SIS: {ex.Message}" : ex.Message };
+            var diagnostic = Guid.NewGuid().ToString("N");
+            // Record technical location only: no connection string, parameters, JSON menu or SQL data.
+            logger.LogError("Fallo menu SIS. Referencia {Reference}; etapa {Stage}; tipo {Type}; pila {Stack}; causa {CauseType}; pila causa {CauseStack}",
+                diagnostic, ex is InvalidOperationException && ex.Message.StartsWith("Menu SIS ") ? ex.Message : "operacion de menu",
+                ex.GetType().FullName, ex.StackTrace, ex.InnerException?.GetType().FullName, ex.InnerException?.StackTrace);
+            try { tx.Rollback(); } catch { /* A broken connection must not hide the original diagnostic. */ }
+            return new(default!) { IsValid = false, Message = $"{ex.Message}. Referencia: {diagnostic}" };
         }
     }
     private static async Task<SisMenuSnapshot> Snapshot(SisMenuDb db)

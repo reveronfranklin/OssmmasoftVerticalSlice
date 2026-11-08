@@ -18,25 +18,48 @@ internal sealed class SisMenuDb(OracleConnection cn, OracleTransaction tx)
         Add(cmd, "p_KIND", kind, OracleDbType.Varchar2); Add(cmd, "p_EMPRESA", company); Add(cmd, "p_USER", user);
         cmd.Parameters.Add("p_RESULT", OracleDbType.RefCursor, ParameterDirection.Output);
         var result = new List<Dictionary<string, object>>();
-        using var r = await cmd.ExecuteReaderAsync();
-        while (await r.ReadAsync())
+        var stage = "abrir cursor";
+        try
         {
-            var row = new Dictionary<string, object>();
-            for (var i = 0; i < r.FieldCount; i++) row[r.GetName(i)] = r.IsDBNull(i) ? "" : r.GetValue(i) is Oracle.ManagedDataAccess.Types.OracleClob clob ? clob.Value : r.GetValue(i);
-            result.Add(row);
+            using var r = await cmd.ExecuteReaderAsync();
+            while (true)
+            {
+                stage = "leer fila";
+                if (!await r.ReadAsync()) break;
+                var row = new Dictionary<string, object>();
+                for (var i = 0; i < r.FieldCount; i++)
+                {
+                    var column = r.GetName(i);
+                    stage = "leer columna " + column;
+                    if (r.IsDBNull(i)) { row[column] = ""; continue; }
+                    var value = r.GetValue(i);
+                    if (value is Oracle.ManagedDataAccess.Types.OracleClob clob)
+                    {
+                        using (clob) row[column] = clob.Value;
+                    }
+                    else row[column] = value;
+                }
+                result.Add(row);
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Menu SIS READ_DATA/{kind} ({stage}): {ex.GetType().Name}", ex);
         }
         return result;
     }
     internal async Task<int> Lock(int? expected)
     {
         using var cmd = Command("LOCK_REV"); Add(cmd, "p_EXPECTED", expected); var rev = Output(cmd, "p_REV");
-        await cmd.ExecuteNonQueryAsync(); return Int(rev);
+        try { await cmd.ExecuteNonQueryAsync(); return Int(rev); }
+        catch (Exception ex) { throw new InvalidOperationException("Menu SIS LOCK_REV: " + ex.GetType().Name, ex); }
     }
     internal async Task Execute(string op, params (string Name, object? Value, OracleDbType Type)[] values)
     {
         using var cmd = Command(op);
         foreach (var v in values) Add(cmd, v.Name, v.Value, v.Type);
-        await cmd.ExecuteNonQueryAsync();
+        try { await cmd.ExecuteNonQueryAsync(); }
+        catch (Exception ex) { throw new InvalidOperationException("Menu SIS " + op + ": " + ex.GetType().Name, ex); }
     }
     internal static (string, object?, OracleDbType) N(string n, int? v) => (n, v, OracleDbType.Int32);
     internal static (string, object?, OracleDbType) S(string n, string? v) => (n, v, OracleDbType.Varchar2);
