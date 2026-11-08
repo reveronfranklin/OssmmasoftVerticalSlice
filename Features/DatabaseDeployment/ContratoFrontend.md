@@ -176,3 +176,11 @@ Diagnostico de comprobaciones: los errores de conexion indican la etapa
 codigo y una referencia para logs tecnicos sin credenciales. ORA-01017 se
 clasifica como credenciales rechazadas; ORA-50000 no se clasifica como falta
 de permisos. Un permiso concedido en una base no acredita acceso en la otra.
+
+Los fallos del worker distinguen acceso denegado/IO del almacenamiento de la
+captura de metadatos. La captura informa ambiente, esquema y etapa (conexion,
+transformaciones, inventario, dependencias, columnas o definicion) sin contenido
+DDL ni credenciales; errores TTC se identifican expresamente. Un registro ERROR
+visible no demuestra que el fallo sea de disco: ese registro pudo guardarse antes
+y despues de un error de lectura de Oracle. Iniciar una nueva comparacion despues
+de publicar el diagnostico; los historiales anteriores no se reejecutan.

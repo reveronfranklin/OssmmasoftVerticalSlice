@@ -135,14 +135,32 @@ public class DeploymentMetadata(IConfiguration config, ILogger<DeploymentMetadat
     }
     public async Task<(DeploymentIdentity Identity,List<DeploymentObject> Objects)> Capture(string schema,bool source,List<string> types,CancellationToken ct)
     {
+        var stage="validar configuracion";
+        try { return await CaptureCore(schema,source,types,ct,value=>stage=value); }
+        catch(Exception ex) when (ex is not OperationCanceledException && ex is not InvalidOperationException)
+        {
+            var reference=Guid.NewGuid().ToString("N");
+            logger?.LogError("Captura {Reference}; esquema {Schema}; origen {Source}; etapa {Stage}; tipo {Type}; pila {Stack}; causa {InnerType}; pila causa {InnerStack}",
+                reference,schema,source,stage,ex.GetType().FullName,ex.StackTrace,ex.InnerException?.GetType().FullName,ex.InnerException?.StackTrace);
+            var detail=ex is OracleException oracle?$"ORA-{oracle.Number:D5}":ex.GetType().Name;
+            var protocol=ex.Message.Contains("TTC",StringComparison.OrdinalIgnoreCase)?" Error de protocolo TTC.":"";
+            throw new InvalidOperationException($"Fallo al capturar {(source?"Pruebas":"Produccion")}/{schema}: {stage} ({detail}).{protocol} Referencia: {reference}",ex);
+        }
+    }
+    private async Task<(DeploymentIdentity Identity,List<DeploymentObject> Objects)> CaptureCore(string schema,bool source,List<string> types,CancellationToken ct,Action<string> stage)
+    {
         var options=DeploymentOptions.Read(config); ValidateSchema(options,schema);
         if(types.Count==0 || types.Any(x=>!DeploymentRules.KnownTypes.Contains(x))) throw new InvalidOperationException("Tipo de objeto no permitido.");
+        stage("abrir conexion e identificar destino");
         var opened=await Open(schema,source,true,ct); using var cn=opened.Connection; var prefix=opened.Prefix;
+        stage("configurar transformaciones DBMS_METADATA");
         using(var transforms=Query(cn,"BEGIN DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'SEGMENT_ATTRIBUTES',FALSE); DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'STORAGE',FALSE); DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'SQLTERMINATOR',TRUE); END;")) await transforms.ExecuteNonQueryAsync(ct);
+        stage("leer inventario de objetos");
         var inventory=new List<(string Name,string Type,string Status)>();
         using(var q=Query(cn,$"SELECT OBJECT_NAME,OBJECT_TYPE,STATUS FROM {prefix}OBJECTS WHERE OWNER=:owner AND SUBOBJECT_NAME IS NULL AND GENERATED='N' ORDER BY OBJECT_TYPE,OBJECT_NAME",schema))
         using(var r=await q.ExecuteReaderAsync(ct)) while(await r.ReadAsync(ct))
             if(types.Contains(Text(r,"OBJECT_TYPE"))) { inventory.Add((Text(r,"OBJECT_NAME"),Text(r,"OBJECT_TYPE"),Text(r,"STATUS"))); if(inventory.Count>Math.Clamp(options.MaxObjects,1,5000)) throw new InvalidOperationException("Inventario excede MaxObjects. Compare menos tipos de objetos."); }
+        stage("leer dependencias");
         var deps=new Dictionary<string,List<DeploymentDependency>>();
         using(var q=Query(cn,$"SELECT NAME,TYPE,REFERENCED_OWNER,REFERENCED_NAME,REFERENCED_TYPE,REFERENCED_LINK_NAME FROM {prefix}DEPENDENCIES WHERE OWNER=:owner",schema))
         using(var r=await q.ExecuteReaderAsync(ct)) while(await r.ReadAsync(ct))
@@ -150,6 +168,7 @@ public class DeploymentMetadata(IConfiguration config, ILogger<DeploymentMetadat
             var key=Text(r,"TYPE")+"|"+Text(r,"NAME"); if(!deps.TryGetValue(key,out var list)) deps[key]=list=[];
             list.Add(new(Text(r,"REFERENCED_OWNER"),Text(r,"REFERENCED_NAME"),Text(r,"REFERENCED_TYPE"),Text(r,"REFERENCED_LINK_NAME").Length>0));
         }
+        stage("leer columnas");
         var columns=new Dictionary<string,List<DeploymentColumn>>();
         if(types.Contains("TABLE"))
         {
@@ -160,6 +179,7 @@ public class DeploymentMetadata(IConfiguration config, ILogger<DeploymentMetadat
                 list.Add(new(Text(r,"COLUMN_NAME"),Text(r,"DATA_TYPE"),Num(r,"DATA_LENGTH"),Opt(r,"DATA_PRECISION"),Opt(r,"DATA_SCALE"),Text(r,"CHAR_USED"),Num(r,"CHAR_LENGTH"),Text(r,"NULLABLE")=="Y",Text(r,"DATA_DEFAULT").Trim()));
             }
         }
+        stage("leer estado de triggers");
         var triggers=new Dictionary<string,string>();
         if(types.Contains("TRIGGER"))
         {
@@ -169,6 +189,7 @@ public class DeploymentMetadata(IConfiguration config, ILogger<DeploymentMetadat
         var result=new List<DeploymentObject>(); var total=0;
         foreach(var item in inventory)
         {
+            stage("leer definicion "+item.Type+" "+item.Name);
             ct.ThrowIfCancellationRequested(); var type=item.Type switch { "PACKAGE"=>"PACKAGE_SPEC", "PACKAGE BODY"=>"PACKAGE_BODY", var t=>t }; string ddl; var status=item.Status;
             try
             {
@@ -186,6 +207,7 @@ public class DeploymentMetadata(IConfiguration config, ILogger<DeploymentMetadat
         }
         if(types.Contains("GRANT"))
         {
+            stage("leer permisos de objetos");
             using var q=Query(cn,$"SELECT TABLE_NAME,GRANTEE,PRIVILEGE,GRANTABLE FROM {prefix}TAB_PRIVS WHERE "+(prefix=="ALL_"?"TABLE_SCHEMA":"OWNER")+"=:owner ORDER BY TABLE_NAME,GRANTEE,PRIVILEGE",schema);
             using var r=await q.ExecuteReaderAsync(ct); var grouped=new Dictionary<string,List<string>>();
             while(await r.ReadAsync(ct))
