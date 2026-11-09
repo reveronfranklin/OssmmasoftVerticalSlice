@@ -1,0 +1,57 @@
+using OssmmasoftVerticalSlice.Features.RhTitularesBeneficiarios;
+
+static void Check(bool condition, string message)
+{
+    if (!condition) throw new Exception(message);
+}
+var birth = new DateTime(2000, 1, 2);
+RhTitBenResponse Row(int persona, string name = "ANA", string parentesco = "HIJO") => new() {
+    CodigoPersona = persona, CodigoFamiliar = parentesco.StartsWith("TITULAR") ? null : 10, CedulaBeneficiario = "V-123", NombreTituBene = name,
+    ApellidosTituBene = "PEREZ", FechaNacimientoFamiliar = birth, Parentesco = parentesco
+};
+var rows = new List<RhTitBenResponse> { Row(1), Row(2), Row(1, parentesco: "TITULAR F"), Row(3), Row(4), Row(5), Row(6) };
+var contacts = new List<RhTitBenFamiliar> {
+    new(1, 10, "ana@example.com", "+58 0412 0001234"),
+    new(2, 10, "otra@example.com", "0002"),
+    new(3, 10, "duplicado1@example.com", "1"),
+    new(3, 10, "duplicado2@example.com", "2"),
+    new(4, 20, "incorrecto@example.com", "4")
+};
+var home = new RhTitBenDireccion { CodigoDireccion = 1, Principal = true, Pais = "Venezuela", ComplementoDir = "Calle 1" };
+var alternative = home with { CodigoDireccion = 2, Principal = false, ComplementoDir = "Calle 2" };
+var addresses = new Dictionary<int, List<RhTitBenDireccion>> {
+    [1] = [home, alternative], [2] = [alternative], [3] = [alternative, alternative with { CodigoDireccion = 3 }],
+    [4] = [home, home with { CodigoDireccion = 4 }], [6] = [home with { Principal = false }]
+};
+RhTitBenDb.Enrich(rows, contacts, addresses);
+Check(rows.Count == 7, "Se duplicaron filas");
+Check(rows[0].TelefonoFamiliar == "+58 0412 0001234", "Telefono alterado");
+Check(rows[0].EmailFamiliar == "ana@example.com" && rows[1].EmailFamiliar == "otra@example.com", "Contacto cruzado entre trabajadores");
+Check(rows[2].EmailFamiliar == null && rows[3].EmailFamiliar == null && rows[4].EmailFamiliar == null, "Contacto ambiguo, titular o codigo de familiar distinto");
+Check(rows[0].DireccionSeleccionada == home && rows[1].DireccionSeleccionada == alternative, "Seleccion de direccion incorrecta");
+Check(rows[3].EstadoDireccion == "por definir" && rows[4].EstadoDireccion == "por definir", "Se eligio una direccion ambigua");
+Check(rows[5].EstadoDireccion == "sin informacion" && rows[6].EstadoDireccion == "disponible", "Ausencia o unica direccion incorrecta");
+Check(rows[0].SearchText.Contains("ana@example.com") && rows[0].SearchText.Contains("Calle 2"), "Busqueda incompleta");
+Check(RhTitBenDb.Duration(DateTime.Today.AddYears(-10))!.StartsWith("10 Años"), "Edad incorrecta");
+// Regression: view formats IDs without a hyphen and appends health to kinship.
+var genesis = new RhTitBenResponse {
+    CodigoPersona = 100, CodigoFamiliar = 460, CedulaBeneficiario = "V21116456",
+    NombreTituBene = "GENESIS", ApellidosTituBene = "SALAZAR",
+    FechaNacimientoFamiliar = new DateTime(1994, 3, 4), Parentesco = "HIJA SANO"
+};
+var sibling = genesis with { CodigoFamiliar = 461, NombreTituBene = "OTRO" };
+var otherWorker = genesis with { CodigoPersona = 101 };
+var keyContacts = new List<RhTitBenFamiliar> {
+    new(100, 460, "contacto@example.com", "5555558"),
+    new(100, 461, "hermano@example.com", "0000461")
+};
+RhTitBenDb.Enrich([genesis, sibling, otherWorker], keyContacts, []);
+Check(genesis.EmailFamiliar == "contacto@example.com" && genesis.TelefonoFamiliar == "5555558",
+    "No se recupera el contacto por CODIGO_PERSONA y CODIGO_FAMILIAR");
+Check(sibling.EmailFamiliar == "hermano@example.com", "Se mezclan familiares del mismo trabajador");
+Check(otherWorker.EmailFamiliar == null, "Se mezcla un familiar de otro trabajador");
+var changedPresentation = genesis with { CedulaBeneficiario = "MENOR", NombreTituBene = "NOMBRE ACTUALIZADO",
+    FechaNacimientoFamiliar = null, Parentesco = "HIJA OTRO ESTADO" };
+RhTitBenDb.Enrich([changedPresentation], keyContacts, []);
+Check(changedPresentation.EmailFamiliar == "contacto@example.com", "El cruce aun depende de textos o cedula");
+Console.WriteLine("R55: claves persona/familiar, contactos, ausencia, ambiguedad, direccion y busqueda OK.");
