@@ -70,6 +70,7 @@ public record RhTitBenResponse
     public decimal? DiasAntiguedadVaca { get; set; }
     public string? PeriodosVaca { get; set; }
     public int CodigoPersona { get; set; }
+    public int? CodigoFamiliar { get; set; }
     public string? EmailFamiliar { get; set; }
     public string? TelefonoFamiliar { get; set; }
     public string EstadoDireccion { get; set; } = "sin informacion";
@@ -82,8 +83,7 @@ public record RhTitBenResponse
         string.Join(" ", DireccionesTrabajador.Select(d => d.Resumen)) });
 }
 
-internal record RhTitBenFamiliar(int Persona, string Cedula, string Nombre,
-    string Apellido, DateTime? Nacimiento, string Parentesco, string? Email, string? Telefono);
+internal record RhTitBenFamiliar(int Persona, int Familiar, string? Email, string? Telefono);
 
 internal static class RhTitBenDb
 {
@@ -95,7 +95,6 @@ internal static class RhTitBenDb
     internal static int Number(IDataRecord r, string name) => Convert.ToInt32(r[name]);
     internal static DateTime? Date(IDataRecord r, string name)
         => r.IsDBNull(r.GetOrdinal(name)) ? null : Convert.ToDateTime(r[name]);
-    internal static string Key(string? value) => (value ?? "").Trim().ToUpperInvariant();
     internal static string? Duration(DateTime? date)
     {
         if (date is null) return null;
@@ -149,7 +148,8 @@ internal static class RhTitBenDb
             AnosAntiguedadVaca = r.IsDBNull(r.GetOrdinal("ANOS_ANTIGUEDAD_VACA")) ? null : Convert.ToDecimal(r["ANOS_ANTIGUEDAD_VACA"]),
             DiasAntiguedadVaca = r.IsDBNull(r.GetOrdinal("DIAS_ANTIGUEDAD_VACA")) ? null : Convert.ToDecimal(r["DIAS_ANTIGUEDAD_VACA"]),
             PeriodosVaca = Text(r, "PERIODOS_VACA"),
-            CodigoPersona = Number(r, "TIT_PERSONA")
+            CodigoPersona = Number(r, "TIT_PERSONA"),
+            CodigoFamiliar = r.IsDBNull(r.GetOrdinal("CODIGO_FAMILIAR")) ? null : Number(r, "CODIGO_FAMILIAR")
         };
     }
     internal static RhTitBenDireccion MapDireccion(IDataRecord r) => new()
@@ -177,16 +177,15 @@ internal static class RhTitBenDb
     internal static void Enrich(List<RhTitBenResponse> rows, List<RhTitBenFamiliar> familiares,
         Dictionary<int, List<RhTitBenDireccion>> direcciones)
     {
-        var lookup = familiares.ToLookup(f => (f.Persona, RhTitBenDb.Key(f.Cedula),
-            RhTitBenDb.Key(f.Nombre), RhTitBenDb.Key(f.Apellido), f.Nacimiento?.Date, RhTitBenDb.Key(f.Parentesco)));
+        var lookup = familiares.ToLookup(f => (f.Persona, f.Familiar));
         foreach (var row in rows)
         {
-            // Never infer family contact from the titular or an ambiguous identity.
-            if (!RhTitBenDb.Key(row.Parentesco).StartsWith("TITULAR", StringComparison.Ordinal))
+            row.EmailFamiliar = null;
+            row.TelefonoFamiliar = null;
+            // The titular has no family key. Both source keys must match.
+            if (row.CodigoFamiliar is > 0)
             {
-                var matches = lookup[(row.CodigoPersona, RhTitBenDb.Key(row.CedulaBeneficiario),
-                    RhTitBenDb.Key(row.NombreTituBene), RhTitBenDb.Key(row.ApellidosTituBene),
-                    row.FechaNacimientoFamiliar?.Date, RhTitBenDb.Key(row.Parentesco))].Take(2).ToArray();
+                var matches = lookup[(row.CodigoPersona, row.CodigoFamiliar.Value)].Take(2).ToArray();
                 if (matches.Length == 1)
                 {
                     row.EmailFamiliar = matches[0].Email;

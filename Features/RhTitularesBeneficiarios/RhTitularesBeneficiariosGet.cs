@@ -38,10 +38,8 @@ public class RhTitularesBeneficiariosGetHandler(ConnectionDB db, IConfiguration 
             var familiares = new List<RhTitBenFamiliar>();
             while (await reader.ReadAsync())
             {
-                string T(string field) => RhTitBenDb.Text(reader, field) ?? "";
                 familiares.Add(new(RhTitBenDb.Number(reader, "CODIGO_PERSONA"),
-                    $"{T("NACIONALIDAD")}-{T("CEDULA_FAMILIAR")}", T("NOMBRE"), T("APELLIDO"),
-                    RhTitBenDb.Date(reader, "FECHA_NACIMIENTO"), T("PARENTESCO"),
+                    RhTitBenDb.Number(reader, "CODIGO_FAMILIAR"),
                     RhTitBenDb.Text(reader, "EMAIL"), RhTitBenDb.Text(reader, "NUMERO_COMUNICACION")));
             }
             if (!await reader.NextResultAsync()) return Fail("No se recibieron las direcciones del trabajador.");
