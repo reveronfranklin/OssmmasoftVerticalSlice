@@ -12,7 +12,7 @@ public interface IEmailManualSender
 {
     Task<EmailSendOutcome> SendAsync(EmailSettings settings, EmailManualDelivery email, CancellationToken ct);
 }
-public sealed class EmailSmtpSender : IEmailManualSender
+public sealed class EmailSmtpSender(ILogger<EmailSmtpSender> logger) : IEmailManualSender
 {
     public static FormatOptions MessageFormat()
     {
@@ -53,7 +53,15 @@ public sealed class EmailSmtpSender : IEmailManualSender
         var attempted = false;
         MimeMessage message;
         try { message = BuildMessage(email); }
-        catch { return new("ERROR", "Adjunto o destinatarios invalidos. No se contacto SMTP."); }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Correo {Id}: fallo al construir mensaje; tipo {Type}; parametro {Parameter}; pila {Stack}",
+                email.EmailId, ex.GetType().Name, (ex as ArgumentException)?.ParamName, ex.StackTrace);
+            var detail = email.RequiresPdf && email.Attachment is null ? "Falta el adjunto PDF requerido."
+                : email.Attachment is not null ? "Adjunto PDF o destinatarios del recibo invalidos."
+                : "No se pudo construir el mensaje. Revise remitente, destinatarios y Message-ID.";
+            return new("ERROR", detail + " No se contacto SMTP.");
+        }
         using var ownedMessage = message;
         using var client = new SmtpClient { Timeout = 60000 };
         try
