@@ -6,10 +6,10 @@ namespace OssmmasoftVerticalSlice.Features.RhReciboPago;
 
 public static class RhReciboPagoPdfGenerator
 {
-    public static byte[] Generate(IReadOnlyList<RhReciboLinea> rows, byte[] logo, string tipoNomina, bool provisional)
+    public static byte[] Generate(IReadOnlyList<RhReciboLinea> rows, byte[] logo, string tipoNomina, bool provisional, bool permitirTapaDepartamento = true)
     {
         if (rows.Count == 0) throw new ArgumentException("No hay recibos para generar.", nameof(rows));
-        var includeDepartmentCover = rows.Select(row => row.CodigoPersona).Distinct().Take(2).Count() > 1;
+        var includeDepartmentCover = permitirTapaDepartamento && rows.Select(row => row.CodigoPersona).Distinct().Take(2).Count() > 1;
         // Misma configuracion del generador legacy ya utilizado por esta aplicacion.
         QuestPDF.Settings.License = LicenseType.Community;
         return Document.Create(document => document.Page(page =>

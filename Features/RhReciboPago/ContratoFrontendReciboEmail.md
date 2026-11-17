@@ -119,3 +119,10 @@ de recibos satisfactorias. Backups privados del paquete anterior al cambio:
 `/srv/ossmmasoft-pruebas/shared/config/backups/receipt-repeat-20261107T203855Z.json`;
 instalacion de indice y paquete validada con respaldo adicional
 `receipt-repeat-20261107T204326Z.json` en ese mismo directorio.
+
+## PDF individual sin tapa de departamento
+
+El procesador de email deshabilita explicitamente la tapa de departamento al
+generar cada PDF individual. Aplica a PDF nuevos despues de desplegar la API.
+Los PDF ya preparados se conservan como parte de la version congelada del envio;
+no se regeneran ni reenvian automaticamente al desplegar.
