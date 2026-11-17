@@ -54,7 +54,7 @@ internal static class RhReciboEmailProcessor
                 if(logo is null) {await Error("No se encontro el logo del recibo.");return;}
                 var logoBytes=await File.ReadAllBytesAsync(logo,ct);
                 if(RhReciboEmailRules.Hash(logoBytes)!=item.LogoHash) {await Error("El logo cambio desde la revision. Restaure la version antes de reintentar.");return;}
-                pdf=RhReciboPagoPdfGenerator.Generate(source.Datos.Lineas,logoBytes,source.Datos.TipoNomina,false);
+                pdf=RhReciboPagoPdfGenerator.Generate(source.Datos.Lineas,logoBytes,source.Datos.TipoNomina,false, permitirTapaDepartamento: false);
                 if(!RhReciboEmailRules.ValidPdf(pdf)) {await Error("PDF vacio, invalido o mayor a 5 MiB.");return;}
                 hash=RhReciboEmailRules.Hash(pdf);
                 using var tx=rh.BeginTransaction();await Run(rh,"PDF_LISTO",tx,ct,N("p_ID",item.Id),S("p_TOKEN",token),B("p_PDF",pdf),S("p_HASH",hash));tx.Commit();
