@@ -9,6 +9,7 @@ public static class RhReciboPagoPdfGenerator
     public static byte[] Generate(IReadOnlyList<RhReciboLinea> rows, byte[] logo, string tipoNomina, bool provisional)
     {
         if (rows.Count == 0) throw new ArgumentException("No hay recibos para generar.", nameof(rows));
+        var includeDepartmentCover = rows.Select(row => row.CodigoPersona).Distinct().Take(2).Count() > 1;
         // Misma configuracion del generador legacy ya utilizado por esta aplicacion.
         QuestPDF.Settings.License = LicenseType.Community;
         return Document.Create(document => document.Page(page =>
@@ -44,8 +45,11 @@ public static class RhReciboPagoPdfGenerator
                 foreach (var department in rows.GroupBy(row => row.CodigoIcpConcat))
                 {
                     if (contador > 0) column.Item().PageBreak();
-                    column.Item().AlignCenter().ShowOnce().Text($"DEPARTAMENTO : {department.Key}").SemiBold();
-                    column.Item().PageBreak();
+                    if (includeDepartmentCover)
+                    {
+                        column.Item().AlignCenter().ShowOnce().Text($"DEPARTAMENTO : {department.Key}").SemiBold();
+                        column.Item().PageBreak();
+                    }
                     var inDepartment = 0;
                     foreach (var persona in department.GroupBy(row => row.CodigoPersona))
                     {

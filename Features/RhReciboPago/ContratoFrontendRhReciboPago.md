@@ -90,7 +90,10 @@ codigoIcpConcat, codigoIcp y denominacion. Los IDs del ejemplo son ilustrativos.
   mapper temporal legacy omitia Sueldo y presentaba cero: se preserva ese cero
   en el PDF temporal; historico mantiene SUELDO. Corregir esa regla requeriria
   otro cambio funcional, no se oculta dentro de la migracion.
-- Agrupacion por departamento y persona, portada por departamento y dos recibos
+- Agrupacion por departamento y persona; portada por departamento solo cuando
+  el resultado incluye mas de una persona distinta. El recibo individual comienza
+  directamente con el detalle, tanto en vista previa como en envio por correo.
+  Dos recibos
   por pagina sin hoja vacia final. Componentes de cabecera/conceptos/totales/firma
   portados desde fase 1; se conserva el formato monetario es-AR y la fecha corta
   del proceso en el PDF. El resumen usa dd/MM/yyyy como antes.
