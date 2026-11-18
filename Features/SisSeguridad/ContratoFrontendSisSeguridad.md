@@ -645,6 +645,15 @@ obtiene del login firmado del JWT, sin seleccionar usuario por refresh token ni
 por login enviado. Salvo getMiMenu, requieren superusuario o
 soporte.usuarios.configurar. El actor nunca se acepta del cuerpo.
 
+La sesion requiere usuario activo (STATUS A, 1 o nulo) y TOKENEXPIRES vigente
+segun SYSDATE en SIS_USUARIOS. Login y estado se comparan sin espacios externos
+y sin distinguir mayusculas. Si falla, ResultDto conserva isValid=false y data=null;
+message distingue login ausente en JWT, usuario no encontrado en la empresa,
+login duplicado, usuario inactivo y TOKENEXPIRES ausente o vencido.
+El cuerpo de getMiMenu sigue siendo {}; no se debe enviar login ni codigoUsuario.
+Si login funciona pero menu rechaza la sesion, verificar que ambas API apunten
+a la misma base SIS y empresa; revisar tambien las fechas de Oracle y del login.
+
 | Ruta | Cuerpo | data de ResultDto |
 | --- | --- | --- |
 | getMenuSimple | {} | version, menus, roles, asignaciones, permisos, rolPermisos, menuPermisos, usuariosPorRol, modulos |
