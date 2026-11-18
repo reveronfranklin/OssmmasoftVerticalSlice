@@ -17,6 +17,7 @@ public record SisUsuarioGetByIdQuery(int CodigoUsuario);
 public record SisUsuarioCreateCommand(string Usuario, string Login, string Clave, decimal? Cedula, string? Email, bool RecibeEmail, bool EsAnalistaSoporte, bool EsAnalistaCnt, bool EsAdminCnt, bool IsSuperuser, int UsuarioIns);
 public record SisUsuarioUpdateCommand(int CodigoUsuario, string Usuario, string Login, decimal? Cedula, string Status, string? Email, bool RecibeEmail, bool EsAnalistaSoporte, bool EsAnalistaCnt, bool EsAdminCnt, bool IsSuperuser, int UsuarioUpd);
 public record SisUsuarioUpdateEmailCommand(int CodigoUsuario, string? Email, bool RecibeEmail, bool EsAnalistaSoporte, bool EsAnalistaCnt, bool EsAdminCnt, bool IsSuperuser, int UsuarioUpd);
+public record SisUsuarioUpdateStatusCommand(int CodigoUsuario, string Status);
 public record SisUsuarioUpdatePasswordCommand(int CodigoUsuario, string Clave, int UsuarioUpd);
 public record SisUsuarioApplySupportPermissionsCommand(int CodigoUsuario, int UsuarioUpd);
 public record SisUsuarioApplySupportPermissionsResponse(int CodigoUsuario, string Perfil, int CodigoUsuarioRol, bool Created);
@@ -239,6 +240,31 @@ public class SisUsuariosController(ConnectionDB connectionDB, IConfiguration con
             cmd.Parameters.Add("p_USUARIO_UPD", OracleDbType.Int32).Value = access.Data;
         });
         return Ok(result);
+    }
+
+    [HttpPost("updateStatus")]
+    public async Task<IActionResult> UpdateStatus(SisUsuarioUpdateStatusCommand value)
+    {
+        try
+        {
+            var access = await RequirePermissionAsync(SupportSecurity.SupportUsersConfig);
+            if (!access.IsValid)
+                return Ok(new ResultDto<string>(string.Empty) { IsValid = false, Message = access.Message });
+
+            if (value.CodigoUsuario <= 0 || value.Status is not ("0" or "1" or "2"))
+                return Ok(new ResultDto<string>(string.Empty) { IsValid = false, Message = "Indique un usuario y un estatus valido: 0 Inactivo, 1 Activo o 2 Suspendido." });
+
+            return Ok(await ExecuteMessageAsync("SIS.SP_SIS_USR_STATUS_UPD", cmd =>
+            {
+                cmd.Parameters.Add("p_CODIGO_USUARIO", OracleDbType.Int32).Value = value.CodigoUsuario;
+                cmd.Parameters.Add("p_STATUS", OracleDbType.Varchar2).Value = value.Status;
+                cmd.Parameters.Add("p_USUARIO_UPD", OracleDbType.Int32).Value = access.Data;
+            }));
+        }
+        catch (Exception ex)
+        {
+            return Ok(new ResultDto<string>(string.Empty) { IsValid = false, Message = $"Error tecnico al actualizar estatus: {ex.Message}" });
+        }
     }
 
     [HttpPost("updatePassword")]

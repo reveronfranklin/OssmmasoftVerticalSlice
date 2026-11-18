@@ -3,6 +3,7 @@ PROMPT Instalando soporte para CRUD SIS_USUARIOS...
 @@../../../../Requerimientos/Modulo-Soporte/Encripted.sql
 @@../../../../Requerimientos/Modulo-Soporte/Descencripted.sql
 @@SP_SIS_USR.sql
+@@SP_SIS_USR_STATUS_UPD.sql
 
 SELECT object_name, object_type, status
   FROM user_objects
@@ -10,6 +11,6 @@ SELECT object_name, object_type, status
    'SIS_ENCRYPTED', 'SIS_DESENCRYPTED',
    'SP_SIS_USR_GET_ALL', 'SP_SIS_USR_GET_ID', 'SP_SIS_USR_INS',
    'SP_SIS_USR_UPD', 'SP_SIS_USR_EMAIL_UPD', 'SP_SIS_USR_PASS_UPD',
-   'SP_SIS_USR_GET_SUPP'
+   'SP_SIS_USR_GET_SUPP', 'SP_SIS_USR_STATUS_UPD'
  )
  ORDER BY object_type, object_name;
