@@ -30,8 +30,9 @@ public partial class SisSeguridadController
         {
             if (!SupportDb.TryGetEmpresa(config, out var company, out var error) || company <= 0) return SimpleFail<int>(error);
             using var cn = connectionDB.GetSisConnection(); await cn.OpenAsync();
-            var id = await SupportSecurity.GetAuthenticatedUserIdAsync(cn, User, company, null);
-            if (id <= 0) return SimpleFail<int>("Sesion no valida.");
+            var identity = await SimpleSessionAsync(cn, company);
+            if (!identity.IsValid) return identity;
+            var id = identity.Data;
             if (admin)
             {
                 var user = await SisSeguridadHandler.ReadUsuarioForAuthAsync(cn, id, company);
@@ -42,6 +43,45 @@ public partial class SisSeguridadController
             return new(id) { IsValid = true };
         }
         catch (Exception ex) { return SimpleFail<int>($"No se pudo validar la sesion: {ex.Message}"); }
+    }
+    private async Task<ResultDto<int>> SimpleSessionAsync(OracleConnection cn, int company)
+    {
+        if (User.Identity?.IsAuthenticated != true)
+            return SimpleFail<int>("Sesion no valida: se requiere un JWT autenticado.");
+
+        var login = SupportSecurity.GetAuthenticatedLogin(User).Trim();
+        if (login.Length == 0)
+            return SimpleFail<int>("Sesion no valida: el JWT no contiene el login del usuario.");
+
+        // Match padded legacy logins without trusting identity supplied in the body.
+        // Evaluate expiration with Oracle's clock, as in the existing session check.
+        using var cmd = new OracleCommand(@"
+            SELECT CODIGO_USUARIO,
+                   NVL(UPPER(TRIM(STATUS)), '1') ESTADO,
+                   CASE WHEN TOKENEXPIRES IS NULL THEN 0
+                        WHEN TOKENEXPIRES >= SYSDATE THEN 1 ELSE 2 END VIGENCIA
+              FROM SIS.SIS_USUARIOS
+             WHERE UPPER(TRIM(LOGIN)) = UPPER(:p_LOGIN)
+               AND CODIGO_EMPRESA = :p_CODIGO_EMPRESA", cn) { BindByName = true };
+        cmd.Parameters.Add("p_LOGIN", OracleDbType.Varchar2).Value = login;
+        cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = company;
+        using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+            return SimpleFail<int>("Sesion no valida: el login del JWT no existe en la empresa configurada. Revise settings:EmpresaConfig y la conexion SIS de ambas API.");
+
+        var id = SupportDb.ToInt32(reader.GetValue(0));
+        var status = reader.GetString(1);
+        var expiration = SupportDb.ToInt32(reader.GetValue(2));
+        if (await reader.ReadAsync())
+            return SimpleFail<int>("Sesion no valida: hay mas de un usuario con el mismo login en la empresa configurada.");
+        if (status is not ("1" or "A"))
+            return SimpleFail<int>("Sesion no valida: el usuario no esta activo en SIS_USUARIOS.STATUS.");
+        if (expiration == 0)
+            return SimpleFail<int>("Sesion no valida: TOKENEXPIRES no fue registrado. Revise que el login y esta API utilicen la misma base SIS.");
+        if (expiration != 1)
+            return SimpleFail<int>("Sesion no valida: TOKENEXPIRES esta vencido en Oracle. Inicie sesion nuevamente; si persiste, revise la fecha y hora de Oracle y de la API de login.");
+        if (id <= 0) return SimpleFail<int>("Sesion no valida: codigo de usuario invalido.");
+        return new(id) { IsValid = true };
     }
     private static ResultDto<T> SimpleFail<T>(string message) => new(default!) { IsValid = false, Message = message };
     private async Task<IActionResult> SimpleRun<T>(bool admin, Func<SisMenuSimpleHandler, int, Task<ResultDto<T>>> run)
