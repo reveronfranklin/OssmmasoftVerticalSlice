@@ -163,6 +163,11 @@ builder.Services.AddCors(options =>
 });
 
 builder.Services.AddControllers();
+// R56: independent service-token scheme, restricted to OracleAnalisis controllers.
+builder.Services.AddAuthentication().AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions,
+    OssmmasoftVerticalSlice.Features.OracleAnalisis.OracleAnalisisAuthentication>(
+    OssmmasoftVerticalSlice.Features.OracleAnalisis.OracleAnalisisRules.Scheme, _ => { });
+
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
