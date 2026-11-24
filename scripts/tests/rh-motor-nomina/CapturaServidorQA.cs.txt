@@ -1,0 +1,55 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+
+ var handler=new RhNomCapturaPrenominaHandler(db,cfg);var emptyConfig=new ConfigurationBuilder().Build();var noPolicyHandler=new RhNomCapturaPrenominaHandler(db,emptyConfig);var changedConfig=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"RhMotorNomina:BonosManualesE:0:CodigoTipoNomina","bad"}}).Build();
+ void Stage(string name)=>File.AppendAllText(Path.Combine(AppContext.BaseDirectory,"R57CapStage.log"),DateTime.UtcNow.ToString("O")+" "+name+"\n");
+ Stage("START");var outcomes=new List<object>();var archives=new List<int>();var cases=0;var newCaptures=0;var ordinary=0;var special=0;RhNomCapturarPrenomina? firstRequest=null;
+ foreach(var type in new[]{10,12,13,14,20,21,22,23})foreach(var wanted in new[]{"N","E"}){Stage("PERIOD-"+type+"-"+wanted);
+  int period=0;string? clase=null;DateTime day=default;
+  using(var c=Cmd("SELECT * FROM (SELECT CODIGO_PERIODO,TIPO_NOMINA,FECHA_NOMINA FROM RH_PERIODOS WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND FECHA_CIERRE IS NULL AND TIPO_NOMINA=:wanted AND PERIODO BETWEEN 0 AND 9 ORDER BY FECHA_NOMINA DESC,CODIGO_PERIODO DESC) WHERE ROWNUM=1",("e",company),("t",type),("wanted",wanted)))using(var rd=await c.ExecuteReaderAsync(ct))if(await rd.ReadAsync(ct)){period=rd.GetInt32(0);clase=rd.GetString(1);day=DateTime.SpecifyKind(rd.GetDateTime(2),DateTimeKind.Unspecified);}
+  if(period==0){outcomes.Add(new{Type=type,Class=wanted,State="SIN_PERIODO_ABIERTO"});continue;}
+  Stage("PERSON-"+type);int person;using(var c=Cmd("SELECT MIN(M.CODIGO_PERSONA) FROM RH_MOV_NOMINA M WHERE M.CODIGO_EMPRESA=:e AND M.CODIGO_TIPO_NOMINA=:t AND M.CODIGO_PERSONA>0",("e",company),("t",type))){var value=await c.ExecuteScalarAsync(ct);if(value is DBNull){outcomes.Add(new{Type=type,State="SIN_PERSONA_CON_FUENTES"});continue;}person=Convert.ToInt32(value);}
+  var q=new RhNomCapturarPrenomina("SDK_R57_CAP_SERVER:"+type+":"+period+":"+person+":CFG1",type,period,person,"TIPO_ACTUAL_EXPLICITO","Prueba tecnica de captura QA con presupuesto actual explicito; no autoriza liquidacion.");firstRequest??=q;
+  var previous=await RhNomArchivoCapsulasDb.PorClave(cn,company,actor,q.ClaveSolicitud,ct);var before=await RhNomMovimientosPlanDb.Leer(cn,company,type,person,ct);var beforeHash=RhNomRecalculosHistoricos.Hash(before.Imagenes);
+  Stage("HANDLER-"+type);var created=await handler.Crear(q,company,actor,ct);Check(created.IsValid&&created.Data is not null,"server-capture-handler-"+type+"-"+created.Message);var data=created.Data!;Stage("SAVED-"+type);cases++;if(previous is null)newCaptures++;
+  Check(data.Recuperada==(previous is not null)&&data.Archivo.Ambito.Periodo.CodigoPeriodo==period&&data.Archivo.Ambito.Periodo.FechaNomina==day&&data.Clase==clase,"server-period-date-class-not-client-derived-"+type);
+  Check(data.Archivo.CodigoEmpresa==company&&data.Archivo.Actor==actor&&data.Archivo.Ambito.CodigoPersona==person,"server-actor-company-person-"+type);
+  var archived=await RhNomArchivoCapsulasDb.Leer(cn,company,actor,data.Archivo.IdCapsula,ct);var doc=RhNomCapsulasPrenomina.Leer(archived.Capsula);var policies=RhNomCapturasServidor.Politica(cfg,type);
+  Check(doc.Version=="CAPSULA_PRENOMINA_V3"&&doc.DeclaracionesManuales!.Count==policies.Count,"server-policy-frozen-"+type);Check(doc.Imagenes.SequenceEqual(before.Imagenes.OrderBy(i=>i.Id)),"server-source-images-complete-"+type);
+  Check(data.PeriodoCapturado is not null&&data.PeriodoCapturado.PoliticaPresupuesto==q.PoliticaPresupuesto&&data.PeriodoCapturado.MotivoPresupuesto==q.MotivoPresupuesto,"server-budget-policy-and-reason-frozen-"+type);
+  if(data.PeriodoCapturado!.PresupuestoPeriodo!=data.Archivo.Ambito.CodigoPresupuesto){
+   Check(data.Estado=="BLOQUEADO","different-budgets-never-become-payable-"+type);
+   var strict=q with{ClaveSolicitud=q.ClaveSolicitud+":STRICT",PoliticaPresupuesto="COINCIDIR_PERIODO",MotivoPresupuesto=null};
+   Check(!(await handler.Crear(strict,company,actor,ct)).IsValid,"strict-default-rejects-budget-mismatch-"+type);
+   Check(await RhNomArchivoCapsulasDb.PorClave(cn,company,actor,strict.ClaveSolicitud,ct) is null,"strict-budget-rejection-never-archived-"+type);
+  }
+  var recovered=await new RhNomCapturaPrenominaHandler(db,changedConfig).Crear(q,company,actor,ct);Check(recovered.IsValid&&recovered.Data!.Recuperada&&recovered.Data.Archivo==data.Archivo&&recovered.Data.HashTotales==data.HashTotales,"retry-ignores-changed-current-policy-and-keeps-original-"+type);
+  var replay=await handler.Reproducir(new(data.Archivo.IdCapsula),company,actor,ct);Check(replay.IsValid&&replay.Data!.HashTotales==data.HashTotales&&replay.Data.HashSeleccion==data.HashSeleccion,"server-replay-from-archive-"+type);
+  var header=await handler.Get(new(data.Archivo.IdCapsula),company,actor,ct);Check(header.IsValid&&header.Data==data.Archivo,"server-header-verified-"+type);
+  Check(!(await handler.Get(new(data.Archivo.IdCapsula),company,actor-1,ct)).IsValid,"server-other-actor-denied-"+type);
+  Check(!(await handler.Crear(q with{PoliticaPresupuesto="COINCIDIR_PERIODO",MotivoPresupuesto=null},company,actor,ct)).IsValid,"server-reused-key-other-budget-policy-denied-"+type);
+  Check(!(await handler.Crear(q with{CodigoPersona=person+1},company,actor,ct)).IsValid,"server-reused-key-other-person-denied-"+type);
+  Check(!data.MovimientosAplicados&&!data.FormulasNominaRecalculadas&&!data.PropiedadFinancieraAcreditada&&!data.ParidadHistoricaCertificada,"server-no-financial-or-parity-claim-"+type);
+  Check(beforeHash==RhNomRecalculosHistoricos.Hash((await RhNomMovimientosPlanDb.Leer(cn,company,type,person,ct)).Imagenes),"server-capture-does-not-change-payroll-"+type);
+  Stage("BAD-ISOLATION-"+type);using(var tx=cn.BeginTransaction()){
+   var rejected=false;try{await RhNomCapturaFuentesDb.Leer(cn,tx,q,company,policies,ct);}catch(RhNomError ex)when(ex.Diagnostico.Codigo=="CAPTURA_AISLAMIENTO"){rejected=true;}await tx.RollbackAsync(ct);Check(rejected,"read-committed-capture-rejected-"+type);
+  }
+  Stage("END-"+type);if(clase=="N")ordinary++;else special++;archives.Add(data.Archivo.IdCapsula);outcomes.Add(new{Type=type,Period=period,Class=clase,ArchiveId=data.Archivo.IdCapsula,Version=data.Archivo.VersionDocumento,PresupuestoPeriodo=data.PeriodoCapturado!.PresupuestoPeriodo,PresupuestoCaptura=data.Archivo.Ambito.CodigoPresupuesto,ConPrecierre=data.PeriodoCapturado.FechaPreCierre is not null,State=data.Estado,ArithmeticState=data.Totales.Single().Estado,data.Movimientos,data.Incluidos,data.Excluidos,data.Bloqueados,data.EIncluidosSinRegla,data.HashSeleccion,data.HashTotales});
+ }
+ Check(firstRequest is not null&&cases>0,"at-least-one-server-capture");var firstQ=firstRequest!;
+ Stage("NO-POLICY");var qV1=firstQ with{ClaveSolicitud=firstQ.ClaveSolicitud+":SINPOL"};var noPolicy=await noPolicyHandler.Crear(qV1,company,actor,ct);Check(noPolicy.IsValid&&noPolicy.Data!.Archivo.VersionDocumento=="CAPSULA_PRENOMINA_V3","empty-server-policy-does-not-guess-manual-bonuses");archives.Add(noPolicy.Data!.Archivo.IdCapsula);
+ Stage("CLOSED-PERIOD");int closed=0;using(var c=Cmd("SELECT MIN(CODIGO_PERIODO) FROM RH_PERIODOS WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND FECHA_CIERRE IS NOT NULL",("e",company),("t",firstQ.CodigoTipoNomina))){var value=await c.ExecuteScalarAsync(ct);if(value is not DBNull)closed=Convert.ToInt32(value);}
+ Check(closed>0,"closed-period-for-negative-test");var bad=firstQ with{ClaveSolicitud="SDK_R57_CAP_SERVER_CLOSED:"+closed,CodigoPeriodo=closed};
+ for(var attempt=0;attempt<3;attempt++){Check(!(await handler.Crear(bad,company,actor,ct)).IsValid,"closed-period-rejected-without-leaking-source-cursors-"+attempt);}
+ Check(await RhNomArchivoCapsulasDb.PorClave(cn,company,actor,bad.ClaveSolicitud,ct) is null,"closed-period-never-archived");
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-execution-disabled");foreach(var table in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"})using(var c=Cmd("SELECT COUNT(*) FROM "+table))Check(Convert.ToInt32(await c.ExecuteScalarAsync(ct))==0,"real-empty-"+table);
+ Console.WriteLine("R57_CAP_SERVIDOR="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Outcomes=outcomes,Archives=archives,Cases=cases,NewCaptures=newCaptures,OrdinaryContexts=ordinary,SpecialContexts=special,EmptyPolicyArchiveId=noPolicy.Data!.Archivo.IdCapsula,SourceIsolation="SERIALIZABLE",HttpPositiveAuthenticationTested=false,ModelWorkerIntegrated=false,NoPayrollWrites=true,NoBusinessConfigurationWrites=true,ArchiveMetadataWritten=true,ProceduresExecuted=false}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

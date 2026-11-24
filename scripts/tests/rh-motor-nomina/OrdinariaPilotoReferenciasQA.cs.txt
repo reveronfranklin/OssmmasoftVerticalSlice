@@ -1,0 +1,15 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var period=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement.GetProperty("Pilot").GetProperty("Period").GetInt32();var refs=new Dictionary<string,int>();
+ using(var c=cn.CreateCommand()){c.BindByName=true;c.CommandText="SELECT 'HN',(SELECT COUNT(*) FROM RH_HISTORICO_NOMINA WHERE CODIGO_PERIODO=:p),'HPC',(SELECT COUNT(*) FROM RH_HISTORICO_PERSONAL_CARGO WHERE CODIGO_PERIODO=:p),'TMP',(SELECT COUNT(*) FROM RH_TMP_NOMINA WHERE CODIGO_PERIODO=:p) FROM DUAL";c.Parameters.Add("p",OracleDbType.Int32).Value=period;using var r=await c.ExecuteReaderAsync();await r.ReadAsync();refs[r.GetString(0)]=r.GetInt32(1);refs[r.GetString(2)]=r.GetInt32(3);refs[r.GetString(4)]=r.GetInt32(5);}
+ Check(refs.Values.All(v=>v==0),"pilot-identity-has-no-preexisting-payroll-references");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Period=period,References=refs,NoPayrollWrites=true}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

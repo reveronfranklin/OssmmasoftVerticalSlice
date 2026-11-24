@@ -1,0 +1,15 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var triggers=new List<object>();using(var c=cn.CreateCommand()){c.CommandText="SELECT T.TRIGGER_NAME,T.STATUS,O.STATUS FROM ALL_TRIGGERS T JOIN ALL_OBJECTS O ON O.OWNER=T.OWNER AND O.OBJECT_NAME=T.TRIGGER_NAME AND O.OBJECT_TYPE='TRIGGER' WHERE T.TABLE_OWNER='RH' AND T.TABLE_NAME='RH_CONCEPTOS' ORDER BY T.TRIGGER_NAME";using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync())triggers.Add(new{Name=r.GetString(0),Enabled=r.GetString(1),Validity=r.GetString(2)});}
+ var errors=new List<object>();using(var c=cn.CreateCommand()){c.CommandText="SELECT E.NAME,E.LINE,E.POSITION,E.TEXT FROM ALL_ERRORS E WHERE E.OWNER='RH' AND E.TYPE='TRIGGER' AND E.NAME IN (SELECT TRIGGER_NAME FROM ALL_TRIGGERS WHERE TABLE_OWNER='RH' AND TABLE_NAME='RH_CONCEPTOS') ORDER BY E.NAME,E.SEQUENCE";using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync())errors.Add(new{Name=r.GetString(0),Line=r.GetInt32(1),Position=r.GetInt32(2),Text=r.GetString(3)});}
+ var source=new List<string>();using(var c=cn.CreateCommand()){c.CommandText="SELECT TEXT FROM ALL_SOURCE WHERE OWNER='RH' AND NAME='RH_TRG_BEF_UPD_CONCEPTOS' AND TYPE='TRIGGER' ORDER BY LINE";using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync())source.Add(r.GetString(0));}
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Triggers=triggers,Errors=errors,Source=source,NoDatabaseWrites=true}}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

@@ -17,6 +17,7 @@ public sealed class OracleAnalisisDb(OracleConnection connection, OracleAnalisis
 {
     public OracleAnalisisIdentity Identity { get; private set; } = new("", "", "", "");
     public OracleAnalisisTarget Target => target;
+    public OracleAnalisisOptions Options => options;
     public static OracleConnection Connection(ConnectionDB db, string alias) => alias switch
     {
         "SIS" => db.GetSisConnection(), "RH" => db.GetRhConnection(), "PRE" => db.GetPresupuestoConnection(),
@@ -64,6 +65,17 @@ public sealed class OracleAnalisisDb(OracleConnection connection, OracleAnalisis
         // ROWNUM is compatible with Oracle 10g. Caller SQL is fixed and never client supplied.
         using var cmd = Command($"SELECT * FROM ({sql}) WHERE ROWNUM <= :oa_limit", binds);
         cmd.Parameters.Add("oa_limit", OracleDbType.Int32).Value = limit + 1;
+        return await ReadRows(cmd, limit, ct);
+    }
+    public async Task<OracleAnalisisRows> ReadData(OracleAnalisisPlan plan, CancellationToken ct)
+    {
+        using var cmd = Command($"SELECT * FROM ({plan.Sql}) WHERE ROWNUM <= :oa_limit");
+        foreach (var bind in plan.Binds) cmd.Parameters.Add(bind.Name, bind.Type).Value = bind.Value ?? DBNull.Value;
+        cmd.Parameters.Add("oa_limit", OracleDbType.Int32).Value = plan.Limit + 1;
+        return await ReadRows(cmd, plan.Limit, ct);
+    }
+    private async Task<OracleAnalisisRows> ReadRows(OracleCommand cmd, int limit, CancellationToken ct)
+    {
         using var registration = ct.Register(() => { try { cmd.Cancel(); } catch { /* Disposal race. */ } });
         using var reader = await cmd.ExecuteReaderAsync(ct);
         var rows = new List<Dictionary<string, object?>>();
@@ -80,7 +92,7 @@ public sealed class OracleAnalisisDb(OracleConnection connection, OracleAnalisis
                 {
                     var type = reader.GetDataTypeName(i).ToUpperInvariant();
                     if (type is "BLOB" or "RAW" or "LONG RAW" or "BFILE") { value = "[BINARIO OMITIDO]"; truncated = true; }
-                    else if (type == "NUMBER") value = reader.GetOracleDecimal(i).ToString();
+                    else if (type is "NUMBER" or "DECIMAL" or "INT16" or "INT32" or "INT64") value = reader.GetOracleDecimal(i).ToString();
                     else if (type == "CLOB")
                     {
                         using var clob = reader.GetOracleClob(i);

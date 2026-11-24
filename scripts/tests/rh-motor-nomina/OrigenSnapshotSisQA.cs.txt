@@ -1,0 +1,11 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");
+try{
+ using var cn=db.GetSisConnection();await cn.OpenAsync();OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;c.Parameters.Add("e",OracleDbType.Int32).Value=company;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL WHERE :e=13"))using(var r=await c.ExecuteReaderAsync()){if(!await r.ReadAsync()||r.GetString(0)!=cfg["OracleAnalysis:Targets:SIS:ExpectedDatabaseName"]||r.GetString(1)!=cfg["OracleAnalysis:Targets:SIS:ExpectedServerHost"]||r.GetString(2)!="SIS")throw new InvalidOperationException("identity-qa");}
+ var refs=new List<object>();using(var c=Cmd("SELECT OWNER||'.'||NAME,TYPE,LINE,TEXT FROM ALL_SOURCE WHERE :e=13 AND UPPER(TEXT) LIKE '%HISTORICO_PERSONAL%' ORDER BY OWNER,NAME,TYPE,LINE"))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync()){if(refs.Count>=200)throw new InvalidOperationException("reference-limit");refs.Add(new{Name=r.GetString(0),Type=r.GetString(1),Line=r.GetInt32(2),Text=r.GetString(3)});}
+ Console.WriteLine("R57_METADATA="+JsonSerializer.Serialize(new{Status="OK",References=refs,NoPersonalData=true,NoPayrollWrites=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

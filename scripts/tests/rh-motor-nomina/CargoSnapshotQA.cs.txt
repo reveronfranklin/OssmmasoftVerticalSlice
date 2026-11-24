@@ -1,0 +1,37 @@
+using System.Data;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Oracle.ManagedDataAccess.Client;
+if(args.Length!=2)throw new InvalidOperationException("Indique SQL y contextos agregados QA.");
+using var cfg=JsonDocument.Parse(File.ReadAllText("/srv/ossmmasoft-pruebas/shared/config/vertical.json"));var root=cfg.RootElement;
+var company=int.Parse(root.GetProperty("settings").GetProperty("EmpresaConfig").ToString());
+var b=new OracleConnectionStringBuilder(root.GetProperty("ConnectionStrings").GetProperty("DefaultConnectionRH").GetString());b.ConnectionTimeout=8;
+using var cn=new OracleConnection(b.ConnectionString);var checks=new List<string>();
+void Check(bool value,string name){if(!value)throw new InvalidOperationException(name);checks.Add(name);}
+OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.CommandText=sql;c.BindByName=true;c.CommandTimeout=30;return c;}
+void Context(OracleCommand c,int empresa,int type,int period,DateTime date){c.Parameters.Add("p_EMPRESA",OracleDbType.Int32).Value=empresa;c.Parameters.Add("p_TIPO",OracleDbType.Int32).Value=type;c.Parameters.Add("p_PERIODO",OracleDbType.Int32).Value=period;c.Parameters.Add("p_FECHA",OracleDbType.Date).Value=date;}
+async Task<string> HashOld(){using var c=Cmd("SELECT TEXT FROM USER_SOURCE WHERE NAME='RH_PKG_ADJUNTAR_CARGO' ORDER BY TYPE,LINE");using var r=await c.ExecuteReaderAsync();var t=new StringBuilder();while(await r.ReadAsync())t.Append(r.IsDBNull(0)?"":r.GetString(0));return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(t.ToString())));}
+async Task<(int Count,string? Value)> Read(int empresa,int type,int period,DateTime date,int person,int cargo){using var c=Cmd("RH.SP_RH_NOM_CAR_HIST");c.CommandType=CommandType.StoredProcedure;Context(c,empresa,type,period,date);
+ c.Parameters.Add("p_PERSONA",OracleDbType.Int32).Value=person;c.Parameters.Add("p_RELACION",OracleDbType.Int32).Value=cargo;c.Parameters.Add("p_RESULT",OracleDbType.RefCursor,ParameterDirection.Output);
+ using var r=await c.ExecuteReaderAsync();var count=0;string? value=null;while(await r.ReadAsync()){Check(r.FieldCount==8&&!Enumerable.Range(0,r.FieldCount).Select(r.GetName).Any(n=>n.Contains("NOMBRE")||n.Contains("CEDULA")||n.Contains("CUENTA")),"restricted-columns");count++;value=r.IsDBNull(r.GetOrdinal("SUELDO_TEXTO"))?null:r.GetString(r.GetOrdinal("SUELDO_TEXTO"));}return(count,value);}
+try{await cn.OpenAsync();
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();var target=root.GetProperty("OracleAnalysis").GetProperty("Targets").GetProperty("RH");Check(company==13&&r.GetString(0)==target.GetProperty("ExpectedDatabaseName").GetString()&&r.GetString(1)==target.GetProperty("ExpectedServerHost").GetString()&&r.GetString(2)=="RH","identity-QA");}
+ var old=await HashOld();using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='SP_RH_NOM_CAR_HIST'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"object-name-unused");
+ var script=await File.ReadAllTextAsync(args[0]);using(var c=Cmd(Regex.Replace(script,@"(?m)^\s*/\s*$","").Trim()))await c.ExecuteNonQueryAsync();
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='SP_RH_NOM_CAR_HIST' AND OBJECT_TYPE='PROCEDURE' AND STATUS='VALID'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"procedure-valid");
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_ERRORS WHERE NAME='SP_RH_NOM_CAR_HIST'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"no-compile-errors");
+ using var cases=JsonDocument.Parse(await File.ReadAllTextAsync(args[1]));var passed=0;var types=new HashSet<int>();
+ foreach(var item in cases.RootElement.EnumerateArray()){
+  var type=item.GetProperty("CODIGO_TIPO_NOMINA").GetInt32();var period=item.GetProperty("CODIGO_PERIODO").GetInt32();var date=item.GetProperty("FECHA_NOMINA").GetDateTime();
+  int person,cargo;string expected;
+  // Explicit smoke-test sample chosen from snapshot, not implicit selection by the provider.
+  using(var c=Cmd("SELECT CODIGO_PERSONA,CODIGO_RELACION_CARGO,VALOR FROM (SELECT S.CODIGO_PERSONA,S.CODIGO_RELACION_CARGO,TO_CHAR(S.SUELDO,'TM9','NLS_NUMERIC_CHARACTERS=''.,''') VALOR FROM RH.RH_HISTORICO_PERSONAL_CARGO S WHERE S.CODIGO_EMPRESA=:p_EMPRESA AND S.CODIGO_TIPO_NOMINA=:p_TIPO AND S.CODIGO_PERIODO=:p_PERIODO AND S.FECHA_NOMINA=:p_FECHA AND S.CODIGO_PERSONA>0 AND S.CODIGO_RELACION_CARGO>0 AND S.SUELDO IS NOT NULL ORDER BY S.CODIGO_PERSONA,S.CODIGO_RELACION_CARGO) WHERE ROWNUM=1")){Context(c,company,type,period,date);using var r=await c.ExecuteReaderAsync();Check(await r.ReadAsync(),"sample-found");person=r.GetInt32(0);cargo=r.GetInt32(1);expected=r.GetString(2);}
+  var read=await Read(company,type,period,date,person,cargo);Check(read.Count==1&&read.Value==expected,"snapshot-text-exact-"+type+"-"+period);passed++;types.Add(type);
+  if(passed==1){Check((await Read(company+999,type,period,date,person,cargo)).Count==0,"foreign-company-empty");Check((await Read(company,type,period,date,int.MaxValue,cargo)).Count==0,"foreign-person-empty");Check((await Read(company,type,period,date,person,int.MaxValue)).Count==0,"foreign-cargo-empty");Check((await Read(company,type,period,date.AddSeconds(1),person,cargo)).Count==0,"exact-time-required");
+   try{await Read(company,type,period,date,0,cargo);throw new InvalidOperationException("invalid-person-accepted");}catch(OracleException ex)when(ex.Number==20001){Check(true,"invalid-person-rejected");}}
+ }
+ Check(passed==18&&types.Count==9,"eighteen-contexts-nine-types");Check(old==await HashOld(),"old-package-unchanged");
+ Console.WriteLine("R57_CARGO="+JsonSerializer.Serialize(new{Status="OK",Company=company,Contexts=passed,Types=types.Order().ToArray(),Checks=checks,OldPayrollHash=old,ScriptSha256=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(script))),NoPersonalDataInOutput=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

@@ -1,0 +1,53 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+
+
+ var sourceHashes=new Dictionary<string,string>();
+ foreach(var spec in new[]{("RH_PKG_ADJUNTAR_CARGO","d289b1b3951514bc3f8f117922de806375e53d02c541cdc08bdd85c260c32908"),("RH_PKG_PROCESOS_MASIVOS","9b94a220b3cf0a0a59a7f97beea171791d3600ac3c0962c05504f5d070a7c02a")}){
+  var lines=new List<string>();using(var c=Cmd("SELECT TEXT FROM USER_SOURCE WHERE NAME=:n AND TYPE='PACKAGE BODY' ORDER BY LINE",("n",spec.Item1)))using(var r=await c.ExecuteReaderAsync(ct))while(await r.ReadAsync(ct))lines.Add(r.GetString(0).TrimEnd('\r','\n'));
+  var text=string.Join("\n",lines);var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+  Check(lines.Count>0&&hash==spec.Item2,"current-package-matches-reviewed-source-"+spec.Item1);sourceHashes[spec.Item1]=hash;
+ }
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-application-disabled");var outcomes=new List<object>();int cases=0,personCount=0,actualERows=0,rawDifferences=0,invalidConceptRows=0;
+ foreach(var type in new[]{10,12,13,14,20,21,22,23}){
+  RhNomContextoSeleccion? context=null;using(var c=Cmd("SELECT * FROM (SELECT CODIGO_PERIODO,FECHA_NOMINA,PERIODO FROM RH_PERIODOS WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND FECHA_CIERRE IS NULL AND PERIODO BETWEEN 0 AND 9 ORDER BY FECHA_NOMINA DESC,CODIGO_PERIODO DESC) WHERE ROWNUM=1",("e",company),("t",type)))using(var r=await c.ExecuteReaderAsync(ct))if(await r.ReadAsync(ct))context=new(company,type,r.GetInt32(0),DateTime.SpecifyKind(r.GetDateTime(1),DateTimeKind.Unspecified),r.GetInt32(2));
+  if(context is null){outcomes.Add(new{Type=type,State="SIN_PERIODO_ABIERTO"});continue;}
+  var peopleIds=new HashSet<int>();foreach(var kind in new[]{"F","V","E"})using(var c=Cmd("SELECT * FROM (SELECT DISTINCT CODIGO_PERSONA FROM RH_MOV_NOMINA WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND TIPO=:k AND CODIGO_PERSONA>0 ORDER BY CODIGO_PERSONA) WHERE ROWNUM<=3",("e",company),("t",type),("k",kind)))using(var r=await c.ExecuteReaderAsync(ct))while(await r.ReadAsync(ct))peopleIds.Add(r.GetInt32(0));
+  Check(peopleIds.Count<=9,"bounded-person-sample-"+type);var details=new List<object>();
+  foreach(var person in peopleIds.Order()){
+   personCount++;var capture=await RhNomMovimientosPlanDb.Leer(cn,company,type,person,ct);var beforeHash=RhNomRecalculosHistoricos.Hash(capture.Imagenes);actualERows+=capture.Imagenes.Count(i=>i.Tipo=="E");invalidConceptRows+=capture.Imagenes.Count(i=>i.CodigoConcepto<=0);
+   var people=new List<RhNomPersonalSeleccion>();using(var c=Cmd("SELECT CODIGO_EMPRESA,CODIGO_TIPO_NOMINA,CODIGO_PERSONA,CODIGO_RELACION_CARGO,STATUS FROM RH_V_PERSONAL_CARGO WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND CODIGO_PERSONA=:p ORDER BY CODIGO_RELACION_CARGO,STATUS",("e",company),("t",type),("p",person)))using(var r=await c.ExecuteReaderAsync(ct))while(await r.ReadAsync(ct)){Check(people.Count<2000,"bounded-personal-metadata");people.Add(new(r.GetInt32(0),r.GetInt32(1),r.GetInt32(2),r.GetInt32(3),r.IsDBNull(4)?null:r.GetString(4)));}
+   var frequencies=new List<RhNomFrecuenciaSeleccion>();using(var c=Cmd("SELECT D.DESCRIPCION_ID,D.CODIGO FROM RH_DESCRIPTIVAS D WHERE EXISTS (SELECT 1 FROM RH_MOV_NOMINA M WHERE M.CODIGO_EMPRESA=:e AND M.CODIGO_TIPO_NOMINA=:t AND M.CODIGO_PERSONA=:p AND M.FRECUENCIA_ID=D.DESCRIPCION_ID) ORDER BY D.DESCRIPCION_ID",("e",company),("t",type),("p",person)))using(var r=await c.ExecuteReaderAsync(ct))while(await r.ReadAsync(ct))frequencies.Add(new(r.GetInt32(0),r.IsDBNull(1)?null:r.GetString(1)));
+   var concepts=new List<RhNomConceptoSeleccion>();using(var c=Cmd("SELECT C.CODIGO_EMPRESA,C.CODIGO_TIPO_NOMINA,C.CODIGO_CONCEPTO,C.TIPO_CONCEPTO FROM RH_CONCEPTOS C WHERE C.CODIGO_EMPRESA=:e AND C.CODIGO_TIPO_NOMINA=:t AND EXISTS (SELECT 1 FROM RH_MOV_NOMINA M WHERE M.CODIGO_EMPRESA=:e AND M.CODIGO_TIPO_NOMINA=:t AND M.CODIGO_PERSONA=:p AND M.CODIGO_CONCEPTO=C.CODIGO_CONCEPTO) ORDER BY C.CODIGO_CONCEPTO",("e",company),("t",type),("p",person)))using(var r=await c.ExecuteReaderAsync(ct))while(await r.ReadAsync(ct))concepts.Add(new(r.GetInt32(0),r.GetInt32(1),r.GetInt32(2),r.IsDBNull(3)?null:r.GetString(3)));
+   foreach(var kind in new[]{"N","E"}){
+    cases++;var result=RhNomSeleccionPrenomina.Preparar(context,RhNomSeleccionPrenomina.Plantilla(kind),capture.Imagenes,people,frequencies,concepts);
+    async Task<Dictionary<int,int>> Original(bool scoped){
+     var sql="SELECT M.CODIGO_MOV_NOMINA,COUNT(*) FROM RH_MOV_NOMINA M JOIN RH_V_PERSONAL_CARGO P ON P.CODIGO_PERSONA=M.CODIGO_PERSONA AND P.CODIGO_TIPO_NOMINA=M.CODIGO_TIPO_NOMINA JOIN RH_DESCRIPTIVAS D ON D.DESCRIPCION_ID=M.FRECUENCIA_ID JOIN RH_CONCEPTOS C ON C.CODIGO_CONCEPTO=M.CODIGO_CONCEPTO WHERE M.CODIGO_EMPRESA=:e AND M.CODIGO_TIPO_NOMINA=:t AND M.CODIGO_PERSONA=:p AND "+(kind=="N"?"M.TIPO IN ('F','V') AND P.STATUS IN ('A','I','R')":"M.TIPO='E' AND P.STATUS<>'E'")+" AND SUBSTR(D.CODIGO,1,1) IN ('T',:period)"+(scoped?" AND P.CODIGO_EMPRESA=:e AND C.CODIGO_EMPRESA=:e AND C.CODIGO_TIPO_NOMINA=:t":"")+" GROUP BY M.CODIGO_MOV_NOMINA ORDER BY M.CODIGO_MOV_NOMINA";
+     var found=new Dictionary<int,int>();using var c=Cmd(sql,("e",company),("t",type),("p",person),("period",context.NumeroPeriodo.ToString(System.Globalization.CultureInfo.InvariantCulture)));using var r=await c.ExecuteReaderAsync(ct);while(await r.ReadAsync(ct))found.Add(r.GetInt32(0),r.GetInt32(1));return found;
+    }
+    var scoped=await Original(true);var legacy=await Original(false);var calculated=result.Filas.Where(f=>f.CoincidenciasCursor>0).ToDictionary(f=>f.Imagen.Id,f=>f.CoincidenciasCursor);
+    Check(scoped.OrderBy(x=>x.Key).SequenceEqual(calculated.OrderBy(x=>x.Key)),"native-scoped-cursor-multiplicity-"+type+"-"+cases);
+    Check(result.Filas.Select(f=>f.Imagen).SequenceEqual(capture.Imagenes.OrderBy(i=>i.Id)),"all-original-images-preserved-"+cases);
+    Check(!result.MovimientosAplicados&&!result.ImportesCalculados&&!result.ParidadHistoricaCertificada&&!result.TemporalGenerado,"no-computation-or-write-claim-"+cases);
+    var reordered=RhNomSeleccionPrenomina.Preparar(context,RhNomSeleccionPrenomina.Plantilla(kind),capture.Imagenes.AsEnumerable().Reverse().ToList(),people.AsEnumerable().Reverse().ToList(),frequencies.AsEnumerable().Reverse().ToList(),concepts.AsEnumerable().Reverse().ToList());
+    Check(result.Hash==reordered.Hash,"stable-fingerprint-independent-of-source-order-"+cases);
+    var rawMatches=legacy.OrderBy(x=>x.Key).SequenceEqual(scoped.OrderBy(x=>x.Key));if(!rawMatches)rawDifferences++;
+    details.Add(new{ContextHash=RhNomRecalculosHistoricos.Hash(new{Context=context,Person=person}),Class=kind,Rows=capture.Imagenes.Count,Included=result.Filas.Count(f=>f.Resultado=="INCLUIDA"),Excluded=result.Filas.Count(f=>f.Resultado=="EXCLUIDA"),Blocked=result.Filas.Count(f=>f.Resultado=="BLOQUEADA"),ScopedCursorRows=scoped.Values.Sum(),OriginalCursorRows=legacy.Values.Sum(),OriginalUnscopedMatches=rawMatches,BlockReasons=result.Filas.Where(f=>f.Resultado=="BLOQUEADA").GroupBy(f=>f.Motivo).ToDictionary(g=>g.Key,g=>g.Count()),result.Hash});
+   }
+   Check(beforeHash==RhNomRecalculosHistoricos.Hash((await RhNomMovimientosPlanDb.Leer(cn,company,type,person,ct)).Imagenes),"database-images-unchanged-"+personCount);
+  }
+  outcomes.Add(new{Type=type,State=peopleIds.Count>0?"VERIFICADO":"SIN_MOVIMIENTOS",Period=context.CodigoPeriodo,context.FechaNomina,context.NumeroPeriodo,Cases=details});
+ }
+ Check(cases>0,"nonempty-native-predicate-comparison");
+ foreach(var t in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"})using(var c=Cmd("SELECT COUNT(*) FROM "+t))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"real-empty-"+t);
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_CTL WHERE ACTIVO=1 OR LEGACY_RETIRADO=1"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"financial-gates-closed");
+ Console.WriteLine("R57_SELECCION_PRE="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Outcomes=outcomes,ReviewedPackageHashes=sourceHashes,Cases=cases,Persons=personCount,ActualSpecialMovementRows=actualERows,InvalidConceptImages=invalidConceptRows,UnscopedLegacyDifferences=rawDifferences,SamplePolicy="HASTA_3_PERSONAS_POR_F_V_E_EN_8_TIPOS_Y_UN_PERIODO_ABIERTO_POR_TIPO",NoPayrollWrites=true,NoConfigurationWrites=true,HistoricalParityCertified=false,HttpAuthenticationTested=false,PublicEndpointAdded=false}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

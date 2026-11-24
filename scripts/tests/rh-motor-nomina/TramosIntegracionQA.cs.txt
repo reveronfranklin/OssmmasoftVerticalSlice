@@ -1,0 +1,54 @@
+using System.Data;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+// QA only. One new revision in the existing isolated synthetic fixture; no payroll writes.
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var company=cfg.GetValue<int>("settings:EmpresaConfig");var db=new ConnectionDB(cfg);var checks=new List<string>();
+const string prefix="Q57_0523F8B5";const int modelId=1;const int actor=int.MaxValue;
+void Check(bool value,string name){if(!value)throw new InvalidOperationException(name);checks.Add(name);}
+OracleCommand Cmd(OracleConnection cn,string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var (name,value) in values)c.Parameters.Add(name,value is DateTime?OracleDbType.Date:value is int?OracleDbType.Int32:OracleDbType.Varchar2).Value=value;return c;}
+async Task<string> HashOld(OracleConnection cn){using var c=Cmd(cn,"SELECT TEXT FROM USER_SOURCE WHERE NAME='RH_PKG_ADJUNTAR_CARGO' ORDER BY TYPE,LINE");using var r=await c.ExecuteReaderAsync();var b=new StringBuilder();while(await r.ReadAsync())b.Append(r.IsDBNull(0)?"":r.GetString(0));return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(b.ToString())));}
+try{
+ using var rh=db.GetRhConnection();using var sis=db.GetSisConnection();await rh.OpenAsync();await sis.OpenAsync();
+ foreach(var (cn,alias) in new[]{(rh,"RH"),(sis,"SIS")}){using var c=Cmd(cn,"SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL");using var r=await c.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg[$"OracleAnalysis:Targets:{alias}:ExpectedDatabaseName"]&&r.GetString(1)==cfg[$"OracleAnalysis:Targets:{alias}:ExpectedServerHost"]&&r.GetString(2)==alias,"identity-"+alias);}
+ var oldHash=await HashOld(rh);
+ using(var c=Cmd(sis,"SELECT COUNT(*) FROM SIS.SIS_USUARIOS WHERE CODIGO_USUARIO=:id",("id",actor)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"synthetic-actor-not-user");
+ using(var c=Cmd(rh,"SELECT COUNT(*) FROM RH.RH_CONCEPTOS WHERE CODIGO_EMPRESA=:empresa AND ID_MODELO_CALCULO=:modelo",("empresa",company),("modelo",modelId)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"fixture-not-bound-to-concepts");
+ var models=new RhNomVersionesHandler(db);var vars=new RhNomVariablesHandler(db);
+ var list=await models.GetAll(new(SearchText:prefix),company,CancellationToken.None);Check(list.IsValid&&list.Data!.Count==1&&list.Data[0].ModeloId==modelId&&list.Data[0].Descripcion.Contains("QA TEST NO USAR"),"isolated-fixture-model");
+ Check(list.Data![0].UltimaVersion==5,"expected-fixture-version-5-no-blind-rerun");
+ var catalog=await vars.GetAll(new(SearchText:prefix),company,CancellationToken.None);Check(catalog.IsValid&&catalog.Data!.Count==3,"fixture-variables");
+ var baseVar=catalog.Data!.Single(v=>v.Codigo==prefix+"_BASE");var divisor=catalog.Data.Single(v=>v.Codigo==prefix+"_DIV");var output=catalog.Data.Single(v=>v.Codigo==prefix+"_RES");
+ var previous=await models.Get(new(modelId,5),company,CancellationToken.None);Check(previous.IsValid&&previous.Data!.Configuracion.Formato==4,"previous-format4-readable");
+ var previousHash=previous.Data!.Hash;var snapshot=previous.Data.Configuracion;
+ Check(catalog.Data!.All(v=>v.Activa&&snapshot.Variables.Any(old=>old.Id==v.Id&&old.Codigo==v.Codigo&&old.Unidad==v.Unidad&&old.Origen==v.Origen&&old.Tipo==v.Tipo)),"current-fixture-catalog-compatible");
+ var general=new RhNomTablaTramos("DIV_GENERAL",divisor.Codigo,baseVar.Codigo,"DINERO",new(2025,1,1),null,null,[new("NEGATIVO",null,"0","0"),new("BAJO","0","1000","2"),new("MEDIO","1000","2000","4"),new("ALTO","2000",null,"8")]);
+ var specific=new RhNomTablaTramos("DIV_JULIO",divisor.Codigo,baseVar.Codigo,"DINERO",new(2025,7,1),new(2025,7,31),snapshot.CodigoTipoNomina,[new("ESPECIAL","0","2000","5")]);
+ var request=new RhNomModeloSave(modelId,5,snapshot.CodigoTipoNomina,snapshot.Escenario,prefix+" QA formato 5 tramos",catalog.Data!.Select(v=>new RhNomVariableRef(v.Id,v.Version)).ToList(),snapshot.Formulas,null,true,RhNomCondiciones.Version,[general,specific],RhNomTramos.Version);
+ Check(!(await models.Save(request with{VersionTramosCliente=null},company,actor,CancellationToken.None)).IsValid,"table-write-without-client-version-rejected");
+ var saved=await models.Save(request,company,actor,CancellationToken.None);Check(saved.IsValid&&saved.Data!.Version==6,"save-format5-version6");
+ var loaded=await models.Get(new(modelId,6),company,CancellationToken.None);Check(loaded.IsValid&&loaded.Data!.Hash==saved.Data!.Hash&&loaded.Data.Configuracion.Formato==5&&loaded.Data.Configuracion.VersionTramos==RhNomTramos.Version&&loaded.Data.Configuracion.VersionCondiciones==RhNomCondiciones.Version,"format5-hash-conditions-roundtrip");
+ Check(Encoding.UTF8.GetByteCount(RhNomConfiguracion.Serializar(loaded.Data!.Configuracion).Text)>4000,"format5-fragmented-clob");
+ foreach(var (date,axis,expected,row) in new[]{(new DateOnly(2025,6,30),"1300","325","MEDIO"),(new DateOnly(2025,6,30),"1000","250","MEDIO"),(new DateOnly(2025,6,30),"999.99","500","BAJO"),(new DateOnly(2025,7,1),"1300","260","ESPECIAL"),(new DateOnly(2025,7,31),"1300","260","ESPECIAL"),(new DateOnly(2025,8,1),"1300","325","MEDIO"),(new DateOnly(2025,6,30),"-1","0","NEGATIVO")}){
+  var r=await models.SimulateEffective(new(modelId,6,date,[new(baseVar.Codigo,axis)]),company,CancellationToken.None);
+  Check(r.IsValid&&r.Data!.Simulacion.Resultados.Single().Resultado==expected&&r.Data.Parametros.Single().Tramo!.Clave==row,"effective-table-"+date.ToString("yyyyMMdd")+"-"+axis);
+  Check(r.Data!.Parametros.Single().Tramo!.ValorEntrada==axis&&r.Data.Parametros.Single().Tramo!.VersionMetodo==RhNomTramos.Version,"axis-trace-exact-"+date.ToString("yyyyMMdd")+"-"+axis);
+ }
+ Check(!(await models.SimulateEffective(new(modelId,6,new(2025,7,1),[new(baseVar.Codigo,"2000")]),company,CancellationToken.None)).IsValid,"specific-hole-no-general-fallback");
+ Check(!(await models.SimulateEffective(new(modelId,6,new(2024,12,31),[new(baseVar.Codigo,"1300")]),company,CancellationToken.None)).IsValid,"no-date-fallback");
+ Check(!(await models.SimulateEffective(new(modelId,6,new(2025,6,30),[new(baseVar.Codigo,"1300"),new(divisor.Codigo,"2")]),company,CancellationToken.None)).IsValid,"parameter-override-rejected");
+ var old=await models.Get(new(modelId,5),company,CancellationToken.None);Check(old.IsValid&&old.Data!.Hash==previousHash&&old.Data.Configuracion.Formato==4,"old-format4-unchanged");
+ var oldSim=await models.SimulateEffective(new(modelId,5,new(2025,6,30),[new(baseVar.Codigo,"1300")]),company,CancellationToken.None);Check(oldSim.IsValid&&oldSim.Data!.Simulacion.Resultados.Single().Resultado=="650","old-condition-result-unchanged");
+ var removed=request with{VersionEsperada=6,VersionTramosCliente=null,TablasTramos=null,Parametros=snapshot.Parametros};
+ Check(!(await models.Save(removed,company,actor,CancellationToken.None)).IsValid,"old-client-cannot-drop-saved-tables");
+ Check(!(await models.Save(request,company,actor,CancellationToken.None)).IsValid,"stale-version-write-rejected");
+ Check(!(await models.Get(new(modelId,6),company+999,CancellationToken.None)).IsValid,"cross-company-read-rejected");
+ var prepared=await new RhNomHistoricoFuentesHandler(db).Prepare(new(modelId,6,5933,"2025-10-30T00:00:00",[]),company,CancellationToken.None);
+ Check(prepared.IsValid&&!prepared.Data!.EntradasResueltas&&prepared.Data.Parametros.Count==0&&prepared.Data.Bloqueos.Any(b=>b.Codigo=="EJE_TRAMOS_SIN_VALOR")&&!prepared.Data.ParidadCertificada,"historical-missing-axis-blocked-not-guessed");
+ Check(oldHash==await HashOld(rh),"old-payroll-package-unchanged");
+ Console.WriteLine("R57_TRAMOS="+JsonSerializer.Serialize(new{Status="OK",Company=company,FixturePrefix=prefix,ModelId=modelId,Version=6,Checks=checks,OldPayrollHash=oldHash,NoPersonalDataInOutput=true,AuthenticationHttpTested=false}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

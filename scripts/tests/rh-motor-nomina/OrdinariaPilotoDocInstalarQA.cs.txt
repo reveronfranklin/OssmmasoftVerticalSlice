@@ -1,0 +1,24 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var input=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;var sql=input.GetProperty("Sql").GetString()!;sql=sql[sql.IndexOf("CREATE OR REPLACE",StringComparison.Ordinal)..].Trim().TrimEnd('/').Trim();
+ string Normalize(string value)=>System.Text.RegularExpressions.Regex.Replace(value.Replace("RH.SP_RH_NOM_RUN_DOC","SP_RH_NOM_RUN_DOC"),@"\s+"," ").Trim();
+ var existing=new System.Text.StringBuilder();using(var c=cn.CreateCommand()){c.CommandText="SELECT TEXT FROM ALL_SOURCE WHERE OWNER='RH' AND NAME='SP_RH_NOM_RUN_DOC' AND TYPE='PROCEDURE' ORDER BY LINE";using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync())existing.Append(r.GetString(0));}
+ if(existing.Length>0)Check(Normalize(existing.ToString())==Normalize(sql.Replace("CREATE OR REPLACE ","")),"existing-object-is-the-same-read-only-procedure");
+ using(var c=cn.CreateCommand()){c.CommandText=sql;await c.ExecuteNonQueryAsync();}
+ using(var c=cn.CreateCommand()){c.CommandText="SELECT COUNT(*) FROM ALL_OBJECTS WHERE OWNER='RH' AND OBJECT_NAME='SP_RH_NOM_RUN_DOC' AND OBJECT_TYPE='PROCEDURE' AND STATUS='VALID'";Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"procedure-valid");}
+ using(var c=cn.CreateCommand()){c.CommandText="SELECT COUNT(*) FROM ALL_ERRORS WHERE OWNER='RH' AND NAME='SP_RH_NOM_RUN_DOC' AND TYPE='PROCEDURE' AND ATTRIBUTE='ERROR'";Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"zero-compilation-errors");}
+ async Task<(string? Text,string? Hash,int? Length)> Read(int e,int a,string type){using var c=cn.CreateCommand();c.BindByName=true;c.CommandType=System.Data.CommandType.StoredProcedure;c.CommandText="RH.SP_RH_NOM_RUN_DOC";c.Parameters.Add("p_EMPRESA",OracleDbType.Int32).Value=e;c.Parameters.Add("p_ACTOR",OracleDbType.Int32).Value=a;c.Parameters.Add("p_ID",OracleDbType.Int32).Value=334;c.Parameters.Add("p_TIPO",OracleDbType.Varchar2).Value=type;c.Parameters.Add("p_RESULT",OracleDbType.RefCursor,System.Data.ParameterDirection.Output);using var r=await c.ExecuteReaderAsync();if(!await r.ReadAsync())return(null,null,null);Check(!r.IsDBNull(0),"completed-document-not-null");var length=r.GetInt32(2);Check(length>0&&length<=RhNomCorridas.MaxDatosBytes,"bounded-doc-before-loading");using var clob=r.GetOracleClob(0);return(clob.Value,r.GetString(1),length);}
+ var header=await RhNomCorridasDb.Leer(cn,company,actor,334,ct);var watch=System.Diagnostics.Stopwatch.StartNew();var ent=await Read(company,actor,"ENTRADA");var res=await Read(company,actor,"RESULTADO");
+ Check(ent.Text!.Length==ent.Length&&RhNomCorridas.Hash(ent.Text)==ent.Hash&&ent.Hash==header.HashDatos,"input-content-length-hash-preserved");Check(res.Text!.Length==res.Length&&RhNomCorridas.Hash(res.Text)==res.Hash&&res.Hash==header.HashResultado,"result-content-length-hash-preserved");
+ Check((await Read(company,actor-1,"ENTRADA")).Text is null,"foreign-actor-gets-no-document");Check((await Read(company+1,actor,"ENTRADA")).Text is null,"foreign-company-gets-no-document");
+ var invalid=false;try{await Read(company,actor,"OTRO");}catch(OracleException ex)when(ex.Number==20001){invalid=true;}Check(invalid,"invalid-kind-rejected");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Object="RH.SP_RH_NOM_RUN_DOC",SqlSha256=RhNomCorridas.Hash(sql),Run=334,InputChars=ent.Length,ResultChars=res.Length,ReadAndScopeChecksMs=watch.ElapsedMilliseconds,OnlyReadProcedureInstalled=true,NoPayrollWrites=true}}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

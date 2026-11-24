@@ -1,0 +1,43 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.CommandText=sql;c.CommandTimeout=25;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled")&&cfg.GetValue<bool>("RhMotorNomina:CorridasCapturaEnabled"),"diagnostic-enabled-financial-disabled");
+ var handler=new RhNomCorridasHandler(db,cfg);var outcomes=new List<object>();
+ foreach(var baselineId in new[]{74,75,76,77}){
+ var baseline=await handler.Detalle(new(baselineId,"ACTUAL"),company,actor,ct);Check(baseline.IsValid&&baseline.Data?.Entrada.Modelo.Version==baselineId-3,"existing-independent-model-and-context-"+baselineId);
+ var original=baseline.Data!;var model=original.Entrada.Modelo;var source=original.Entrada.FuenteActual!;
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_CONCEPTOS WHERE CODIGO_EMPRESA=13 AND ID_MODELO_CALCULO=1"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"qa-model-not-bound-to-business");
+
+ // Immutable read baselines are checked again after the complete hosted worker flow.
+ var before=await RhNomMovimientosPlanDb.Leer(cn,company,source.CodigoTipoNomina,source.CodigoPersona,ct);
+ var captureHandler=new RhNomCapturaParaModeloHandler(db,cfg);var q=new RhNomCapturarParaModelo("QA_CAP_CONTRATO_V5_20261123_"+model.Version,model.ModeloId,model.Version,source.CodigoPeriodo,source.CodigoPersona,source.CodigoRelacionCargo,RhNomPresupuestos.PoliticaContrato,null);
+ var captured=await captureHandler.Crear(q,company,actor,ct);Check(captured.IsValid&&captured.Data is not null,"complete-source-capture-created: "+captured.Message);
+ var cap=captured.Data!;Check(cap.Presupuesto?.Efectivo==source.CodigoPresupuesto&&cap.Presupuesto.Periodo==source.PresupuestoPeriodo,"contract-origin-and-original-budget-preserved");var again=await captureHandler.Crear(q,company,actor,ct);Check(again.IsValid&&again.Data!.Recuperada&&again.Data.Archivo.IdCapsula==cap.Archivo.IdCapsula,"capture-idempotent-no-reread");
+ var bad=await captureHandler.Crear(q with{Version=model.Version-1},company,actor,ct);Check(!bad.IsValid,"capture-key-other-revision-rejected");
+ var archived=await RhNomArchivoCapsulasDb.Leer(cn,company,actor,cap.Archivo.IdCapsula,ct);var document=RhNomCapsulasPrenomina.Leer(archived.Capsula);
+ Check(document.Version==RhNomCapsulasPrenomina.VersionContrato&&document.FuentesModelo!.Entradas.Count>0,"V4-frozen-provider-evidence");
+ var create=new RhNomCorridaDesdeCapturaHandler(db,cfg);var request=new RhNomCrearCorridaCaptura("QA_RUN_CONTRATO_V5_20261123_"+model.Version,model.ModeloId,model.Version,cap.Archivo.IdCapsula);
+ var queued=await create.Crear(request,company,actor,ct);Check(queued.IsValid&&queued.Data is not null,"queue-full-source-capture: "+queued.Message);
+ RhNomCorrida? run=null;for(var n=0;n<100;n++){run=(await handler.Get(new(queued.Data!.IdRun),company,actor,ct)).Data;if(run?.Estado is "COMPLETADO" or "ERROR" or "CANCELADO")break;await Task.Delay(300);}
+ var detail=await handler.Detalle(new(queued.Data!.IdRun,RhNomModelosDesdeCaptura.Modo),company,actor,ct);Check(detail.IsValid&&detail.Data!.Resultado is not null,"hosted-worker-persisted-result");
+ var result=detail.Data!.Resultado!;Check(run?.Estado=="COMPLETADO"&&result.IsValid,"hosted-worker-completed: "+string.Join(',',result.Captura?.Errores.Select(e=>e.Codigo)??[]));
+ Check(RhNomCorridas.Serializar(result.Captura!.Simulacion,RhNomCorridas.MaxResultadoBytes)==RhNomCorridas.Serializar(original.Resultado!.Actual!.Simulacion,RhNomCorridas.MaxResultadoBytes),"monetary-and-formula-traces-match-existing-current-model");
+ Check(result.Captura!.Entradas.Count==document.FuentesModelo!.Entradas.Count&&result.Captura.Simulacion is not null,"real-model-computed-from-complete-capture");
+ var replay=RhNomCorridas.Evaluar(detail.Data.Entrada);Check(RhNomCorridas.Serializar(replay,RhNomCorridas.MaxResultadoBytes)==RhNomCorridas.Serializar(result,RhNomCorridas.MaxResultadoBytes),"worker-result-exact-offline-replay");
+ Check(!result.Captura.AptaParaAplicacion&&!result.MovimientosAplicados&&!result.ParidadCertificada&&result.Actual is null,"new-mode-cannot-enter-actual-financial-flow");
+ var retry=await create.Crear(request,company,actor,ct);Check(retry.IsValid&&retry.Data!.IdRun==run!.IdRun,"run-idempotent");
+ Check(!(await handler.Detalle(new(run!.IdRun,RhNomModelosDesdeCaptura.Modo),company,actor-1,ct)).IsValid,"foreign-actor-run-denied");
+ var after=await RhNomMovimientosPlanDb.Leer(cn,company,source.CodigoTipoNomina,source.CodigoPersona,ct);Check(RhNomRecalculosHistoricos.Hash(before)==RhNomRecalculosHistoricos.Hash(after),"payroll-source-images-unchanged");
+ outcomes.Add(new{Type=model.CodigoTipoNomina,IdCapsula=cap.Archivo.IdCapsula,IdRun=run.IdRun,ModelVersion=model.Version,Inputs=result.Captura.Entradas.Count,Outputs=result.Captura.Simulacion!.Simulacion.Resultados.Count,State=result.Captura.EstadoCaptura,PeriodBudget=cap.Presupuesto!.Periodo,EffectiveBudget=cap.Presupuesto.Efectivo,SelectionReasons=cap.Totales.SelectMany(t=>t.Motivos).Distinct().Order().ToList(),PendingIncludedE=cap.EIncluidosSinRegla,ForeignScope=document.HayAmbitoAjeno});
+ }
+ foreach(var table in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"})using(var c=Cmd("SELECT COUNT(*) FROM "+table))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"financial-empty-"+table);
+ foreach(var id in new[]{74,75,76,77}){var old=await handler.Detalle(new(id,"ACTUAL"),company,actor,ct);Check(old.IsValid&&old.Data!.Resultado is not null&&RhNomCorridas.Serializar(RhNomCorridas.Evaluar(old.Data.Entrada),RhNomCorridas.MaxResultadoBytes)==RhNomCorridas.Serializar(old.Data.Resultado,RhNomCorridas.MaxResultadoBytes),"legacy-current-job-replay-"+id);}
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Contexts=outcomes,HostedWorker=true,HttpAuthenticationTested=false,NoPayrollWrites=true,ParityCertified=false}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

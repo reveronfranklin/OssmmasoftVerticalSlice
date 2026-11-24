@@ -1,0 +1,51 @@
+using System.Data;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+// QA only. One new revision in the existing isolated synthetic fixture; no payroll writes.
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var company=cfg.GetValue<int>("settings:EmpresaConfig");var db=new ConnectionDB(cfg);var checks=new List<string>();
+const string prefix="Q57_0523F8B5";const int modelId=1;const int actor=int.MaxValue;
+void Check(bool value,string name){if(!value)throw new InvalidOperationException(name);checks.Add(name);}
+OracleCommand Cmd(OracleConnection cn,string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var (name,value) in values)c.Parameters.Add(name,value is DateTime?OracleDbType.Date:value is int?OracleDbType.Int32:OracleDbType.Varchar2).Value=value;return c;}
+async Task<string> HashOld(OracleConnection cn){using var c=Cmd(cn,"SELECT TEXT FROM USER_SOURCE WHERE NAME='RH_PKG_ADJUNTAR_CARGO' ORDER BY TYPE,LINE");using var r=await c.ExecuteReaderAsync();var b=new StringBuilder();while(await r.ReadAsync())b.Append(r.IsDBNull(0)?"":r.GetString(0));return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(b.ToString())));}
+try{
+ using var rh=db.GetRhConnection();using var sis=db.GetSisConnection();await rh.OpenAsync();await sis.OpenAsync();
+ foreach(var (cn,alias) in new[]{(rh,"RH"),(sis,"SIS")}){using var c=Cmd(cn,"SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL");using var r=await c.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg[$"OracleAnalysis:Targets:{alias}:ExpectedDatabaseName"]&&r.GetString(1)==cfg[$"OracleAnalysis:Targets:{alias}:ExpectedServerHost"]&&r.GetString(2)==alias,"identity-"+alias);}
+ var oldHash=await HashOld(rh);
+ using(var c=Cmd(sis,"SELECT COUNT(*) FROM SIS.SIS_USUARIOS WHERE CODIGO_USUARIO=:id",("id",actor)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"synthetic-actor-not-user");
+ using(var c=Cmd(rh,"SELECT COUNT(*) FROM RH.RH_CONCEPTOS WHERE CODIGO_EMPRESA=:empresa AND ID_MODELO_CALCULO=:modelo",("empresa",company),("modelo",modelId)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"fixture-not-bound-to-concepts");
+ var models=new RhNomVersionesHandler(db);var vars=new RhNomVariablesHandler(db);
+ var list=await models.GetAll(new(SearchText:prefix),company,CancellationToken.None);Check(list.IsValid&&list.Data!.Count==1&&list.Data[0].ModeloId==modelId&&list.Data[0].Descripcion.Contains("QA TEST NO USAR"),"isolated-fixture-model");
+ Check(list.Data![0].UltimaVersion==6,"expected-fixture-version-6");
+ var catalog=await vars.GetAll(new(SearchText:prefix),company,CancellationToken.None);Check(catalog.IsValid&&catalog.Data!.Count==3,"fixture-variables");
+ var baseVar=catalog.Data!.Single(v=>v.Codigo==prefix+"_BASE");var divisor=catalog.Data.Single(v=>v.Codigo==prefix+"_DIV");var output=catalog.Data.Single(v=>v.Codigo==prefix+"_RES");
+ var previous=await models.Get(new(modelId,6),company,CancellationToken.None);Check(previous.IsValid&&previous.Data!.Configuracion.Formato==5,"previous-format5-readable");var beforeHash=previous.Data!.Hash;
+ var conceptsHandler=new RhNomConceptosCatalogoHandler(db);RhNomConceptoCfg? selected=null;
+ for(var page=1;page<=20&&selected is null;page++){var pageData=await conceptsHandler.Handle(new(10,page,100),company,CancellationToken.None);Check(pageData.IsValid,"current-catalog-page");selected=pageData.Data!.FirstOrDefault(c=>c.Elegible);if(page*100>=pageData.CantidadRegistros)break;}
+ Check(selected is not null&&selected.CodigoEmpresa==company&&selected.CodigoTipoNomina==10,"eligible-current-concept-selected");
+ var config=previous.Data.Configuracion;
+ var rule=new RhNomReglaConceptoSave("REGLA_QA",output.Codigo,selected!.CodigoConcepto,selected.Huella,"F","CONSERVAR_FIRMADO","REGISTRAR_CERO","CONSERVAR_EXISTENTE");
+ var request=new RhNomModeloSave(modelId,6,10,config.Escenario,prefix+" QA reglas formato6",catalog.Data!.Select(v=>new RhNomVariableRef(v.Id,v.Version)).ToList(),config.Formulas,config.Parametros,true,RhNomCondiciones.Version,config.TablasTramos,RhNomTramos.Version,[rule],RhNomReglasConcepto.Version);
+ Check(!(await models.Save(request with{ReglasConcepto=[rule with{HashConceptoEsperado=new string('A',64)}]},company,actor,CancellationToken.None)).IsValid,"stale-concept-hash-rejected");
+ var save=await models.Save(request,company,actor,CancellationToken.None);Check(save.IsValid&&save.Data!.Version==7,"save-format6-version7");
+ var loaded=await models.Get(new(modelId,7),company,CancellationToken.None);Check(loaded.IsValid&&loaded.Data!.Configuracion.Formato==6&&loaded.Data.Configuracion.ReglasConcepto!.Single().Concepto.Huella==selected.Huella,"frozen-rule-roundtrip");
+ var sim=await models.SimulateEffective(new(modelId,7,new(2025,6,30),[new(baseVar.Codigo,"1300")]),company,CancellationToken.None);Check(sim.IsValid&&sim.Data!.ProyeccionConceptos!.Partidas.Single().MontoPropuesto=="325"&&!sim.Data.ProyeccionConceptos.MovimientosAplicados&&!sim.Data.ProyeccionConceptos.ClasificacionHistoricaVerificada,"positive-projection-no-business-write");
+ var negative=await models.SimulateEffective(new(modelId,7,new(2025,6,30),[new(baseVar.Codigo,"-1")]),company,CancellationToken.None);Check(negative.IsValid&&negative.Data!.ProyeccionConceptos!.Partidas.Single().Accion=="CONSERVAR_EXISTENTE"&&negative.Data.ProyeccionConceptos.Partidas.Single().MontoPropuesto is null,"condition-false-proposal-only");
+ Check(!(await models.Save(request with{VersionEsperada=7,ReglasConcepto=null,VersionReglasCliente=null},company,actor,CancellationToken.None)).IsValid,"old-client-cannot-drop-rules");
+ var current=new RhNomFuentesActualesHandler(db);int period,budget,person,relation;DateTime date;
+ using(var c=Cmd(rh,"SELECT * FROM (SELECT P.CODIGO_PERIODO,P.FECHA_NOMINA,T.CODIGO_PRESUPUESTO_ACTUAL,R.CODIGO_PERSONA,R.CODIGO_RELACION_CARGO FROM RH.RH_PERIODOS P JOIN RH.RH_TIPOS_NOMINA T ON T.CODIGO_EMPRESA=P.CODIGO_EMPRESA AND T.CODIGO_TIPO_NOMINA=P.CODIGO_TIPO_NOMINA JOIN RH.RH_RELACION_CARGOS R ON R.CODIGO_EMPRESA=P.CODIGO_EMPRESA AND R.CODIGO_TIPO_NOMINA=P.CODIGO_TIPO_NOMINA AND R.CODIGO_PRESUPUESTO=T.CODIGO_PRESUPUESTO_ACTUAL WHERE P.CODIGO_EMPRESA=:empresa AND P.CODIGO_TIPO_NOMINA=10 AND P.FECHA_CIERRE IS NULL AND R.CODIGO_PERSONA>0 AND R.CODIGO_RELACION_CARGO>0 AND R.FECHA_FIN IS NULL AND R.SUELDO IS NOT NULL AND (R.FECHA_INI IS NULL OR R.FECHA_INI<=P.FECHA_NOMINA) AND (R.FECHA_INI_VIGENCIA IS NULL OR R.FECHA_INI_VIGENCIA<=P.FECHA_NOMINA) AND (R.FECHA_FIN_VIGENCIA IS NULL OR R.FECHA_FIN_VIGENCIA>=P.FECHA_NOMINA) ORDER BY P.FECHA_NOMINA DESC,R.CODIGO_RELACION_CARGO) WHERE ROWNUM=1",("empresa",company)))using(var r=await c.ExecuteReaderAsync()){Check(await r.ReadAsync(),"explicit-current-context-found");period=r.GetInt32(0);date=DateTime.SpecifyKind(r.GetDateTime(1),DateTimeKind.Unspecified);budget=r.GetInt32(2);person=r.GetInt32(3);relation=r.GetInt32(4);}
+ var actualRequest=new RhNomSimularActual(modelId,7,period,date.ToString("yyyy-MM-dd'T'HH:mm:ss"),budget,person,relation,[new(baseVar.Codigo,"SUELDO_RELACION_ACTUAL")],"TIPO_ACTUAL_EXPLICITO","Prueba QA de lectura segun fuente del caller; sin liquidacion.");
+ var actual=await current.Handle(actualRequest,company,CancellationToken.None);Check(actual.IsValid&&actual.Data!.Entradas.Count==1&&!actual.Data.MovimientosAplicados&&!actual.Data.ParidadHistoricaCertificada,"current-source-handler-no-manual-salary");
+ Check(actual.Data!.Entradas.Single().Valor==RhNomNumeros.Texto(RhNomNumeros.Leer(actual.Data.Fuente.Sueldo))&&actual.Data.HashFuente==RhNomFuentesActuales.Hash(actual.Data.Fuente),"current-source-value-hash-preserved-in-memory");
+ Check(actual.Data.Fuente.PresupuestoPeriodo!=actual.Data.Fuente.CodigoPresupuesto,"observed-budget-discrepancy-retained");
+ Check(!(await current.Handle(actualRequest with{PoliticaPresupuesto="COINCIDIR_PERIODO",MotivoPresupuesto=null},company,CancellationToken.None)).IsValid,"budget-mismatch-not-silent");
+ Check(!(await current.Handle(actualRequest with{MotivoPresupuesto=null},company,CancellationToken.None)).IsValid,"budget-reason-required");
+ Check(!(await current.Handle(actualRequest with{CodigoPersona=int.MaxValue},company,CancellationToken.None)).IsValid,"foreign-person-no-source");
+ var old=await models.Get(new(modelId,6),company,CancellationToken.None);Check(old.IsValid&&old.Data!.Hash==beforeHash,"previous-snapshot-unchanged");
+ Check(oldHash==await HashOld(rh),"old-payroll-package-unchanged");
+ Console.WriteLine("R57_REGLAS="+JsonSerializer.Serialize(new{Status="OK",Company=company,FixturePrefix=prefix,ModelId=modelId,Version=7,Checks=checks,OldPayrollHash=oldHash,NoPersonalDataInOutput=true,AuthenticationHttpTested=false,NoPayrollWrites=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

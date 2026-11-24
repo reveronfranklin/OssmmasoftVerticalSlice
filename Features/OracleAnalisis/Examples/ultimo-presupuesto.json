@@ -1,0 +1,10 @@
+{
+  "conexion": "PRE",
+  "objeto": "PRE_PRESUPUESTOS",
+  "columnas": ["CODIGO_PRESUPUESTO", "DENOMINACION", "ANO", "MONTO_PRESUPUESTO", "FECHA_INS", "CODIGO_EMPRESA"],
+  "orden": [
+    { "columna": "FECHA_INS", "direccion": "desc" },
+    { "columna": "CODIGO_PRESUPUESTO", "direccion": "desc" }
+  ],
+  "pageSize": 1
+}

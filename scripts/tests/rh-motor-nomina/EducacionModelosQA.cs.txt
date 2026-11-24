@@ -1,0 +1,26 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ using var input=JsonDocument.Parse(File.ReadAllText(args[0]));var outcomes=new List<object>();int expected=63;
+ var models=new RhNomVersionesHandler(db);var root=await models.GetAll(new(SearchText:"Q57_0523F8B5"),company,ct);Check(root.IsValid&&root.Data!.Count==1&&root.Data[0].ModeloId==1&&root.Data[0].Descripcion.Contains("QA TEST NO USAR"),"isolated-technical-root");var latest=root.Data![0].UltimaVersion;
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND ID_MODELO_CALCULO=1",("e",company)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"no-business-binding");
+ foreach(var selected in input.RootElement.GetProperty("Models").EnumerateArray().Where(x=>x.GetProperty("Type").GetInt32()!=21)){
+ var version=selected.GetProperty("Version").GetInt32();var old=await models.Get(new(1,version),company,ct);Check(old.IsValid&&old.Data!.Hash==selected.GetProperty("Hash").GetString(),"pinned-source-"+version);var m=old.Data!;var s=m.Configuracion;var target=expected+1;
+ Check(s.FuentesActuales!.Count(f=>f.CodigoVariable=="MIG_PR_TIT"&&f.Proveedor=="TITULO_EDUC_ULTIMO_REG")==1,"strict-original-education-source");
+ var tables=s.TablasTramos!.Select(t=>t.CodigoEntrada=="MIG_PR_TIT"?t with{Tramos=new List<RhNomTramo>{new("SIN_EDUCACION","0","1","0")}.Concat(t.Tramos).ToList()}:t).ToList();
+ var request=new RhNomModeloSave(1,expected,m.CodigoTipoNomina,m.Escenario,"Q57_0523F8B5 QA TEST NO USAR ausencia educacion tipo "+m.CodigoTipoNomina,s.Variables.Select(v=>new RhNomVariableRef(v.Id,v.Version)).ToList(),s.Formulas,s.Parametros,true,RhNomCondiciones.Version,tables,RhNomTramos.Version,s.ReglasConcepto!.Select(RhNomReglasConcepto.Solicitud).ToList(),RhNomReglasConcepto.Version,s.FuentesActuales.Select(f=>f.CodigoVariable=="MIG_PR_TIT"?f with{Proveedor=RhNomDatosPersonales.UltimoOSinRegistro}:f).ToList(),RhNomFuentesModelo.Version);
+ var snapshot=RhNomConfiguracion.Snapshot(request,s.Variables,company,conceptos:s.ReglasConcepto.Select(r=>r.Concepto).ToList());var hash=RhNomConfiguracion.Serializar(snapshot).Hash;RhNomComposicionGrupo.VerificarCapturas(snapshot);
+ if(latest==expected){var saved=await models.Save(request,company,actor,ct);Check(saved.IsValid&&saved.Data!.Version==target,"new-education-draft-"+target+": "+saved.Message);latest=target;}else Check(latest>=target,"resume-expected-version");
+ var current=await models.Get(new(1,target),company,ct);Check(current.IsValid&&current.Data!.Hash==hash,"stored-new-model-hash-"+target);Check((await models.Get(new(1,version),company,ct)).Data!.Hash==m.Hash,"source-model-unchanged-"+version);
+ outcomes.Add(new{Type=m.CodigoTipoNomina,Version=target,Hash=hash,OriginalVersion=version,OriginalHash=m.Hash,EducationPolicy="NO_APLICA_EXPLICITO",NoPayrollWrites=true});expected=target;}
+ var unchanged=await models.Get(new(1,63),company,ct);Check(unchanged.IsValid&&unchanged.Data!.Hash==input.RootElement.GetProperty("Models").EnumerateArray().Single(x=>x.GetProperty("Type").GetInt32()==21).GetProperty("Hash").GetString(),"type21-no-profession-unchanged");outcomes.Add(new{Type=21,Version=63,Hash=unchanged.Data!.Hash,OriginalVersion=63,OriginalHash=unchanged.Data.Hash,EducationPolicy="NO_REQUIERE",NoPayrollWrites=true});
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_EVT"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"ledger-empty");
+ Console.WriteLine("R57_EDUCACION_MODELOS="+JsonSerializer.Serialize(new{Status="BORRADORES_TECNICOS_NO_PUBLICADOS",Checks=checks,Models=outcomes,NoPayrollWrites=true,HistoricalParityCertified=false}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

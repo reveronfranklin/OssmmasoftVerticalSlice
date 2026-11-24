@@ -1,0 +1,52 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var from=new DateTime(2023,11,21);var until=new DateTime(2026,11,22);var types=new List<int>();
+ using(var c=Cmd("SELECT CODIGO_TIPO_NOMINA FROM RH_TIPOS_NOMINA WHERE CODIGO_EMPRESA=:e ORDER BY CODIGO_TIPO_NOMINA",("e",company)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())types.Add(Convert.ToInt32(r.GetValue(0)));
+ var contexts=new List<Period>();
+ const string sql=@"WITH H AS (
+ SELECT CODIGO_TIPO_NOMINA T,CODIGO_PERIODO P,FECHA_NOMINA D,COUNT(*) N,COUNT(DISTINCT CODIGO_PERSONA) PERSONS,
+ SUM(CASE WHEN TIPO IN ('F','V') THEN 1 ELSE 0 END) REGULAR,
+ SUM(CASE WHEN TIPO='E' THEN 1 ELSE 0 END) ESPECIAL,
+ SUM(CASE WHEN TIPO IS NULL OR TIPO NOT IN ('F','V','E') THEN 1 ELSE 0 END) UNKNOWN
+ FROM RH_HISTORICO_NOMINA WHERE CODIGO_EMPRESA=:e AND FECHA_NOMINA>=:f AND FECHA_NOMINA<:u GROUP BY CODIGO_TIPO_NOMINA,CODIGO_PERIODO,FECHA_NOMINA
+ ),C AS (
+ SELECT CODIGO_TIPO_NOMINA T,CODIGO_PERIODO P,FECHA_NOMINA D,COUNT(*) N FROM RH_HISTORICO_PERSONAL_CARGO
+ WHERE CODIGO_EMPRESA=:e AND FECHA_NOMINA>=:f AND FECHA_NOMINA<:u GROUP BY CODIGO_TIPO_NOMINA,CODIGO_PERIODO,FECHA_NOMINA
+ ),P AS (
+ SELECT CODIGO_TIPO_NOMINA T,CODIGO_PERIODO P,FECHA_NOMINA D,COUNT(*) N,SUM(CASE WHEN FECHA_CIERRE IS NOT NULL THEN 1 ELSE 0 END) CLOSED
+ FROM RH_PERIODOS WHERE CODIGO_EMPRESA=:e AND FECHA_NOMINA>=:f AND FECHA_NOMINA<:u GROUP BY CODIGO_TIPO_NOMINA,CODIGO_PERIODO,FECHA_NOMINA
+ ),K AS (SELECT T,P,D FROM H UNION SELECT T,P,D FROM C UNION SELECT T,P,D FROM P WHERE CLOSED>0)
+ SELECT * FROM (SELECT K.T,K.P,K.D,NVL(P.N,0),NVL(P.CLOSED,0),NVL(H.N,0),NVL(H.PERSONS,0),NVL(H.REGULAR,0),NVL(H.ESPECIAL,0),NVL(H.UNKNOWN,0),NVL(C.N,0)
+ FROM K LEFT JOIN P ON DECODE(K.T,P.T,1,0)=1 AND DECODE(K.P,P.P,1,0)=1 AND K.D=P.D LEFT JOIN H ON DECODE(K.T,H.T,1,0)=1 AND DECODE(K.P,H.P,1,0)=1 AND K.D=H.D LEFT JOIN C ON DECODE(K.T,C.T,1,0)=1 AND DECODE(K.P,C.P,1,0)=1 AND K.D=C.D
+ ORDER BY K.T,K.D,K.P) WHERE ROWNUM<=5001";
+ using(var c=Cmd(sql,("e",company),("f",from),("u",until)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync()){
+ Check(contexts.Count<5000,"inventory-not-truncated");
+ Check(!r.IsDBNull(2),"context-date-required");
+ contexts.Add(new(r.IsDBNull(0)?null:Convert.ToInt32(r.GetValue(0)),r.IsDBNull(1)?null:Convert.ToInt32(r.GetValue(1)),DateTime.SpecifyKind(r.GetDateTime(2),DateTimeKind.Unspecified),Convert.ToInt32(r.GetValue(3)),Convert.ToInt32(r.GetValue(4)),Convert.ToInt32(r.GetValue(5)),Convert.ToInt32(r.GetValue(6)),Convert.ToInt32(r.GetValue(7)),Convert.ToInt32(r.GetValue(8)),Convert.ToInt32(r.GetValue(9)),Convert.ToInt32(r.GetValue(10))));}
+ Check(contexts.All(x=>x.Date>=from&&x.Date<until),"all-contexts-inside-common-window");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_HISTORICO_NOMINA WHERE CODIGO_EMPRESA=:e AND FECHA_NOMINA>=:f AND FECHA_NOMINA<:u",("e",company),("f",from),("u",until)))Check(contexts.Sum(x=>(long)x.Rows)==Convert.ToInt64(await c.ExecuteScalarAsync()),"all-history-rows-accounted");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_HISTORICO_PERSONAL_CARGO WHERE CODIGO_EMPRESA=:e AND FECHA_NOMINA>=:f AND FECHA_NOMINA<:u",("e",company),("f",from),("u",until)))Check(contexts.Sum(x=>(long)x.CargoRows)==Convert.ToInt64(await c.ExecuteScalarAsync()),"all-cargo-rows-accounted");
+ var coverage=new List<object>();var selected=new List<Period>();
+ foreach(var type in types.Select(x=>(int?)x).Union(contexts.Select(x=>x.Type)).Distinct().Order())foreach(var year in Enumerable.Range(from.Year,until.Year-from.Year+1)){
+ var rows=contexts.Where(x=>x.Type==type&&x.Date.Year==year).ToList();
+ foreach(var kind in new[]{"ORDINARIA_FV","ESPECIAL_E","MIXTA","TIPOS_DESCONOCIDOS","SIN_PARTIDAS"}){
+ var group=rows.Where(x=>x.Kind==kind).OrderBy(x=>x.Date).ThenBy(x=>x.Number).ToList();
+ var valid=group.Where(x=>x.Type>0&&x.Number>0&&x.PeriodRows==1&&x.ClosedRows==1&&x.Rows>0&&x.CargoRows>0).ToList();
+ // Select three distinct dates spread across each type/year/class. Preserve every context on selected dates.
+ var dates=valid.Select(x=>x.Date).Distinct().Order().ToList();var pick=dates.Count==0?new HashSet<DateTime>():new HashSet<DateTime>{dates[0],dates[dates.Count/2],dates[^1]};
+ var sample=valid.Where(x=>pick.Contains(x.Date)).ToList();selected.AddRange(sample);
+ coverage.Add(new{Type=type,Year=year,Kind=kind,Contexts=group.Count,EligibleContexts=valid.Count,Rows=group.Sum(x=>x.Rows),DistinctDates=dates.Count,SampleContexts=sample.Count,SampleDates=pick.Count,State=group.Count==0?"SIN_DATOS_EN_VENTANA":dates.Count<3?"MENOS_DE_TRES_FECHAS": "MUESTRA_DISTRIBUIDA",IncompleteContexts=group.Count-valid.Count});
+ }}
+ Console.WriteLine("R57_MUESTRA_3_ANIOS="+JsonSerializer.Serialize(new{Status="OK",Checks=checks.Distinct().ToList(),FromInclusive=from,UntilExclusive=until,Policy="36 meses hasta la fecha de referencia inclusive; corte comun, sin retroceder por tipo",Selection="Primera/mediana/ultima fecha por tipo, anio y clase; todos los contextos en esas fechas",Coverage=coverage,Inventory=contexts,CandidatePeriods=selected.OrderBy(x=>x.Type).ThenBy(x=>x.Date).ThenBy(x=>x.Number).Select(x=>new{Type=x.Type,Period=x.Number,Date=x.Date,Kind=x.Kind}),NoPayrollWrites=true,NoConfigurationWrites=true,NoNamesOrAmountsRead=true,HistoricalParityCertified=false}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}
+
+record Period(int? Type,int? Number,DateTime Date,int PeriodRows,int ClosedRows,int Rows,int Persons,int Regular,int Special,int Unknown,int CargoRows){public string Kind=>Rows==0?"SIN_PARTIDAS":Unknown>0?"TIPOS_DESCONOCIDOS":Regular>0&&Special>0?"MIXTA":Special>0?"ESPECIAL_E":"ORDINARIA_FV";}

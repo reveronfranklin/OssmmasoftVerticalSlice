@@ -1,0 +1,21 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var watch=System.Diagnostics.Stopwatch.StartNew();var times=new Dictionary<string,long>();var trace=Path.Combine(AppContext.BaseDirectory,"R57CapStage.log");
+ void Phase(string name){times[name]=watch.ElapsedMilliseconds;File.AppendAllText(trace,name+"="+watch.ElapsedMilliseconds+"ms; ");watch.Restart();}
+ var model=await RhNomCfgDb.Revision(cn,13,1,71,ct);Phase("revision");var context=await RhNomPrenominaDb.Contexto(cn,13,10,5696,ct);Phase("contexto");var person=RhNomPrenominas.Poblacion(context).First(c=>c.Estado=="PENDIENTE");
+ var q=new RhNomCapturarPrenomina("QA_MEDIR",10,5696,person.Persona,RhNomPresupuestos.PoliticaContrato);var declarations=RhNomCapturasServidor.Politica(cfg,10);
+ using(var tx=cn.BeginTransaction(System.Data.IsolationLevel.Serializable)){
+ var raw=await RhNomCapturaFuentesDb.Leer(cn,tx,q,13,declarations,ct);Phase("fuentes-raw");
+ var inputs=await RhNomFuentesActualesHandler.LeerEntradas(cn,model,new(1,71,5696,context.Periodo.Fecha.ToString("yyyy-MM-dd'T'HH:mm:ss"),19,person.Persona,person.Relacion,null,RhNomPresupuestos.PoliticaContrato),13,ct);Phase("entradas-modelo");
+ var frozen=new RhNomFuentesModeloCapturadas(1,71,model.Hash,RhNomFuentesActuales.Version,inputs.Fuente,inputs.Entradas);var cap=RhNomCapsulasPrenomina.Capturar(raw.Ambito,RhNomSeleccionPrenomina.Plantilla(raw.Clase),raw.Movimientos,raw.Metadatos,declarations,raw.Periodo,frozen);RhNomModelosDesdeCaptura.VerificarFuentes(model,RhNomCapsulasPrenomina.Leer(cap),actor);Phase("validacion");await tx.RollbackAsync();
+ }
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{TimesMs=times,NoPayrollWrites=true}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+":"+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

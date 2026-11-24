@@ -1,0 +1,51 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ async Task<string> FinancialHash(){var rows=new List<string>();using var c=Cmd("SELECT CODIGO_MOV_NOMINA,CODIGO_EMPRESA,CODIGO_TIPO_NOMINA,CODIGO_PERSONA,CODIGO_CONCEPTO,FRECUENCIA_ID,TIPO,TO_CHAR(MONTO,'TM9','NLS_NUMERIC_CHARACTERS=''.,'''),STATUS,COMPLEMENTO_CONCEPTO,EXTRA1,EXTRA2,EXTRA3,USUARIO_INS,FECHA_INS,USUARIO_UPD,FECHA_UPD FROM RH_MOV_NOMINA ORDER BY CODIGO_MOV_NOMINA");using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync()){var values=new object?[r.FieldCount];for(var i=0;i<values.Length;i++)values[i]=r.IsDBNull(i)?null:r.GetValue(i);rows.Add(JsonSerializer.Serialize(values));}return RhNomRecalculosHistoricos.Hash(rows);}
+ OracleCommand Proc(OracleConnection connection,string op){var c=connection.CreateCommand();c.BindByName=true;c.CommandType=System.Data.CommandType.StoredProcedure;c.CommandText="RH.RH_PKG_NOM_FIN_TX."+op;c.CommandTimeout=10;return c;}
+ var before=await FinancialHash();Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"server-execution-remains-disabled");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_CTL WHERE ACTIVO=1 OR LEGACY_RETIRADO=1"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"database-gates-remain-closed");
+ var oldPlans=new RhNomPlanesGuardadosHandler(db,cfg);int runId;using(var c=Cmd("SELECT ID_RUN FROM RH_NOM_RUN WHERE CODIGO_EMPRESA=:e AND ACTOR=:a AND CLAVE_SOL='QA_CONSOL_20261120_FPS'",("e",company),("a",actor)))runId=Convert.ToInt32(await c.ExecuteScalarAsync());
+ var plan=await oldPlans.Crear(new("QA_TX_UNICO_20261120_01",[runId]),company,actor,ct);Check(plan.IsValid&&plan.Data is not null,"single-run-technical-plan-only");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_CONCEPTOS WHERE ID_MODELO_CALCULO=1"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"fixture-model-not-bound-for-operation");
+ var q=new RhNomEjecutarPlan(plan.Data!.Cabecera.IdPlan,plan.Data.Cabecera.HashDocumento,"QA_TX_DENY_20261120_01","Verificacion de rechazo financiero QA");
+ Check(!(await new RhNomAplicacionHandler(db,cfg).Ejecutar(q,company,actor,ct)).IsValid,"api-config-denies-execution");
+ var enabledProbe=new ConfigurationBuilder().AddConfiguration(cfg).AddInMemoryCollection(new Dictionary<string,string?>{{"RhMotorNomina:AplicacionEnabled","true"}}).Build();
+ Check(!(await new RhNomAplicacionHandler(db,enabledProbe).Ejecutar(q,company,actor,ct)).IsValid,"application-flag-cannot-bypass-database-gate");
+ Check(!(await new RhNomAplicacionHandler(db,enabledProbe).Ejecutar(q with{IdRevertido=1},company,actor,ct)).IsValid,"reversal-does-not-bypass-database-gate");
+ Check(!(await new RhNomAplicacionHandler(db,enabledProbe).Ejecutar(q,company,actor-1,ct)).IsValid,"foreign-actor-denied");
+ using(var tx=cn.BeginTransaction()){
+  using(var c=Proc(cn,"BLOQUEAR_FUENTES")){c.Transaction=tx;await c.ExecuteNonQueryAsync(ct);}
+  var run=await RhNomCorridasDb.Leer(cn,company,actor,runId,ct);var inputText=await RhNomCorridasDb.Documento(cn,run,"ENTRADA",ct);var input=RhNomCorridas.Leer(inputText!,run.HashDatos,company,actor);var source=input.FuenteActual!;
+  var fresh=await RhNomFuentesActualesHandler.Capturar(cn,new(input.Modelo.ModeloId,input.Modelo.Version,source.CodigoPeriodo,source.FechaNomina.ToString("yyyy-MM-dd'T'HH:mm:ss"),source.CodigoPresupuesto,source.CodigoPersona,source.CodigoRelacionCargo,null,input.PoliticaPresupuesto??"",input.MotivoPresupuesto),company,ct);
+  Check(fresh.IsValid&&fresh.Data is not null,"recapture-on-same-locked-connection");
+  using var other=db.GetRhConnection();await other.OpenAsync(ct);using(var second=other.BeginTransaction()){
+   var rejected=false;using var c=Proc(other,"BLOQUEAR_FUENTES");c.Transaction=second;try{await c.ExecuteNonQueryAsync(ct);}catch(OracleException ex)when(ex.Number==54){rejected=true;}await second.RollbackAsync();Check(rejected,"exclusive-movement-lock-rejects-second-session-nowait");
+  }
+  using(var c=Proc(cn,"NUEVO_ID")){c.Transaction=tx;RhNomCfgDb.Out(c,"p_ID");var rejected=false;try{await c.ExecuteNonQueryAsync(ct);}catch(OracleException ex)when(ex.Number==20001){rejected=ex.Message.Contains("Transaccion financiera no autorizada");}Check(rejected,"source-locks-do-not-grant-financial-capability");}
+  await tx.RollbackAsync();
+  using(var second=other.BeginTransaction()){using var c=Proc(other,"BLOQUEAR_FUENTES");c.Transaction=second;await c.ExecuteNonQueryAsync(ct);await second.RollbackAsync();Check(true,"rollback-releases-source-and-movement-locks");}
+ }
+ using(var c=Proc(cn,"NUEVO_ID")){RhNomCfgDb.Out(c,"p_ID");var rejected=false;try{await c.ExecuteNonQueryAsync(ct);}catch(OracleException ex)when(ex.Number==20001){rejected=ex.Message.Contains("Transaccion financiera no autorizada");}Check(rejected,"package-capability-invalid-after-rollback");}
+ foreach(var op in new[]{"ACTUALIZAR_MOV","RETIRAR_MOV"}){
+  using var tx=cn.BeginTransaction();using var c=Proc(cn,op);c.Transaction=tx;RhNomCfgDb.Add(c,"p_ID",OracleDbType.Int32,-1);if(op=="ACTUALIZAR_MOV")RhNomCfgDb.Add(c,"p_MONTO",OracleDbType.Decimal,0);
+  var rejected=false;try{await c.ExecuteNonQueryAsync(ct);}catch(OracleException ex)when(ex.Number==20001){rejected=ex.Message.Contains("Transaccion financiera no autorizada");}await tx.RollbackAsync();Check(rejected,"direct-mutation-denied-"+op);
+ }
+ using(var tx=cn.BeginTransaction()){
+  using(var c=Proc(cn,"CREAR_MOV")){c.Transaction=tx;foreach(var(n,v)in new[]{("p_ID",-1),("p_CONCEPTO",1),("p_FRECUENCIA",1)})RhNomCfgDb.Add(c,n,OracleDbType.Int32,v);RhNomCfgDb.Add(c,"p_TIPO",OracleDbType.Varchar2,"F");RhNomCfgDb.Add(c,"p_MONTO",OracleDbType.Decimal,0);foreach(var n in new[]{"p_ESTADO","p_COMPLEMENTO","p_EXTRA1","p_EXTRA2","p_EXTRA3"})RhNomCfgDb.Add(c,n,OracleDbType.Varchar2,null);var rejected=false;try{await c.ExecuteNonQueryAsync(ct);}catch(OracleException ex)when(ex.Number==20001){rejected=ex.Message.Contains("Transaccion financiera no autorizada");}Check(rejected,"direct-creation-denied-without-capability");}
+  using(var c=Proc(cn,"REGISTRAR")){c.Transaction=tx;foreach(var(n,v)in new[]{("p_CLAVE","QA_NEVER_INSERT"),("p_HASH_SOL",new string('A',64)),("p_HASH_DOC",new string('B',64)),("p_HASH_EVT",new string('C',64)),("p_HASH_ANT",(string?)null)})RhNomCfgDb.Add(c,n,OracleDbType.Varchar2,v);RhNomCfgDb.Add(c,"p_DOC",OracleDbType.Clob,"{}");RhNomCfgDb.Add(c,"p_ANT",OracleDbType.Int32,null);RhNomCfgDb.Add(c,"p_CAMBIOS",OracleDbType.Int32,1);var rejected=false;try{await c.ExecuteNonQueryAsync(ct);}catch(OracleException ex)when(ex.Number==20001){rejected=ex.Message.Contains("Transaccion financiera no autorizada");}Check(rejected,"direct-ledger-registration-denied-without-capability");}
+  await tx.RollbackAsync();
+ }
+ foreach(var name in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"})using(var c=Cmd("SELECT COUNT(*) FROM "+name))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"no-confirmed-financial-facts-"+name);
+ foreach(var name in new[]{"RH_NOM_FIN_ID_SEQ","RH_NOM_FIN_EVT_SEQ"})using(var c=Cmd("SELECT LAST_NUMBER FROM USER_SEQUENCES WHERE SEQUENCE_NAME=:s",("s",name)))Check(Convert.ToInt64(await c.ExecuteScalarAsync())==1,"no-financial-sequence-consumption-"+name);
+ Check(before==await FinancialHash(),"all-financial-images-unchanged");
+ Console.WriteLine("R57_TX="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,PlanId=plan.Data.Cabecera.IdPlan,FinancialTableHash=before,NoPayrollWrites=true,NoFakeEvents=true,ServerSettingChanged=false,DatabaseGatesEnabled=false,LegacyPackageCalled=false,HistoricalParityCertified=false}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

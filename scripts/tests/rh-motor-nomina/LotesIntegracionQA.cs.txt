@@ -1,0 +1,49 @@
+using System.Data;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+// QA only. One new revision in the existing isolated synthetic fixture; no payroll writes.
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var company=cfg.GetValue<int>("settings:EmpresaConfig");var db=new ConnectionDB(cfg);var checks=new List<string>();
+const string prefix="Q57_0523F8B5";const int modelId=1;const int actor=int.MaxValue;
+void Check(bool value,string name){if(!value)throw new InvalidOperationException(name);checks.Add(name);}
+OracleCommand Cmd(OracleConnection cn,string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var (name,value) in values)c.Parameters.Add(name,value is DateTime?OracleDbType.Date:value is int?OracleDbType.Int32:OracleDbType.Varchar2).Value=value;return c;}
+async Task<string> HashOld(OracleConnection cn){using var c=Cmd(cn,"SELECT TEXT FROM USER_SOURCE WHERE NAME='RH_PKG_ADJUNTAR_CARGO' ORDER BY TYPE,LINE");using var r=await c.ExecuteReaderAsync();var b=new StringBuilder();while(await r.ReadAsync())b.Append(r.IsDBNull(0)?"":r.GetString(0));return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(b.ToString())));}
+try{
+ using var rh=db.GetRhConnection();using var sis=db.GetSisConnection();await rh.OpenAsync();await sis.OpenAsync();
+ foreach(var (cn,alias) in new[]{(rh,"RH"),(sis,"SIS")}){using var c=Cmd(cn,"SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL");using var r=await c.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg[$"OracleAnalysis:Targets:{alias}:ExpectedDatabaseName"]&&r.GetString(1)==cfg[$"OracleAnalysis:Targets:{alias}:ExpectedServerHost"]&&r.GetString(2)==alias,"identity-"+alias);}
+ var oldHash=await HashOld(rh);
+ using(var c=Cmd(sis,"SELECT COUNT(*) FROM SIS.SIS_USUARIOS WHERE CODIGO_USUARIO=:id",("id",actor)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"synthetic-actor-not-user");
+ using(var c=Cmd(rh,"SELECT COUNT(*) FROM RH.RH_CONCEPTOS WHERE CODIGO_EMPRESA=:empresa AND ID_MODELO_CALCULO=:modelo",("empresa",company),("modelo",modelId)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"fixture-not-bound-to-concepts");
+ var models=new RhNomVersionesHandler(db);var vars=new RhNomVariablesHandler(db);
+ var list=await models.GetAll(new(SearchText:prefix),company,CancellationToken.None);Check(list.IsValid&&list.Data!.Count==1&&list.Data[0].ModeloId==modelId&&list.Data[0].Descripcion.Contains("QA TEST NO USAR"),"isolated-fixture-model");
+ Check(list.Data![0].UltimaVersion==6,"expected-fixture-version-6");
+ var catalog=await vars.GetAll(new(SearchText:prefix),company,CancellationToken.None);Check(catalog.IsValid&&catalog.Data!.Count==3,"fixture-variables");
+ var baseVar=catalog.Data!.Single(v=>v.Codigo==prefix+"_BASE");var divisor=catalog.Data.Single(v=>v.Codigo==prefix+"_DIV");var output=catalog.Data.Single(v=>v.Codigo==prefix+"_RES");
+ var previous=await models.Get(new(modelId,6),company,CancellationToken.None);Check(previous.IsValid&&previous.Data!.Configuracion.Formato==5,"fixture-format5-readable");var previousHash=previous.Data!.Hash;
+ var batch=new RhNomLoteHandler(db);
+ RhNomCasoLote Case(string id,string value,DateOnly date)=>new(id,date,[new(baseVar.Codigo,value)]);
+ var request=new RhNomLoteQuery(modelId,6,[Case("junio","1300",new(2025,6,30)),Case("julio","1300",new(2025,7,1)),Case("negativo","-1",new(2025,6,30))]);
+ var result=await batch.Handle(request,company,CancellationToken.None);Check(result.IsValid&&result.Data!.Estado=="SIMULACION_LOTE_COMPLETA"&&result.Data.Casos.Count==3,"batch-complete-three-cases");
+ Check(result.Data!.Casos.Select(c=>c.CasoId).SequenceEqual(new[]{"JUNIO","JULIO","NEGATIVO"}),"case-order-normalization");
+ Check(result.Data.Casos.Select(c=>c.Resultado.Simulacion.Resultados.Single().Resultado).SequenceEqual(new[]{"325","260","0"}),"independent-parameters-results");
+ Check(result.Data.Casos[0].Resultado.Parametros.Single().Tramo!.Clave=="MEDIO"&&result.Data.Casos[1].Resultado.Parametros.Single().Tramo!.Clave=="ESPECIAL","table-traces-per-date");
+ Check(result.Data.Casos[2].Resultado.Simulacion.Resultados.Single().Aplicabilidad!.Rama=="ALTERNATIVA","condition-branch-independent");
+ Check(!result.Data.ParidadCertificada&&!result.Data.MovimientosAplicados&&result.Data.OrigenEntradas=="PROPORCIONADAS_PARA_PRUEBA","no-payroll-or-certification");
+ Check(result.Data.HashModelo==previousHash&&result.Data.HashLote?.Length==64,"batch-fingerprint");
+ var repeated=await batch.Handle(request,company,CancellationToken.None);Check(repeated.IsValid&&repeated.Data!.HashLote==result.Data.HashLote,"deterministic-repeat");
+ var changed=await batch.Handle(request with{Casos=[Case("junio","1400",new(2025,6,30))]},company,CancellationToken.None);Check(changed.IsValid&&changed.Data!.HashLote!=result.Data.HashLote,"fingerprint-changes-with-case");
+ var invalid=await batch.Handle(request with{Casos=[request.Casos[0],Case("HUECO","2000",new(2025,7,1))]},company,CancellationToken.None);
+ Check(!invalid.IsValid&&invalid.Data!.Casos.Count==0&&invalid.Data.Errores.Single().CasoId=="HUECO"&&invalid.Data.Errores.Single().Codigo=="TRAMO_SIN_COBERTURA","later-error-no-partial-success");
+ var missing=await batch.Handle(request with{Casos=[new("FALTA",new(2025,6,30),[])]},company,CancellationToken.None);Check(!missing.IsValid&&missing.Data!.Casos.Count==0,"missing-input-rejected");
+ Check(!(await batch.Handle(request with{Casos=[request.Casos[0],request.Casos[0]]},company,CancellationToken.None)).IsValid,"duplicate-case-rejected");
+ Check(!(await batch.Handle(request with{Casos=Enumerable.Range(0,51).Select(i=>Case("C"+i,"1300",new(2025,6,30))).ToList()},company,CancellationToken.None)).IsValid,"case-count-budget");
+ Check(!(await batch.Handle(request,company+999,CancellationToken.None)).IsValid,"foreign-company-rejected");
+ var after=await models.Get(new(modelId,6),company,CancellationToken.None);var modelAfter=await models.GetAll(new(SearchText:prefix),company,CancellationToken.None);
+ Check(after.IsValid&&after.Data!.Hash==previousHash&&modelAfter.IsValid&&modelAfter.Data!.Single().UltimaVersion==6,"fixture-unchanged-no-new-revision");
+ Check(oldHash==await HashOld(rh),"old-payroll-package-unchanged");
+ Console.WriteLine("R57_LOTES="+JsonSerializer.Serialize(new{Status="OK",Company=company,FixturePrefix=prefix,ModelId=modelId,Version=6,Checks=checks,OldPayrollHash=oldHash,NoPersonalDataInOutput=true,AuthenticationHttpTested=false,NoDatabaseWrites=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

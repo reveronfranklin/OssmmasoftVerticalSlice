@@ -1,0 +1,36 @@
+using System.Data;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.CommandText=sql;c.BindByName=true;c.CommandTimeout=25;foreach(var (n,v) in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var models=new RhNomVersionesHandler(db);var listed=await models.GetAll(new(SearchText:"Q57_0523F8B5"),company,ct);Check(listed.IsValid&&listed.Data!.Count==1&&listed.Data[0].ModeloId==1&&listed.Data[0].UltimaVersion==10&&listed.Data[0].Descripcion.Contains("QA TEST NO USAR"),"isolated-fixture-version10");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND ID_MODELO_CALCULO=1",("e",company)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"fixture-not-associated-to-live-concepts");
+ var previous=(await models.Get(new(1,10),company,ct)).Data!;var config=previous.Configuracion;var parameter=config.FuentesActuales!.Single(b=>b.ParametroConcepto is not null).ParametroConcepto!;
+ var cases=new List<(int Period,DateTime Date,int Person,int Relation)>();
+ var periods=new List<(int Id,DateTime Date)>();
+ using(var c=Cmd("SELECT * FROM (SELECT CODIGO_PERIODO,FECHA_NOMINA FROM RH_PERIODOS WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=10 AND FECHA_CIERRE IS NOT NULL ORDER BY FECHA_NOMINA DESC,CODIGO_PERIODO DESC) WHERE ROWNUM<=8",("e",company)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())periods.Add((r.GetInt32(0),DateTime.SpecifyKind(r.GetDateTime(1),DateTimeKind.Unspecified)));
+ foreach(var period in periods)
+ {
+  using(var c=Cmd("SELECT COUNT(*),COUNT(PORCENTAJE) FROM RH_FORMULA_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND CODIGO_CONCEPTO=:c AND (FECHA_DESDE IS NULL OR FECHA_DESDE<=:d) AND (FECHA_HASTA IS NULL OR FECHA_HASTA>=:d)",("e",company),("c",parameter.CodigoConcepto),("d",period.Date)))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();if(r.GetInt32(0)!=1||r.GetInt32(1)!=1)continue;}
+  var people=new List<(int Person,int Relation)>();
+  using(var c=Cmd("SELECT * FROM (SELECT CODIGO_PERSONA,CODIGO_RELACION_CARGO FROM RH_HISTORICO_PERSONAL_CARGO WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=10 AND CODIGO_PERIODO=:p AND FECHA_NOMINA=:d AND CODIGO_PERSONA>0 AND CODIGO_RELACION_CARGO>0 AND SUELDO IS NOT NULL GROUP BY CODIGO_PERSONA,CODIGO_RELACION_CARGO HAVING COUNT(*)=1 ORDER BY CODIGO_PERSONA,CODIGO_RELACION_CARGO) WHERE ROWNUM<=10",("e",company),("p",period.Id),("d",period.Date)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())people.Add((r.GetInt32(0),r.GetInt32(1)));
+  foreach(var person in people){using var c=Cmd("SELECT COUNT(*) FROM RH_HISTORICO_NOMINA WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=10 AND CODIGO_PERIODO=:p AND FECHA_NOMINA=:d AND CODIGO_PERSONA=:person",("e",company),("p",period.Id),("d",period.Date),("person",person.Person));if(Convert.ToInt32(await c.ExecuteScalarAsync())>0){cases.Add((period.Id,period.Date,person.Person,person.Relation));break;}}
+  if(cases.Count==2)break;
+ }
+ Check(cases.Count==2,"two-distinct-closed-contexts-with-independent-sources");
+ var requests=new List<RhNomCasoHistorico>();var index=1;
+ foreach(var item in cases){var date=item.Date.ToString("yyyy-MM-dd'T'HH:mm:ss");var reference=await new RhNomReferenciaHistoricaHandler(db).Get(new(10,item.Period,date,item.Person),company,ct);Check(reference.IsValid&&reference.Data!.IntegridadEstructural,"reference-for-matrix-case");requests.Add(new("CASO_"+index++,new(1,10,item.Period,date,item.Person,item.Relation,"EQUIVALENTES_GUARDADOS",true,reference.Data!.Hash)));}
+ var handler=new RhNomMatrizHistoricaHandler(db);var expected=new List<int>{10,12,13,14,19,20,21,22,23};var result=await handler.Handle(new(expected,requests),company,ct);Check(result.IsValid&&result.Data is not null,"multi-type-matrix-evaluated");var report=result.Data!;
+ Check(report.Tipos.Single(t=>t.CodigoTipoNomina==10).NominasComparadas==2&&report.Tipos.Single(t=>t.CodigoTipoNomina==10).MuestraSuficiente,"two-distinct-payrolls-observed-for-type10");
+ Check(!report.MuestreoCompleto&&report.Tipos.Where(t=>t.CodigoTipoNomina!=10).All(t=>!t.MuestraSuficiente&&t.Casos==0),"eight-missing-types-not-hidden");
+ Check(!report.CoincidenciaCompleta&&!report.ParidadCertificada&&!report.MovimientosAplicados,"diagnostic-differences-not-approved");
+ Check(report.Casos.All(c=>c.Comparado&&c.HashEntradas?.Length==64&&c.HashReferencia?.Length==64&&c.Error is null),"case-evidence-hashes-and-context-retained");
+ var partial=requests.Append(new RhNomCasoHistorico("INVALIDO",requests[0].Solicitud with{CodigoPersona=int.MaxValue})).ToList();var errors=await handler.Handle(new([10],partial),company,ct);Check(errors.IsValid&&errors.Data!.Estado=="DIAGNOSTICO_CON_ERRORES"&&errors.Data.Casos.Single(c=>c.CasoId=="INVALIDO").Error is not null&&!errors.Data.CoincidenciaCompleta,"bad-case-reported-without-false-overall-match");
+ Console.WriteLine("R57_MATRIX="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,ExpectedTypes=expected.Count,SampledTypes=1,MissingTypes=8,ComparedPayrolls=2,ParityCertified=false,NoPayrollWrites=true,NoPersonalDataInOutput=true,AuthenticationHttpTested=false}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

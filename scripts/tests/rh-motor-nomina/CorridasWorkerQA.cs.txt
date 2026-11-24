@@ -1,0 +1,26 @@
+using System.Data;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).AddInMemoryCollection(new Dictionary<string,string?>{{"RhMotorNomina:CorridasEnabled","true"}}).Build();
+var db=new ConnectionDB(cfg);var checks=new List<string>();const int actor=2147483646;var company=cfg.GetValue<int>("settings:EmpresaConfig");var ct=CancellationToken.None;
+void Check(bool v,string name){if(!v)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();using var sis=db.GetSisConnection();await cn.OpenAsync();await sis.OpenAsync();
+ OracleCommand Cmd(OracleConnection con,string sql,params (string,object)[] values){var c=con.CreateCommand();c.CommandText=sql;c.BindByName=true;c.CommandTimeout=25;foreach(var (n,v) in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:OracleDbType.Varchar2).Value=v;return c;}
+ foreach(var (con,alias) in new[]{(cn,"RH"),(sis,"SIS")}){using var c=Cmd(con,"SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL");using var r=await c.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg[$"OracleAnalysis:Targets:{alias}:ExpectedDatabaseName"]&&r.GetString(1)==cfg[$"OracleAnalysis:Targets:{alias}:ExpectedServerHost"]&&r.GetString(2)==alias,"identity-"+alias);}
+ using(var c=Cmd(sis,"SELECT COUNT(*) FROM SIS.SIS_USUARIOS WHERE CODIGO_USUARIO=:id",("id",actor)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"synthetic-actor-not-user");
+ var models=new RhNomVersionesHandler(db);var list=await models.GetAll(new(SearchText:"Q57_0523F8B5"),company,ct);Check(list.IsValid&&list.Data!.Count==1&&list.Data[0].ModeloId==1&&list.Data[0].UltimaVersion==7&&list.Data[0].Descripcion.Contains("QA TEST NO USAR"),"isolated-fixture-v7");
+ using(var c=Cmd(cn,"SELECT COUNT(*) FROM RH_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND ID_MODELO_CALCULO=1",("e",company)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"no-live-concept-binding");
+ var model=(await models.Get(new(1,7),company,ct)).Data!;var input=model.Configuracion.Variables.Single(v=>v.Origen=="ENTRADA").Codigo;
+ RhNomCrearCorrida Request(string key)=>new("QA_RUN_20261119_"+key,Lote:new(1,7,[new("A",new(2025,6,30),[new(input,"1300")])]));
+ var handler=new RhNomCorridasHandler(db,cfg);
+ var q=Request("HOSTED_WORKER");var saved=await handler.Crear(q,company,actor,ct);Check(saved.IsValid&&saved.Data is not null,"create-hosted-worker-fixture");
+ RhNomCorrida? run=null;for(var attempt=0;attempt<60;attempt++){var read=await handler.Get(new(saved.Data!.IdRun),company,actor,ct);run=read.Data;if(run?.Estado is "COMPLETADO" or "ERROR" or "CANCELADO")break;await Task.Delay(500);}
+ Check(run?.Estado=="COMPLETADO"&&run.Intentos==1,"hosted-worker-completed-once");
+ var detail=await handler.Detalle(new(run!.IdRun,"LOTE_MANUAL"),company,actor,ct);Check(detail.IsValid&&detail.Data!.Resultado!.Lote!.Casos.Single().Resultado.Simulacion.Resultados.Single().Resultado=="325","hosted-worker-persisted-expected-synthetic-result");
+ Check((await handler.Crear(q,company,actor,ct)).Data!.IdRun==run.IdRun,"retry-after-completion-idempotent");
+ Console.WriteLine("R57_HOSTED="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,NoPayrollWrites=true,AuthenticationHttpTested=false}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

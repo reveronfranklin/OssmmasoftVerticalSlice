@@ -79,7 +79,7 @@ public class GetCntMayorAnaliticoHandler(ConnectionDB connectionDB, IConfigurati
 
     private static CntMayorAnaliticoResponse MapMayorAnalitico(IDataReader reader)
     {
-        var monto = reader.SafeGetDecimal("MONTO");
+        var monto = CntMoney.FromOracle(reader.SafeGetDecimal("MONTO"));
 
         return new CntMayorAnaliticoResponse(
             CntDb.SafeGetNullableInt(reader, "CODIGO_COMPROBANTE"),
@@ -177,7 +177,7 @@ public class GetCntMovimientoAuxiliarHandler(ConnectionDB connectionDB, IConfigu
 
     private static CntMovimientoAuxiliarResponse MapMovimientoAuxiliar(IDataReader reader)
     {
-        var monto = reader.SafeGetDecimal("MONTO");
+        var monto = CntMoney.FromOracle(reader.SafeGetDecimal("MONTO"));
 
         return new CntMovimientoAuxiliarResponse(
             CntDb.SafeGetNullableInt(reader, "CODIGO_COMPROBANTE"),

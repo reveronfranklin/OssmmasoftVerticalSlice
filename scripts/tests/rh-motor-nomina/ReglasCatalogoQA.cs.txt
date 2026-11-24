@@ -1,0 +1,25 @@
+using System.Data;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Oracle.ManagedDataAccess.Client;
+using var cfg=JsonDocument.Parse(File.ReadAllText("/srv/ossmmasoft-pruebas/shared/config/vertical.json"));var root=cfg.RootElement;var company=int.Parse(root.GetProperty("settings").GetProperty("EmpresaConfig").ToString());var checks=new List<string>();
+void Check(bool value,string name){if(!value)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ var b=new OracleConnectionStringBuilder(root.GetProperty("ConnectionStrings").GetProperty("DefaultConnectionRH").GetString());b.ConnectionTimeout=8;using var cn=new OracleConnection(b.ConnectionString);await cn.OpenAsync();
+ OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.CommandText=sql;c.BindByName=true;c.CommandTimeout=25;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();var t=root.GetProperty("OracleAnalysis").GetProperty("Targets").GetProperty("RH");Check(company==13&&r.GetString(0)==t.GetProperty("ExpectedDatabaseName").GetString()&&r.GetString(1)==t.GetProperty("ExpectedServerHost").GetString()&&r.GetString(2)=="RH","identity-qa-rh-company13");}
+ async Task<string> Hash(){using var c=Cmd("SELECT TEXT FROM USER_SOURCE WHERE NAME='RH_PKG_ADJUNTAR_CARGO' ORDER BY TYPE,LINE");using var r=await c.ExecuteReaderAsync();var s=new StringBuilder();while(await r.ReadAsync())s.Append(r.IsDBNull(0)?"":r.GetString(0));return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s.ToString())));}
+ var old=await Hash();using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='SP_RH_NOM_CON_CAT'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"new-object-absent-before-install");
+ var text=string.Join("\n",File.ReadAllLines(args[0]).Where(l=>l.Trim()!="/"));using(var c=Cmd(text))await c.ExecuteNonQueryAsync();
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='SP_RH_NOM_CON_CAT' AND STATUS='VALID'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"new-procedure-valid");
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_ERRORS WHERE NAME='SP_RH_NOM_CON_CAT'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"new-procedure-no-errors");
+ async Task<(int Total,int Rows,int Eligible)> Read(int empresa,int page,string? ids=null){using var c=Cmd("RH.SP_RH_NOM_CON_CAT");c.CommandType=CommandType.StoredProcedure;
+  c.Parameters.Add("p_EMPRESA",OracleDbType.Int32).Value=empresa;c.Parameters.Add("p_NOMINA",OracleDbType.Int32).Value=10;c.Parameters.Add("p_PAGE",OracleDbType.Int32).Value=page;c.Parameters.Add("p_SIZE",OracleDbType.Int32).Value=100;c.Parameters.Add("p_SEARCH",OracleDbType.Varchar2).Value=DBNull.Value;c.Parameters.Add("p_IDS",OracleDbType.Varchar2).Value=(object?)ids??DBNull.Value;c.Parameters.Add("p_RESULT",OracleDbType.RefCursor,ParameterDirection.Output);var total=c.Parameters.Add("p_TOTAL",OracleDbType.Int32,ParameterDirection.Output);var rows=0;var eligible=0;
+  using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync()){rows++;Check(Convert.ToInt32(r["CODIGO_EMPRESA"])==empresa&&Convert.ToInt32(r["CODIGO_TIPO_NOMINA"])==10,"row-company-type");if(r["STATUS"].ToString()=="A"&&r["AUTOMATICO"].ToString()=="1"&&!r.IsDBNull(r.GetOrdinal("FRECUENCIA_ID"))&&Convert.ToInt32(r["FRECUENCIA_ID"])>0&&r["TIPO_CONCEPTO"].ToString() is "A" or "D")eligible++;}
+  return(int.Parse(total.Value.ToString()!),rows,eligible);
+ }
+ var page1=await Read(company,1);Check(page1.Rows<=100&&page1.Total>=page1.Rows&&page1.Total>0,"page-total-and-eligible-concepts");using(var c=Cmd("SELECT COUNT(*) FROM RH.RH_CONCEPTOS WHERE CODIGO_EMPRESA=13 AND CODIGO_TIPO_NOMINA=10 AND STATUS='A' AND AUTOMATICO=1 AND FRECUENCIA_ID>0 AND TIPO_CONCEPTO IN ('A','D')"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())>0,"eligible-concepts-present");var page2=await Read(company,2);Check(page2.Total==page1.Total,"pagination-stable-total");var foreign=await Read(company+999,1);Check(foreign.Total==0&&foreign.Rows==0,"foreign-company-empty");
+ try{await Read(company,1,"1);DELETE");throw new InvalidOperationException("malformed-filter-accepted");}catch(OracleException ex)when(ex.Number==20001){checks.Add("malformed-ids-rejected");}
+ Check(old==await Hash(),"legacy-package-unchanged");Console.WriteLine("R57_CATALOGO="+JsonSerializer.Serialize(new{Status="OK",Company=company,Checks=checks,TotalType10=page1.Total,EligibleFirstPage=page1.Eligible,OldPayrollHash=old,NoPayrollWrites=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

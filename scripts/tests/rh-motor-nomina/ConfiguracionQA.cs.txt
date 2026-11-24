@@ -1,0 +1,117 @@
+using System.Data;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+
+// Run only on QA. Uses synthetic configuration fixtures; never executes payroll.
+if(args.Length!=3 || args[0]!="--qa-install-test") throw new InvalidOperationException("Use --qa-install-test <scriptsDir> <resultDir> on QA.");
+const string configPath="/srv/ossmmasoft-pruebas/shared/config/vertical.json";
+var scripts=Path.GetFullPath(args[1]);var results=Path.GetFullPath(args[2]);Directory.CreateDirectory(results);
+var config=new ConfigurationBuilder().AddJsonFile(configPath,false,false).Build();
+var empresa=config.GetValue<int>("settings:EmpresaConfig");
+var db=new ConnectionDB(config);var checks=new List<string>();string phase="identity";
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);Console.WriteLine("R57_CHECK "+name+" OK");}
+using var sis=db.GetSisConnection();using var rh=db.GetRhConnection();
+async Task<OracleCommand> Query(OracleConnection cn,string sql,params (string,object)[] binds){var cmd=cn.CreateCommand();cmd.CommandText=sql;cmd.BindByName=true;cmd.CommandTimeout=20;foreach(var(n,v) in binds)cmd.Parameters.Add(n,v is int?OracleDbType.Int32:OracleDbType.Varchar2).Value=v;await Task.CompletedTask;return cmd;}
+async Task<int> Scalar(OracleConnection cn,string sql,params (string,object)[] binds){using var q=await Query(cn,sql,binds);return Convert.ToInt32(await q.ExecuteScalarAsync());}
+async Task Identity(OracleConnection cn,string alias){await cn.OpenAsync();using var q=await Query(cn,"SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL");using var r=await q.ExecuteReaderAsync();await r.ReadAsync();var expected=config.GetSection("OracleAnalysis:Targets:"+alias);Check(r.GetString(0)==expected["ExpectedDatabaseName"] && r.GetString(1)==expected["ExpectedServerHost"] && r.GetString(2)==alias,"identity-"+alias);}
+async Task<string> OldHash(){using var q=await Query(rh,"SELECT TEXT FROM USER_SOURCE WHERE NAME='RH_PKG_ADJUNTAR_CARGO' ORDER BY TYPE,LINE");using var r=await q.ExecuteReaderAsync();var b=new StringBuilder();while(await r.ReadAsync())b.Append(r.IsDBNull(0)?"":r.GetString(0));return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(b.ToString())));}
+try{
+ await Identity(sis,"SIS");await Identity(rh,"RH");Check(empresa==13,"company-QA");
+ var oldHash=await OldHash();
+ var before=await Scalar(rh,"SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME IN ('RH_NOM_VAR','RH_NOM_VAR_SEQ','RH_NOM_MOD_CTL','RH_NOM_MOD_VER','RH_PKG_NOM_CFG','TR_RH_NOM_VER_IMM')");
+ // A private receipt authorizes resuming only this initial installation if interrupted.
+ var receipt=Path.Combine(results,"installation.json");
+ if(before>0 && !File.Exists(receipt))throw new InvalidOperationException("Existing objects without initial-install receipt; inspect before replacing.");
+ if(!File.Exists(receipt))File.WriteAllText(receipt,JsonSerializer.Serialize(new{BeforeObjects=before,OldPayrollHash=oldHash,CreatedUtc=DateTimeOffset.UtcNow}));
+ phase="install";
+ foreach(var file in new[]{"00_SIS_NOM_CFG_GRANT.sql","01_RH_NOM_CFG_TABLES.sql","02_RH_PKG_NOM_CFG.sql"}){
+  var raw=await File.ReadAllTextAsync(Path.Combine(scripts,file));
+  var clean=string.Join("\n",raw.Split('\n').Where(l=>!l.TrimStart().StartsWith("--")));
+  foreach(var block in Regex.Split(clean,@"(?m)^\s*/\s*$")){
+   var sql=block.Trim();if(sql.Length==0)continue;if(sql.StartsWith("GRANT",StringComparison.OrdinalIgnoreCase))sql=sql.TrimEnd(';');
+   using var cmd=await Query(file.StartsWith("00_")?sis:rh,sql);await cmd.ExecuteNonQueryAsync();
+  }
+  Check(true,"installed-"+file);
+ }
+ var errors=new List<string>();
+ using(var q=await Query(rh,"SELECT NAME||'/'||TYPE||' line '||TO_CHAR(LINE)||': '||TEXT FROM USER_ERRORS WHERE NAME IN ('RH_PKG_NOM_CFG','TR_RH_NOM_VER_IMM') ORDER BY NAME,TYPE,SEQUENCE"))
+ using(var r=await q.ExecuteReaderAsync())while(await r.ReadAsync())errors.Add(r.GetString(0));
+ if(errors.Count>0){File.WriteAllLines(Path.Combine(results,"compile-errors.txt"),errors);Console.WriteLine(string.Join("\n",errors));throw new InvalidOperationException("Objects have compile errors");}
+ Check(await Scalar(rh,"SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME IN ('RH_PKG_NOM_CFG','TR_RH_NOM_VER_IMM') AND STATUS<>'VALID'")==0,"oracle-objects-valid");
+ Check(await OldHash()==oldHash,"old-payroll-package-unchanged");
+ phase="fixtures";
+ var tag="Q57_"+Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+ var actor=int.MaxValue;
+ while(await Scalar(sis,"SELECT COUNT(*) FROM SIS.SIS_USUARIOS WHERE CODIGO_USUARIO=:id",("id",actor))>0)actor--;
+ var model=0;
+ using(var tx=sis.BeginTransaction()){
+  using(var q=await Query(sis,"LOCK TABLE SIS.OSS_MODELO_CALCULO IN SHARE ROW EXCLUSIVE MODE NOWAIT")){q.Transaction=tx;await q.ExecuteNonQueryAsync();}
+  var occupied=new HashSet<int>();
+  using(var q=await Query(sis,"SELECT ID FROM SIS.OSS_MODELO_CALCULO WHERE ID BETWEEN 1 AND 10000")){q.Transaction=tx;using var r=await q.ExecuteReaderAsync();while(await r.ReadAsync())occupied.Add(r.GetInt32(0));}
+  // Avoid attaching the fixture to concepts with orphaned model references.
+  using(var q=await Query(rh,"SELECT DISTINCT ID_MODELO_CALCULO FROM RH.RH_CONCEPTOS WHERE CODIGO_EMPRESA=:company AND ID_MODELO_CALCULO BETWEEN 1 AND 10000",("company",empresa)))
+  {using var r=await q.ExecuteReaderAsync();while(await r.ReadAsync())occupied.Add(r.GetInt32(0));}
+  model=Enumerable.Range(1,10000).First(i=>!occupied.Contains(i)); // Bounded gap allocator under lock, not MAX+1.
+  using(var q=await Query(sis,"INSERT INTO SIS.OSS_MODELO_CALCULO(ID,DESCRIPCION,CODIGO_EMPRESA,USUARIO_INS,FECHA_INS) VALUES(:id,:description,:company,:actor,SYSDATE)",("id",model),("description",tag+" QA TEST NO USAR"),("company",empresa),("actor",actor))){q.Transaction=tx;await q.ExecuteNonQueryAsync();}
+  await tx.CommitAsync();
+ }
+ var type=await Scalar(rh,"SELECT MIN(CODIGO_TIPO_NOMINA) FROM RH.RH_TIPOS_NOMINA WHERE CODIGO_EMPRESA=:company AND CODIGO_TIPO_NOMINA>0",("company",empresa));
+ var vars=new RhNomVariablesHandler(db);var models=new RhNomVersionesHandler(db);
+ async Task<RhNomVariableGuardada> NewVar(string suffix,string unit,string origin){var r=await vars.Save(new(0,0,tag+suffix,"QA synthetic "+suffix,"NUMERO",unit,origin),empresa,actor,CancellationToken.None);Check(r.IsValid,"create-variable"+suffix);return r.Data!;}
+ var b1=await NewVar("_BASE","DINERO","ENTRADA");var d1=await NewVar("_DIV","FACTOR","PARAMETRO");var r1=await NewVar("_RES","DINERO","CALCULADA");
+ var refs=new List<RhNomVariableRef>{new(b1.Id,b1.Version),new(d1.Id,d1.Version),new(r1.Id,r1.Version)};
+ var definition=new RhNomModeloSave(model,0,type,"ADJUNTAR_CARGO",tag+" revision",refs,[new(tag+"_RES","ROUND("+new string(' ',3650)+"["+tag+"_BASE]/["+tag+"_DIV],2)")]);
+ var listed=await vars.GetAll(new(SearchText:tag),empresa,CancellationToken.None);Check(listed.IsValid&&listed.CantidadRegistros==3,"catalog-pagination");
+ phase="version-save";
+ var saved=await models.Save(definition,empresa,actor,CancellationToken.None);Check(saved.IsValid&&saved.Data!.Version==1,"save-version-1");
+ var loaded=await models.Get(new(model,1),empresa,CancellationToken.None);Check(loaded.IsValid&&loaded.Data!.Hash==saved.Data!.Hash,"load-version-1");
+ Check(Encoding.UTF8.GetByteCount(RhNomConfiguracion.Serializar(loaded.Data!.Configuracion).Text)>4000,"fragmented-config-over-4000");
+ var inputs=new List<RhNomValorEntrada>{new(tag+"_BASE","1300"),new(tag+"_DIV","2")};
+ async Task<string> Sim(int version){var v=await models.Simulate(new(model,version,inputs),empresa,CancellationToken.None);Check(v.IsValid,"simulate-version-"+version);return v.Data!.Resultados.Single().Resultado;}
+ Check(await Sim(1)=="650","saved-result-650");
+ var update=await vars.Save(new(b1.Id,1,tag+"_BASE","QA changed definition","NUMERO","DINERO","ENTRADA"),empresa,actor,CancellationToken.None);
+ Check(update.IsValid&&update.Data!.Version==2,"update-catalog-version");
+ var stale=await models.Save(definition with{VersionEsperada=1},empresa,actor,CancellationToken.None);Check(!stale.IsValid,"reject-stale-variable");
+ refs=[new(b1.Id,2),new(d1.Id,1),new(r1.Id,1)];
+ var changed=definition with{VersionEsperada=1,Variables=refs,Formulas=[new(tag+"_RES",definition.Formulas[0].Expresion+"+10")]};
+ Check(!(await models.Save(changed with{VersionEsperada=0},empresa,actor,CancellationToken.None)).IsValid,"reject-stale-model");
+ var v2=await models.Save(changed,empresa,actor,CancellationToken.None);Check(v2.IsValid&&v2.Data!.Version==2,"save-version-2");
+ Check(await Sim(1)=="650"&&await Sim(2)=="660","old-snapshot-stays-stable");
+ Check(!(await models.Get(new(model,1),empresa+999,CancellationToken.None)).IsValid,"reject-cross-company-read");
+ Check(!(await vars.Save(new(b1.Id,2,tag+"_BASE","foreign","NUMERO","DINERO","ENTRADA"),empresa+999,actor,CancellationToken.None)).IsValid,"reject-cross-company-update");
+ phase="immutable-rollback";
+ using(var tx=rh.BeginTransaction()){
+  bool blocked=false;try{using var q=await Query(rh,"UPDATE RH_NOM_MOD_VER SET DESCRIPCION='QA forbidden' WHERE ID_MODELO=:model AND CODIGO_EMPRESA=:company AND VERSION=1",("model",model),("company",empresa));q.Transaction=tx;await q.ExecuteNonQueryAsync();}catch(OracleException ex) when(ex.Number==20004){blocked=true;}finally{await tx.RollbackAsync();}Check(blocked,"immutable-revision-trigger");
+ }
+ try{
+  await RhNomCfgDb.Guardar<int>(rh,async tx=>{
+   using var q=RhNomCfgDb.Comando(rh,"VAR_SAVE",tx);
+   RhNomCfgDb.Add(q,"p_EMPRESA",OracleDbType.Int32,empresa);RhNomCfgDb.Add(q,"p_ACTOR",OracleDbType.Int32,actor);
+   RhNomCfgDb.Add(q,"p_ID",OracleDbType.Int32,0);RhNomCfgDb.Add(q,"p_VERSION",OracleDbType.Int32,0);
+   RhNomCfgDb.Add(q,"p_CODIGO",OracleDbType.Varchar2,tag+"_ROLLBACK");RhNomCfgDb.Add(q,"p_DESCRIPCION",OracleDbType.Varchar2,"QA rollback");
+   RhNomCfgDb.Add(q,"p_TIPO",OracleDbType.Varchar2,"NUMERO");RhNomCfgDb.Add(q,"p_UNIDAD",OracleDbType.Varchar2,"NUMERO");
+   RhNomCfgDb.Add(q,"p_ORIGEN",OracleDbType.Varchar2,"ENTRADA");RhNomCfgDb.Add(q,"p_ACTIVA",OracleDbType.Int32,1);
+   RhNomCfgDb.Out(q,"p_ID_OUT");RhNomCfgDb.Out(q,"p_VERSION_OUT");await q.ExecuteNonQueryAsync();throw new RhNomError("QA_ROLLBACK","Expected test rollback");
+  },CancellationToken.None);
+ }catch(RhNomError ex) when(ex.Diagnostico.Codigo=="QA_ROLLBACK"){}
+ Check((await vars.GetAll(new(SearchText:tag+"_ROLLBACK"),empresa,CancellationToken.None)).CantidadRegistros==0,"transaction-rollback");
+ phase="concurrency";
+ var competing=await Task.WhenAll(models.Save(changed with{VersionEsperada=2},empresa,actor,CancellationToken.None),models.Save(changed with{VersionEsperada=2},empresa,actor,CancellationToken.None));
+ Check(competing.Count(r=>r.IsValid)==1&&competing.Single(r=>r.IsValid).Data!.Version==3,"concurrent-save-single-winner");
+ Check(await Sim(1)=="650"&&await Sim(3)=="660","versions-independent-after-concurrency");
+ Check(await OldHash()==oldHash,"old-payroll-package-still-unchanged");
+ var report=new{Status="OK",Company=empresa,FixturePrefix=tag,ModelId=model,SyntheticActor=actor,Checks=checks,OldPayrollHash=oldHash,ApiPublished=false};
+ File.WriteAllText(Path.Combine(results,"result.json"),JsonSerializer.Serialize(report,new JsonSerializerOptions{WriteIndented=true}));
+ Console.WriteLine("R57_RESULT="+JsonSerializer.Serialize(report));
+ return 0;
+}catch(Exception ex){
+ var code=ex is OracleException oe?oe.Number:0;
+ Console.WriteLine("R57_FAILURE="+JsonSerializer.Serialize(new{Phase=phase,Kind=ex.GetType().Name,OracleCode=code,Check=ex is InvalidOperationException?ex.Message:"Technical failure; sensitive details omitted",Completed=checks}));
+ return 1;
+}

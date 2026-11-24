@@ -1,0 +1,19 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ RhNomLotePrenomina lot;
+ using(var tx=cn.BeginTransaction()){
+  using(var c=cn.CreateCommand()){c.Transaction=tx;c.CommandText="SELECT VERSION FROM RH_NOM_PRE_LOT WHERE ID_LOTE=2 AND CODIGO_EMPRESA=13 AND ACTOR=2147483646 FOR UPDATE WAIT 20";await c.ExecuteScalarAsync();}
+  lot=(await RhNomPrenominaDb.Leer(cn,company,actor,2,null,ct))!;Check(lot.Documento.Estado is "CALCULANDO" or "LISTA" or "CANCELADA","own-technical-batch-only");
+  if(lot.Documento.Estado!="CANCELADA")await RhNomPrenominaDb.Guardar(cn,lot,lot.Documento with{Estado="CANCELADA"},ct,tx);await tx.CommitAsync(ct);
+ }
+ lot=(await RhNomPrenominaDb.Leer(cn,company,actor,2,null,ct))!;var d=lot.Documento;Check(d.Estado=="CANCELADA","technical-trial-cancelled-to-prioritize-real-sis-trial");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Lote=lot.IdLote,lot.Version,State=d.Estado,d.Completados,d.Excluidos,d.Vacantes,d.Asignaciones,d.Deducciones,d.Neto,d.ErrorTemporal,Rows=d.Casos.Sum(c=>c.Filas),Counts=d.Casos.GroupBy(c=>c.Estado).ToDictionary(g=>g.Key,g=>g.Count()),Errors=d.Casos.Where(c=>c.Estado=="ERROR").Select(c=>new{c.Persona,c.Motivo,c.IdRun}),NoOriginalMovementWrites=true}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+":"+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

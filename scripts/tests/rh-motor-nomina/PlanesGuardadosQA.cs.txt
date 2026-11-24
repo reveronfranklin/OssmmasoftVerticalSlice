@@ -1,0 +1,48 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ async Task<string> FinancialHash(){var rows=new List<string>();using var c=Cmd("SELECT CODIGO_MOV_NOMINA,CODIGO_EMPRESA,CODIGO_TIPO_NOMINA,CODIGO_PERSONA,CODIGO_CONCEPTO,FRECUENCIA_ID,TIPO,TO_CHAR(MONTO,'TM9','NLS_NUMERIC_CHARACTERS=''.,'''),STATUS,COMPLEMENTO_CONCEPTO,EXTRA1,EXTRA2,EXTRA3,USUARIO_INS,FECHA_INS,USUARIO_UPD,FECHA_UPD FROM RH_MOV_NOMINA ORDER BY CODIGO_MOV_NOMINA");using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync()){var values=new object?[r.FieldCount];for(var i=0;i<values.Length;i++)values[i]=r.IsDBNull(i)?null:r.GetValue(i);rows.Add(JsonSerializer.Serialize(values));}return RhNomRecalculosHistoricos.Hash(rows);}
+ var before=await FinancialHash();var ids=new List<int>();foreach(var role in new[]{"FPS","PF","PH"})using(var c=Cmd("SELECT ID_RUN FROM RH_NOM_RUN WHERE CODIGO_EMPRESA=:e AND ACTOR=:a AND CLAVE_SOL=:k",("e",company),("a",actor),("k","QA_CONSOL_20261120_"+role)))ids.Add(Convert.ToInt32(await c.ExecuteScalarAsync()));
+ Check(ids.Count==3&&ids.All(i=>i>0),"three-existing-fixture-runs");
+ const string key="QA_PLAN_ARCHIVO_20261120_01";var q=new RhNomGuardarPlan(key,ids);var handler=new RhNomPlanesGuardadosHandler(db,cfg);
+ var results=await Task.WhenAll(Enumerable.Range(0,3).Select(_=>handler.Crear(q,company,actor,ct)));
+ foreach(var r in results)Check(r.IsValid&&r.Data is not null,"concurrent-request-valid");var saved=results[0].Data!;
+ Check(results.All(r=>r.Data!.Cabecera.IdPlan==saved.Cabecera.IdPlan),"one-id-for-three-concurrent-requests");
+ Check(results.All(r=>r.Data!.Cabecera.HashDocumento==saved.Cabecera.HashDocumento),"original-image-on-retry");
+ Check(saved.Diagnostico.PlanPersistido,"archived-diagnostic-persisted-flag");
+ Check(saved.PlanPersistido&&!saved.MovimientosAplicados&&!saved.PropiedadRegistrada&&!saved.AplicacionDisponible&&!saved.ParidadCertificada,"plan-not-application");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_PLAN WHERE CODIGO_EMPRESA=:e AND ACTOR=:a AND CLAVE_SOL=:k",("e",company),("a",actor),("k",key)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"single-physical-row");
+ var reversed=await handler.Crear(q with{Corridas=ids.AsEnumerable().Reverse().ToList()},company,actor,ct);Check(reversed.IsValid&&reversed.Data!.Cabecera==saved.Cabecera,"retry-order-canonical");
+ var conflict=await handler.Crear(q with{Corridas=[ids[0]]},company,actor,ct);Check(!conflict.IsValid,"same-key-other-runs-rejected");
+ var detail=await handler.Leer(new(saved.Cabecera.IdPlan),company,actor,ct);Check(detail.IsValid&&detail.Data!.Cabecera==saved.Cabecera,"saved-detail");
+ Check(detail.Data!.Diagnostico.Plan.TieneBloqueos&&detail.Data.Diagnostico.Plan.Pasos.Count==3,"saved-blocks-replayed");
+ Check(!((await handler.Leer(new(saved.Cabecera.IdPlan),company,actor-1,ct)).IsValid),"foreign-actor-denied");
+ Check(!((await handler.Leer(new(saved.Cabecera.IdPlan),company+1,actor,ct)).IsValid),"foreign-company-denied");
+ Check(!((await handler.Crear(q,company,actor-1,ct)).IsValid),"foreign-actor-cannot-save-runs");
+ var listing=await handler.Listar(new(1,10),company,actor,ct);Check(listing.IsValid&&listing.Data!.Any(p=>p.IdPlan==saved.Cabecera.IdPlan),"own-paginated-list");Check(listing.Data!.All(p=>p.CodigoEmpresa==company&&p.Actor==actor),"list-scope");
+ Check(!((await handler.Listar(new(1,10,"texto"),company,actor,ct)).IsValid),"unsupported-search-rejected");
+ foreach(var sql in new[]{"UPDATE RH_NOM_FIN_PLAN SET HASH_DOC=HASH_DOC WHERE ID_PLAN=:i","DELETE FROM RH_NOM_FIN_PLAN WHERE ID_PLAN=:i"}){
+  using var tx=cn.BeginTransaction();using var c=Cmd(sql,("i",saved.Cabecera.IdPlan));c.Transaction=tx;var blocked=false;try{await c.ExecuteNonQueryAsync();}catch(OracleException ex)when(ex.Number==20004){blocked=true;}await tx.RollbackAsync();Check(blocked,"immutable-journal-rejects-dml");
+ }
+ string docText;using(var c=Cmd("SELECT DOCUMENTO FROM RH_NOM_FIN_PLAN WHERE ID_PLAN=:i",("i",saved.Cabecera.IdPlan)))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();docText=r.GetOracleClob(0).Value;}
+ Check(RhNomCorridas.Hash(docText)==saved.Cabecera.HashDocumento,"persisted-document-hash");
+ const string rollbackKey="QA_PLAN_ROLLBACK_20261120_01";
+ Check(await RhNomPlanesGuardadosDb.PorClave(cn,company,actor,rollbackKey,ct) is null,"rollback-key-absent-before");
+ using(var tx=cn.BeginTransaction()){
+  using var c=cn.CreateCommand();c.Transaction=tx;c.BindByName=true;c.CommandTimeout=25;c.CommandType=System.Data.CommandType.StoredProcedure;c.CommandText="RH.RH_PKG_NOM_FIN_PLAN.CREAR";
+  RhNomCfgDb.Add(c,"p_EMPRESA",OracleDbType.Int32,company);RhNomCfgDb.Add(c,"p_ACTOR",OracleDbType.Int32,actor);RhNomCfgDb.Add(c,"p_CLAVE",OracleDbType.Varchar2,rollbackKey);
+  RhNomCfgDb.Add(c,"p_HASH_SOL",OracleDbType.Varchar2,saved.Cabecera.HashSolicitud);RhNomCfgDb.Add(c,"p_DOC",OracleDbType.Clob,docText);RhNomCfgDb.Add(c,"p_HASH_DOC",OracleDbType.Varchar2,saved.Cabecera.HashDocumento);RhNomCfgDb.Out(c,"p_ID");
+  await c.ExecuteNonQueryAsync(ct);await tx.RollbackAsync();
+ }
+ Check(await RhNomPlanesGuardadosDb.PorClave(cn,company,actor,rollbackKey,ct) is null,"no-internal-commit-rollback-preserved");
+ Check(before==await FinancialHash(),"all-financial-images-unchanged");
+ Console.WriteLine("R57_PLANES="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,PlanId=saved.Cabecera.IdPlan,RunIds=ids,DocumentHash=saved.Cabecera.HashDocumento,FinancialTableHash=before,ConcurrentRequests=3,NoPayrollWrites=true,LegacyPackageCalled=false,HistoricalParityCertified=false}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

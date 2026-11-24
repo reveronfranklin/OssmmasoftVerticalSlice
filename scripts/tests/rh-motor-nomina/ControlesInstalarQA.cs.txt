@@ -1,0 +1,18 @@
+using System.Data;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var checks=new List<string>();
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=new OracleConnection(cfg["ConnectionStrings:DefaultConnectionRH"]);await cn.OpenAsync();
+ OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.BindByName=true;c.CommandTimeout=25;c.CommandText=sql;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(cfg.GetValue<int>("settings:EmpresaConfig")==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","qa-identity");}
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME IN ('SP_RH_NOM_CTL_ACT')"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"new-objects-absent");
+ var block=new StringBuilder();foreach(var line in File.ReadLines(args[0])){if(line.Trim()=="/"){if(block.ToString().Trim().Length>0){using var c=Cmd(block.ToString());await c.ExecuteNonQueryAsync();}block.Clear();}else block.AppendLine(line);}
+ Check(string.IsNullOrWhiteSpace(block.ToString()),"script-complete");
+ using(var c=Cmd("SELECT NAME,LINE,POSITION,TEXT FROM USER_ERRORS WHERE NAME IN ('SP_RH_NOM_CTL_ACT') ORDER BY NAME,SEQUENCE"))using(var r=await c.ExecuteReaderAsync()){while(await r.ReadAsync())Console.WriteLine("R57_SQL_ERROR="+r.GetString(0)+":"+r.GetValue(1)+":"+r.GetValue(2)+" "+r.GetString(3));}
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME IN ('SP_RH_NOM_CTL_ACT') AND STATUS='VALID'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"control-procedure-valid");
+ Console.WriteLine("R57_INSTALL="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,NoPayrollWrites=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

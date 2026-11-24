@@ -1,0 +1,31 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ async Task<string> TableHash(){var rows=new List<string>();using var c=Cmd("SELECT CODIGO_MOV_NOMINA,CODIGO_EMPRESA,CODIGO_TIPO_NOMINA,CODIGO_PERSONA,CODIGO_CONCEPTO,FRECUENCIA_ID,TIPO,TO_CHAR(MONTO,'TM9','NLS_NUMERIC_CHARACTERS=''.,'''),STATUS,COMPLEMENTO_CONCEPTO,EXTRA1,EXTRA2,EXTRA3,USUARIO_INS,FECHA_INS,USUARIO_UPD,FECHA_UPD FROM RH_MOV_NOMINA ORDER BY CODIGO_MOV_NOMINA");using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync()){var values=new object?[r.FieldCount];for(var i=0;i<values.Length;i++)values[i]=r.IsDBNull(i)?null:r.GetValue(i);rows.Add(JsonSerializer.Serialize(values));}return RhNomRecalculosHistoricos.Hash(rows);}
+ var before=await TableHash();var ids=new List<int>();foreach(var role in new[]{"FPS","PF","PH"})using(var c=Cmd("SELECT ID_RUN FROM RH_NOM_RUN WHERE CODIGO_EMPRESA=:e AND ACTOR=:a AND CLAVE_SOL=:k",("e",company),("a",actor),("k","QA_CONSOL_20261120_"+role)))ids.Add(Convert.ToInt32(await c.ExecuteScalarAsync()));
+ Check(ids.Count==3&&ids.All(i=>i>0),"three-existing-fixture-runs");
+ var result=await new RhNomDiagnosticoFinancieroHandler(db,cfg).Handle(new(ids),company,actor,ct);
+ Check(result.IsValid&&result.Data is not null,"handler-valid");var report=result.Data!;
+ Check(report.Plan.Pasos.Count==3,"three-financial-destinations");
+ Check(!report.AplicacionDisponible&&!report.Plan.AplicacionDisponible&&!report.Plan.MovimientosAplicados&&!report.PlanPersistido&&!report.PropiedadRegistrada&&!report.ParidadCertificada,"no-financial-authority-or-persistence");
+ var context=report.Consolidacion;var capture=await RhNomMovimientosPlanDb.Leer(cn,company,context.CodigoTipoNomina,context.CodigoPersona,ct);
+ Check(capture.Imagenes.Count==report.CantidadMovimientos,"captured-count");
+ Check(capture.Imagenes.All(r=>r.CodigoEmpresa==company&&r.CodigoTipoNomina==context.CodigoTipoNomina&&r.CodigoPersona==context.CodigoPersona),"capture-scoped");
+ Check(capture.Imagenes.Select(r=>r.Id).Distinct().Count()==capture.Imagenes.Count,"distinct-identities");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_MOV_NOMINA WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND CODIGO_PERSONA=:p",("e",company),("t",context.CodigoTipoNomina),("p",context.CodigoPersona)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==capture.Imagenes.Count,"independent-row-count");
+ foreach(var image in capture.Imagenes){Check(RhNomPlanesFinancieros.Hash(image).Length==64,"image-hash-"+image.Id);using var c=Cmd("SELECT TO_CHAR(MONTO,'TM9','NLS_NUMERIC_CHARACTERS=''.,'''),EXTRA1,EXTRA2,EXTRA3,FECHA_UPD FROM RH_MOV_NOMINA WHERE CODIGO_MOV_NOMINA=:i",("i",image.Id));using var r=await c.ExecuteReaderAsync();Check(await r.ReadAsync(),"image-exists");Check((r.IsDBNull(0)?null:r.GetString(0))==image.Monto,"unrounded-oracle-number");Check((r.IsDBNull(1)?null:r.GetString(1))==image.Extra1&&(r.IsDBNull(2)?null:r.GetString(2))==image.Extra2&&(r.IsDBNull(3)?null:r.GetString(3))==image.Extra3,"extras-preserved");Check((r.IsDBNull(4)?(DateTime?)null:r.GetDateTime(4))==image.FechaUpd,"audit-preserved");}
+ Check(report.Plan.Pasos.All(p=>p.Accion=="BLOQUEADO"&&p.Bloqueo is "MOVIMIENTO_NO_PROPIO" or "INDICE_UNICO_OTRO_AMBITO"),"existing-legacy-movements-protected");
+ Check(!((await new RhNomDiagnosticoFinancieroHandler(db,cfg).Handle(new(ids),company,actor-1,ct)).IsValid),"foreign-actor-denied");
+ Check(!((await new RhNomDiagnosticoFinancieroHandler(db,cfg).Handle(new(ids),company+1,actor,ct)).IsValid),"foreign-company-denied");
+ Check(!((await new RhNomDiagnosticoFinancieroHandler(db,cfg).Handle(new([ids[0],ids[0]]),company,actor,ct)).IsValid),"duplicate-runs-denied");
+ Check(before==await TableHash(),"all-financial-images-unchanged");
+ Console.WriteLine("R57_FIN_PLAN="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,RunIds=ids,FinancialTableHash=before,Destinations=report.Plan.Pasos.Select(p=>new{p.CodigoConcepto,p.Accion,p.Bloqueo}),MovementCount=report.CantidadMovimientos,NoPayrollWrites=true,LegacyPackageCalled=false,HistoricalParityCertified=false}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

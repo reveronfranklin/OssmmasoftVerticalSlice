@@ -1,0 +1,18 @@
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var checks=new List<string>();
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+List<string> Blocks(string path){var result=new List<string>();var block=new StringBuilder();foreach(var line in File.ReadLines(path)){if(line.TrimStart().StartsWith("--"))continue;if(line.Trim()=="/"){if(block.ToString().Trim().Length>0)result.Add(block.ToString().Trim());block.Clear();}else block.AppendLine(line);}Check(string.IsNullOrWhiteSpace(block.ToString()),"script-complete");return result;}
+string Normalize(string text)=>string.Join("\n",text.Replace("\r","").Split('\n').Select(l=>l.TrimEnd())).Trim();
+try{
+ using var cn=new OracleConnection(cfg["ConnectionStrings:DefaultConnectionRH"]);await cn.OpenAsync();OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.BindByName=true;c.CommandTimeout=25;c.CommandText=sql;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(cfg.GetValue<int>("settings:EmpresaConfig")==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","qa-identity");}
+ var expected=Blocks(args[0]);Check(expected.Count==1,"single-feature-procedure");
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='SP_RH_NOM_ACU_MES'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"new-feature-procedure-absent");
+ using(var c=Cmd(expected[0]))await c.ExecuteNonQueryAsync();
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_ERRORS WHERE NAME='SP_RH_NOM_ACU_MES'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"no-procedure-errors");
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='SP_RH_NOM_ACU_MES' AND OBJECT_TYPE='PROCEDURE' AND STATUS='VALID'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"feature-procedure-valid");
+ Console.WriteLine("R57_INSTALL="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,NoPayrollWrites=true,LegacyPackageChanged=false}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

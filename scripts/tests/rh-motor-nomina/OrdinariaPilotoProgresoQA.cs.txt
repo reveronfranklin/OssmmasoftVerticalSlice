@@ -1,0 +1,13 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var progress=new List<object>();using(var c=cn.CreateCommand()){c.CommandTimeout=25;c.CommandText="SELECT ID_RUN,ESTADO,ROUND((NVL(FECHA_FIN,SYSDATE)-FECHA_INICIO)*86400),DBMS_LOB.GETLENGTH(DATOS_JSON),DBMS_LOB.GETLENGTH(RESULT_JSON),INTENTOS FROM RH_NOM_RUN WHERE CODIGO_EMPRESA=13 AND ACTOR=2147483646 AND CLAVE_SOL LIKE 'QA_ORD_LOTE1_RUN_%' ORDER BY ID_RUN";using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync())progress.Add(new{Run=r.GetInt32(0),State=r.GetString(1),Seconds=r.IsDBNull(2)?(int?)null:r.GetInt32(2),InputBytes=r.IsDBNull(3)?(int?)null:r.GetInt32(3),OutputBytes=r.IsDBNull(4)?(int?)null:r.GetInt32(4),Attempts=r.GetInt32(5)});}
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Progress=progress,NoPayrollWrites=true}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

@@ -33,6 +33,7 @@ public sealed class OracleAnalisisTarget
     public string ExpectedSessionUser { get; set; } = "";
     // Explicit names; empty means sources are denied. No wildcard.
     public List<string> SourceObjects { get; set; } = [];
+    public Dictionary<string, OracleAnalisisDataPolicy> DataObjects { get; set; } = new();
 }
 public static class OracleAnalisisRules
 {

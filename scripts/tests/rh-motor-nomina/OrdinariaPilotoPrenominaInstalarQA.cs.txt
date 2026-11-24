@@ -1,0 +1,19 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var input=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;var sql=input.GetProperty("Sql").GetString()!;sql=sql[sql.IndexOf("CREATE OR REPLACE",StringComparison.Ordinal)..].Trim().TrimEnd('/').Trim();
+ string Normalize(string value)=>System.Text.RegularExpressions.Regex.Replace(value.Replace("RH.SP_RH_NOM_PRE_FUE","SP_RH_NOM_PRE_FUE"),@"\s+"," ").Trim();
+ var existing=new System.Text.StringBuilder();using(var c=cn.CreateCommand()){c.CommandText="SELECT TEXT FROM ALL_SOURCE WHERE OWNER='RH' AND NAME='SP_RH_NOM_PRE_FUE' AND TYPE='PROCEDURE' ORDER BY LINE";using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync())existing.Append(r.GetString(0));}
+ if(existing.Length>0)Check(Normalize(existing.ToString())==Normalize(sql.Replace("CREATE OR REPLACE ","")),"existing-object-is-the-same-read-only-procedure");
+ using(var c=cn.CreateCommand()){c.CommandText=sql;await c.ExecuteNonQueryAsync();}
+ using(var c=cn.CreateCommand()){c.CommandText="SELECT COUNT(*) FROM ALL_OBJECTS WHERE OWNER='RH' AND OBJECT_NAME='SP_RH_NOM_PRE_FUE' AND OBJECT_TYPE='PROCEDURE' AND STATUS='VALID'";Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"procedure-valid");}
+ using(var c=cn.CreateCommand()){c.CommandText="SELECT COUNT(*) FROM ALL_ERRORS WHERE OWNER='RH' AND NAME='SP_RH_NOM_PRE_FUE' AND TYPE='PROCEDURE' AND ATTRIBUTE='ERROR'";Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"zero-compilation-errors");}
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Object="RH.SP_RH_NOM_PRE_FUE",NoPayrollWrites=true}}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

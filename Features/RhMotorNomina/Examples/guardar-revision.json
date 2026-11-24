@@ -1,0 +1,15 @@
+{
+  "modeloId": 7,
+  "versionEsperada": 0,
+  "codigoTipoNomina": 10,
+  "escenario": "ADJUNTAR_CARGO",
+  "descripcion": "Borrador de sueldo por periodo",
+  "variables": [
+    { "id": 1, "versionEsperada": 1 },
+    { "id": 2, "versionEsperada": 1 },
+    { "id": 3, "versionEsperada": 1 }
+  ],
+  "formulas": [
+    { "variableSalida": "SUELDO_PERIODO", "expresion": "ROUND([SUELDO]/[DIVISOR],2)" }
+  ]
+}

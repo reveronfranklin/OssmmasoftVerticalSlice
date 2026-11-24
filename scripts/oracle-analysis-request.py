@@ -11,7 +11,7 @@ import sys
 from urllib.parse import urlsplit
 
 OPERATIONS = {"conexiones", "verificarConexion", "objetos", "describirObjeto", "fuente",
-              "erroresCompilacion", "argumentos", "dependencias"}
+              "erroresCompilacion", "argumentos", "dependencias", "consultarDatos"}
 
 
 def main():

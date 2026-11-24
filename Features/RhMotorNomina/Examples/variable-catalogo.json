@@ -1,0 +1,10 @@
+{
+  "id": 0,
+  "versionEsperada": 0,
+  "codigo": "SUELDO",
+  "descripcion": "Sueldo base de prueba",
+  "tipo": "NUMERO",
+  "unidad": "DINERO",
+  "origen": "ENTRADA",
+  "activa": true
+}

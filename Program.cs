@@ -11,6 +11,7 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 // Registrar nuestra clase de conexión
 builder.Services.AddScoped<ConnectionDB>();
+builder.Services.AddHostedService<OssmmasoftVerticalSlice.Features.RhMotorNomina.RhNomCorridaWorker>();
 // R54: metadata-only comparison; no production execution identity is registered.
 builder.Services.AddSingleton<OssmmasoftVerticalSlice.Features.DatabaseDeployment.DeploymentMetadata>();
 builder.Services.AddSingleton<OssmmasoftVerticalSlice.Features.DatabaseDeployment.DeploymentStore>();

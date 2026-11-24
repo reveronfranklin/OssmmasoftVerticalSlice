@@ -1,0 +1,27 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ async Task<string> MovementsHash(){using var c=cn.CreateCommand();c.CommandTimeout=25;c.CommandText="SELECT CODIGO_MOV_NOMINA,CODIGO_EMPRESA,CODIGO_TIPO_NOMINA,CODIGO_PERSONA,CODIGO_CONCEPTO,FRECUENCIA_ID,TIPO,TO_CHAR(MONTO,'TM9','NLS_NUMERIC_CHARACTERS=''.,'''),STATUS,COMPLEMENTO_CONCEPTO,EXTRA1,EXTRA2,EXTRA3,USUARIO_INS,TO_CHAR(FECHA_INS,'YYYY-MM-DD HH24:MI:SS'),USUARIO_UPD,TO_CHAR(FECHA_UPD,'YYYY-MM-DD HH24:MI:SS') FROM RH_MOV_NOMINA WHERE CODIGO_EMPRESA=13 ORDER BY CODIGO_MOV_NOMINA";using var r=await c.ExecuteReaderAsync();var rows=new List<List<string?>>();while(await r.ReadAsync()){if(rows.Count>=100000)throw new InvalidOperationException("movement-guard-limit");var values=new List<string?>();for(var i=0;i<r.FieldCount;i++)values.Add(r.IsDBNull(i)?null:Convert.ToString(r.GetValue(i),System.Globalization.CultureInfo.InvariantCulture));rows.Add(values);}return RhNomRecalculosHistoricos.Hash(rows);}
+ var input=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;var cases=new List<object>();var concepts=new HashSet<int>();var totalRows=0;
+ foreach(var candidate in input.GetProperty("Cases").EnumerateArray()){
+  var archive=candidate.GetProperty("Archive").GetInt32();var saved=await RhNomArchivoCapsulasDb.Leer(cn,company,actor,archive,ct);var d=RhNomCapsulasPrenomina.Leer(saved.Capsula);var selection=RhNomCapsulasPrenomina.Reproducir(saved.Capsula).Seleccion;
+  var rows=selection.Filas.Where(f=>f.Resultado=="BLOQUEADA").Select(f=>new{Movement=f.Imagen.Id,Concept=f.Imagen.CodigoConcepto,Kind=f.Imagen.Tipo,Frequency=f.Imagen.FrecuenciaId,Reason=f.Motivo}).ToList();foreach(var row in rows)concepts.Add(row.Concept);totalRows+=rows.Count;
+  Check(rows.Count>0,"blocking-source-rows-preserved-"+archive);cases.Add(new{CaseHash=candidate.GetProperty("CaseHash").GetString(),Archive=archive,Rows=rows});
+ }
+ var catalogue=new List<object>();foreach(var concept in concepts.Order()){
+  using var c=cn.CreateCommand();c.BindByName=true;c.CommandText="SELECT CODIGO_EMPRESA,CODIGO_TIPO_NOMINA,CODIGO_CONCEPTO,CODIGO,TIPO_CONCEPTO,MODULO_ID,FRECUENCIA_ID,STATUS FROM RH_CONCEPTOS WHERE CODIGO_CONCEPTO=:c OR (CODIGO_EMPRESA=13 AND CODIGO IN (SELECT CODIGO FROM RH_CONCEPTOS WHERE CODIGO_CONCEPTO=:c)) ORDER BY CODIGO_EMPRESA,CODIGO_TIPO_NOMINA";c.Parameters.Add("c",OracleDbType.Int32).Value=concept;using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync())catalogue.Add(new{Company=r.IsDBNull(0)?(int?)null:r.GetInt32(0),Type=r.IsDBNull(1)?(int?)null:r.GetInt32(1),Concept=r.GetInt32(2),Code=r.IsDBNull(3)?null:r.GetString(3),Classification=r.IsDBNull(4)?null:r.GetString(4),Module=r.IsDBNull(5)?(int?)null:r.GetInt32(5),Frequency=r.IsDBNull(6)?(int?)null:r.GetInt32(6),Status=r.IsDBNull(7)?null:r.GetString(7)});
+ }
+ var movementHash=await MovementsHash();Check(movementHash=="6A5C694B22C584E66038544AFEC2EBFC9637009303D0E29CD042DDC9A53753CE","all-company-movements-unchanged");
+ Check(cases.Count==7,"all-seven-source-blocks-accounted");Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-disabled");
+ using(var c=cn.CreateCommand()){c.CommandText="SELECT COUNT(*) FROM RH_CONCEPTOS WHERE CODIGO_CONCEPTO=974 AND CODIGO_EMPRESA=13 AND CODIGO_TIPO_NOMINA=10 AND CODIGO='545'";Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"rehabilitated-concept-present");}
+ using(var c=cn.CreateCommand()){c.CommandText="SELECT COUNT(*) FROM ALL_OBJECTS WHERE OWNER='RH' AND OBJECT_NAME='RH_TRG_BEF_UPD_CONCEPTOS' AND OBJECT_TYPE='TRIGGER' AND STATUS='VALID'";Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"audit-trigger-still-valid");}
+ foreach(var table in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"}){using var c=cn.CreateCommand();c.CommandText="SELECT COUNT(*) FROM "+table;Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"financial-empty-"+table);}
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Cases=cases,BlockedRows=totalRows,ConceptIds=concepts.Order().ToList(),CatalogueMatches=catalogue,MovementHash=movementHash,NoPayrollWrites=true,NoAutomaticConceptMapping=true}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

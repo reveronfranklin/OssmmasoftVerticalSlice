@@ -1,0 +1,15 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var watch=System.Diagnostics.Stopwatch.StartNew();var run=await RhNomCorridasDb.Leer(cn,company,actor,334,ct);var fragmented=await RhNomCorridasDb.Documento(cn,run,"ENTRADA",ct);var fragmentedMs=watch.ElapsedMilliseconds;watch.Restart();string direct;string storedHash;int length;
+ using(var c=cn.CreateCommand()){c.CommandTimeout=25;c.CommandText="SELECT DATOS_JSON,HASH_DATOS,DBMS_LOB.GETLENGTH(DATOS_JSON) FROM RH_NOM_RUN WHERE CODIGO_EMPRESA=13 AND ACTOR=2147483646 AND ID_RUN=334";using var r=await c.ExecuteReaderAsync();Check(await r.ReadAsync(),"owned-document-found");length=r.GetInt32(2);Check(length>0&&length<=RhNomCorridas.MaxDatosBytes,"bounded-clob-before-reading");storedHash=r.GetString(1);using var clob=r.GetOracleClob(0);direct=clob.Value;}
+ var clobMs=watch.ElapsedMilliseconds;watch.Restart();var doc=RhNomCorridas.Leer(direct,run.HashDatos,company,actor);var parseMs=watch.ElapsedMilliseconds;watch.Restart();var result=RhNomCorridas.Evaluar(doc,ct);var evaluateMs=watch.ElapsedMilliseconds;Check(result.IsValid,"pure-replay-valid");Check(fragmented==direct&&RhNomCorridas.Hash(direct)==run.HashDatos&&storedHash==run.HashDatos&&direct.Length==length,"same-complete-content-length-and-hash");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Run=334,Chars=length,FragmentedMs=fragmentedMs,DirectClobMs=clobMs,ParseMs=parseMs,EvaluateMs=evaluateMs,Hash=storedHash,NoDatabaseWrites=true}}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

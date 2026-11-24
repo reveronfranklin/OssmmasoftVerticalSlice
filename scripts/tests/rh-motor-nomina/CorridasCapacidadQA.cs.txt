@@ -1,0 +1,28 @@
+using System.Data;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483643;var checks=new List<string>();
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();using var sis=db.GetSisConnection();await cn.OpenAsync();await sis.OpenAsync();
+ OracleCommand Sql(OracleConnection con,string text){var c=con.CreateCommand();c.BindByName=true;c.CommandText=text;c.CommandTimeout=25;return c;}
+ using(var c=Sql(cn,"SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ using(var c=Sql(sis,"SELECT COUNT(*) FROM SIS.SIS_USUARIOS WHERE CODIGO_USUARIO=2147483643"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"synthetic-actor-not-user");
+ using(var c=Sql(cn,"SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='RH_NOM_RUN_ACT' AND OBJECT_TYPE='TABLE' AND STATUS='VALID'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"actor-mutex-table-valid");
+ var model=(await new RhNomVersionesHandler(db).Get(new(1,8),company,CancellationToken.None)).Data!;Check(model.Descripcion.Contains("Q57_0523F8B5")&&model.Configuracion.Formato==7,"isolated-fixture");
+ var source=model.Configuracion.Variables.Single(v=>v.Origen=="ENTRADA").Codigo;var batch=new RhNomLoteQuery(1,8,[new("A",new(2025,6,30),[new(source,"1300")])]);var doc=new RhNomCorridaDocumento(1,company,actor,model,"LOTE_MANUAL",batch,null,null,null,null,null,null);var text=RhNomCorridas.Serializar(doc,RhNomCorridas.MaxDatosBytes);
+ using(var tx=cn.BeginTransaction()){
+  async Task<int> Create(int i){using var c=Sql(cn,"RH.RH_PKG_NOM_RUN.CREAR");c.Transaction=tx;c.CommandType=CommandType.StoredProcedure;
+   RhNomCfgDb.Add(c,"p_EMPRESA",OracleDbType.Int32,company);RhNomCfgDb.Add(c,"p_ACTOR",OracleDbType.Int32,actor);RhNomCfgDb.Add(c,"p_MODELO",OracleDbType.Int32,1);RhNomCfgDb.Add(c,"p_VERSION",OracleDbType.Int32,8);RhNomCfgDb.Add(c,"p_MODO",OracleDbType.Varchar2,"LOTE_MANUAL");RhNomCfgDb.Add(c,"p_CLAVE",OracleDbType.Varchar2,"QA_CAPACITY_"+i);RhNomCfgDb.Add(c,"p_HASH",OracleDbType.Varchar2,RhNomCorridas.HashSolicitud(new("QA_CAPACITY_"+i,Lote:batch),company,actor));RhNomCfgDb.Add(c,"p_DATOS",OracleDbType.Clob,text);RhNomCfgDb.Add(c,"p_HASH_DATOS",OracleDbType.Varchar2,RhNomCorridas.Hash(text));var id=RhNomCfgDb.Out(c,"p_ID");await c.ExecuteNonQueryAsync();return int.Parse(id.Value.ToString()!);}
+  var ids=new List<int>();for(var i=1;i<=5;i++)ids.Add(await Create(i));Check(ids.Distinct().Count()==5,"five-distinct-active-runs");
+  try{await Create(6);throw new InvalidOperationException("sixth-active-run-accepted");}catch(OracleException ex)when(ex.Number==20001){Check(true,"sixth-active-run-rejected");}
+  Check(await Create(1)==ids[0],"idempotent-retry-allowed-at-capacity");
+  tx.Rollback();
+ }
+ using(var c=Sql(cn,"SELECT COUNT(*) FROM RH_NOM_RUN WHERE CODIGO_EMPRESA=13 AND ACTOR=2147483643"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"run-fixtures-rolled-back");
+ using(var c=Sql(cn,"SELECT COUNT(*) FROM RH_NOM_RUN_ACT WHERE CODIGO_EMPRESA=13 AND ACTOR=2147483643"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"mutex-fixture-rolled-back");
+ Console.WriteLine("R57_CAPACITY="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,NoPayrollWrites=true,FixturesRolledBack=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

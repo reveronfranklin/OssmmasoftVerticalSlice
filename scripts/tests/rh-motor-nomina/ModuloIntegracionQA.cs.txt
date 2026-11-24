@@ -1,0 +1,59 @@
+using System.Data;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+// QA only. One new revision in the existing isolated synthetic fixture; no payroll writes.
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var company=cfg.GetValue<int>("settings:EmpresaConfig");var db=new ConnectionDB(cfg);var checks=new List<string>();
+const string prefix="Q57_0523F8B5";const int modelId=1;const int actor=int.MaxValue;
+void Check(bool value,string name){if(!value)throw new InvalidOperationException(name);checks.Add(name);}
+OracleCommand Cmd(OracleConnection cn,string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var (name,value) in values)c.Parameters.Add(name,value is DateTime?OracleDbType.Date:value is int?OracleDbType.Int32:OracleDbType.Varchar2).Value=value;return c;}
+async Task<string> HashOld(OracleConnection cn){using var c=Cmd(cn,"SELECT TEXT FROM USER_SOURCE WHERE NAME='RH_PKG_ADJUNTAR_CARGO' ORDER BY TYPE,LINE");using var r=await c.ExecuteReaderAsync();var b=new StringBuilder();while(await r.ReadAsync())b.Append(r.IsDBNull(0)?"":r.GetString(0));return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(b.ToString())));}
+try{
+ using var rh=db.GetRhConnection();using var sis=db.GetSisConnection();await rh.OpenAsync();await sis.OpenAsync();
+ foreach(var (cn,alias) in new[]{(rh,"RH"),(sis,"SIS")}){using var c=Cmd(cn,"SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL");using var r=await c.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg[$"OracleAnalysis:Targets:{alias}:ExpectedDatabaseName"]&&r.GetString(1)==cfg[$"OracleAnalysis:Targets:{alias}:ExpectedServerHost"]&&r.GetString(2)==alias,"identity-"+alias);}
+ var oldHash=await HashOld(rh);
+ using(var c=Cmd(sis,"SELECT COUNT(*) FROM SIS.SIS_USUARIOS WHERE CODIGO_USUARIO=:id",("id",actor)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"synthetic-actor-not-user");
+ using(var c=Cmd(rh,"SELECT COUNT(*) FROM RH.RH_CONCEPTOS WHERE CODIGO_EMPRESA=:empresa AND ID_MODELO_CALCULO=:modelo",("empresa",company),("modelo",modelId)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"fixture-not-bound-to-concepts");
+ var models=new RhNomVersionesHandler(db);var vars=new RhNomVariablesHandler(db);
+ var list=await models.GetAll(new(SearchText:prefix),company,CancellationToken.None);Check(list.IsValid&&list.Data!.Count==1&&list.Data[0].ModeloId==modelId&&list.Data[0].Descripcion.Contains("QA TEST NO USAR"),"isolated-fixture-model");
+ Check(list.Data![0].UltimaVersion==3,"expected-fixture-version-3-no-blind-rerun");
+ var catalog=await vars.GetAll(new(SearchText:prefix),company,CancellationToken.None);Check(catalog.IsValid&&catalog.Data!.Count==3,"fixture-variables");
+ var baseVar=catalog.Data!.Single(v=>v.Codigo==prefix+"_BASE");var divisor=catalog.Data.Single(v=>v.Codigo==prefix+"_DIV");var output=catalog.Data.Single(v=>v.Codigo==prefix+"_RES");
+ var first=await models.Get(new(modelId,1),company,CancellationToken.None);var previous=await models.Get(new(modelId,3),company,CancellationToken.None);Check(first.IsValid&&previous.IsValid,"legacy-revisions-readable");
+ var legacyInputs=new List<RhNomValorEntrada>{new(baseVar.Codigo,"1300"),new(divisor.Codigo,"2")};
+ var legacy1=await models.Simulate(new(modelId,1,legacyInputs),company,CancellationToken.None);var legacy3=await models.Simulate(new(modelId,3,legacyInputs),company,CancellationToken.None);
+ Check(legacy1.IsValid&&legacy1.Data!.Resultados.Single().Resultado=="650"&&legacy3.IsValid&&legacy3.Data!.Resultados.Single().Resultado=="660","legacy-numeric-results-unchanged");
+ var request=new RhNomModeloSave(modelId,3,previous.Data!.CodigoTipoNomina,"ADJUNTAR_CARGO",prefix+" QA formato 3 y vigencias",
+  catalog.Data.Select(v=>new RhNomVariableRef(v.Id,v.Version)).ToList(),[new(output.Codigo,"ROUND("+new string(' ',3650)+"["+baseVar.Codigo+"]/["+divisor.Codigo+"],2)")],
+  [new("DIV_PRIMER_SEM",divisor.Codigo,"2",new(2025,1,1),new(2025,6,30)),new("DIV_SEGUNDO_SEM",divisor.Codigo,"4",new(2025,7,1))],true);
+ var saved=await models.Save(request,company,actor,CancellationToken.None);Check(saved.IsValid&&saved.Data!.Version==4,"save-strict-version-4");
+ Console.WriteLine("R57_MODULO_SAVED="+JsonSerializer.Serialize(new{ModelId=modelId,Version=saved.Data!.Version}));
+ var loaded=await models.Get(new(modelId,4),company,CancellationToken.None);Check(loaded.IsValid&&loaded.Data!.Configuracion.Formato==3&&loaded.Data.Configuracion.VersionUnidades=="DIMENSIONES_V1"&&loaded.Data.Hash==saved.Data.Hash,"format3-roundtrip-hash-units");
+ Check(Encoding.UTF8.GetByteCount(RhNomConfiguracion.Serializar(loaded.Data!.Configuracion).Text)>4000,"format3-fragmented-clob");
+ var effectiveInputs=new List<RhNomValorEntrada>{new(baseVar.Codigo,"1300")};
+ var a=await models.SimulateEffective(new(modelId,4,new(2025,6,30),effectiveInputs),company,CancellationToken.None);var b=await models.SimulateEffective(new(modelId,4,new(2025,7,1),effectiveInputs),company,CancellationToken.None);
+ Check(a.IsValid&&a.Data!.Simulacion.Resultados.Single().Resultado=="650"&&a.Data.Parametros.Single().Valor=="2","effective-first-interval-650");
+ Check(b.IsValid&&b.Data!.Simulacion.Resultados.Single().Resultado=="325"&&b.Data.Parametros.Single().Valor=="4","effective-second-interval-325");
+ Check(!(await models.SimulateEffective(new(modelId,4,new(2025,6,30),legacyInputs),company,CancellationToken.None)).IsValid,"effective-override-rejected");
+ Check(!(await models.Save(request,company,actor,CancellationToken.None)).IsValid,"stale-revision-rejected");
+ Check(!(await models.Get(new(modelId,4),company+999,CancellationToken.None)).IsValid,"foreign-company-rejected");
+ var oldFirst=await models.Get(new(modelId,1),company,CancellationToken.None);var oldThird=await models.Get(new(modelId,3),company,CancellationToken.None);
+ Check(oldFirst.IsValid&&oldThird.IsValid&&oldFirst.Data!.Hash==first.Data!.Hash&&oldThird.Data!.Hash==previous.Data.Hash,"old-snapshots-unchanged");
+ var unit=RhNomUnidades.Validar([new("BASE","DINERO","ENTRADA"),new("PCT","PORCENTAJE","PARAMETRO"),new("TOTAL","DINERO","CALCULADA")],[new("TOTAL","[BASE]*TASA([PCT])")]);Check(unit.Errores.Count==0,"units-and-explicit-conversion");
+ var conversion=RhNomModelos.Simular([new("TOTAL","[BASE]*TASA([PCT])")],[new("BASE","1300"),new("PCT","1")]);Check(conversion.Errores.Count==0&&conversion.Resultados.Single().Resultado=="13","numeric-conversion-13");
+ var context=new RhNomContextoQuery(10,5933,"2025-10-30T00:00:00");var sources=new RhNomHistoricoFuentesHandler(db);var ctx=await sources.Context(context,company,CancellationToken.None);Check(ctx.IsValid&&ctx.Data!.Partidas>0,"historical-context-handler");
+ var prepared=await sources.Prepare(new(modelId,4,5933,context.FechaNomina,[]),company,CancellationToken.None);Check(prepared.IsValid&&!prepared.Data!.EntradasResueltas&&!prepared.Data.ParidadCertificada&&prepared.Data.EntradasPendientes.Contains(baseVar.Codigo),"missing-inputs-remain-pending");
+ var date=RhNomFuentesHistoricas.Fecha(context.FechaNomina);int person,concept;
+ using(var c=Cmd(rh,"SELECT MIN(CODIGO_PERSONA),MIN(CODIGO_CONCEPTO) FROM RH.RH_HISTORICO_NOMINA WHERE CODIGO_EMPRESA=:empresa AND CODIGO_TIPO_NOMINA=:tipo AND CODIGO_PERIODO=:periodo AND FECHA_NOMINA=:fecha",("empresa",company),("tipo",context.CodigoTipoNomina),("periodo",context.CodigoPeriodo),("fecha",date)))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();person=r.GetInt32(0);concept=r.GetInt32(1);}
+ var reference=await new RhNomReferenciaHistoricaHandler(db).Get(new(context.CodigoTipoNomina,context.CodigoPeriodo,context.FechaNomina,person),company,CancellationToken.None);Check(reference.IsValid&&reference.Data!.Documento.Partidas.Count>0&&RhNomReferencias.Verificar(reference.Data)&&!reference.Data.ParidadCertificada,"historical-reference-handler-integrity");
+ var audit=await new RhNomConceptoHistoricoHandler(db).Get(new(context.CodigoTipoNomina,context.CodigoPeriodo,context.FechaNomina,concept),company,CancellationToken.None);Check(audit.IsValid&&!audit.Data!.DisponibleParaCalculo&&!audit.Data.ParidadCertificada,"historical-audit-handler-no-certification");
+ int cargoPerson,cargoRelation;
+ using(var c=Cmd(rh,"SELECT CODIGO_PERSONA,CODIGO_RELACION_CARGO FROM (SELECT S.CODIGO_PERSONA,S.CODIGO_RELACION_CARGO FROM RH.RH_HISTORICO_PERSONAL_CARGO S WHERE S.CODIGO_EMPRESA=:empresa AND S.CODIGO_TIPO_NOMINA=:tipo AND S.CODIGO_PERIODO=:periodo AND S.FECHA_NOMINA=:fecha AND S.CODIGO_PERSONA>0 AND S.CODIGO_RELACION_CARGO>0 AND EXISTS(SELECT 1 FROM RH.RH_HISTORICO_NOMINA H WHERE H.CODIGO_EMPRESA=S.CODIGO_EMPRESA AND H.CODIGO_TIPO_NOMINA=S.CODIGO_TIPO_NOMINA AND H.CODIGO_PERIODO=S.CODIGO_PERIODO AND H.FECHA_NOMINA=S.FECHA_NOMINA AND H.CODIGO_PERSONA=S.CODIGO_PERSONA) ORDER BY S.CODIGO_PERSONA,S.CODIGO_RELACION_CARGO) WHERE ROWNUM=1",("empresa",company),("tipo",context.CodigoTipoNomina),("periodo",context.CodigoPeriodo),("fecha",date)))using(var r=await c.ExecuteReaderAsync()){Check(await r.ReadAsync(),"historical-cargo-sample-found");cargoPerson=r.GetInt32(0);cargoRelation=r.GetInt32(1);}
+ var cargo=await new RhNomCargoHistoricoHandler(db).Get(new(context.CodigoTipoNomina,context.CodigoPeriodo,context.FechaNomina,cargoPerson,cargoRelation),company,CancellationToken.None);Check(cargo.IsValid&&!cargo.Data!.OrigenDelCalculoVerificado&&cargo.Data.Sueldo.Length>0,"historical-cargo-handler-no-origin-assumption");
+ Check(oldHash==await HashOld(rh),"old-payroll-package-unchanged");
+ Console.WriteLine("R57_MODULO="+JsonSerializer.Serialize(new{Status="OK",Company=company,FixturePrefix=prefix,ModelId=modelId,Version=4,SyntheticActor=actor,Checks=checks,HistoricalRowsRead=reference.Data!.Documento.Partidas.Count,OldPayrollHash=oldHash,NoPersonalDataInOutput=true,AuthenticationHttpTested=false}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

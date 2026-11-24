@@ -1,0 +1,160 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+
+
+ var payload=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;
+ var seed=payload.GetProperty("Seed");var policy=new Dictionary<int,List<RhNomDeclaracionManualE>>();var policyConcepts=new Dictionary<int,List<RhNomConceptoSeleccion>>();var policyEvidence=new List<object>();
+ foreach(var entry in seed.GetProperty("Entries").EnumerateArray()){
+  var type=entry.GetProperty("Type").GetInt32();var concept=entry.GetProperty("Concept").GetInt32();
+  using var command=Cmd("SELECT CODIGO_EMPRESA,CODIGO_TIPO_NOMINA,CODIGO_CONCEPTO,TIPO_CONCEPTO,DENOMINACION FROM RH_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND CODIGO_CONCEPTO=:c",("e",company),("t",type),("c",concept));using var reader=await command.ExecuteReaderAsync(ct);
+  Check(await reader.ReadAsync(ct),"manual-seed-concept-exists-"+type+"-"+concept);
+  var meta=new RhNomConceptoSeleccion(reader.GetInt32(0),reader.GetInt32(1),reader.GetInt32(2),reader.IsDBNull(3)?null:reader.GetString(3));
+  Check(RhNomRecalculosHistoricos.Hash(meta)==entry.GetProperty("ClassificationHash").GetString(),"manual-seed-classification-unchanged-"+type+"-"+concept);
+  Check(reader.GetString(4)==entry.GetProperty("Description").GetString()&&!await reader.ReadAsync(ct),"manual-seed-exact-catalogue-identity-"+type+"-"+concept);
+  if(!policy.ContainsKey(type)){policy[type]=[];policyConcepts[type]=[];}
+  policy[type].Add(new(concept,entry.GetProperty("ClassificationHash").GetString()!,entry.GetProperty("DecisionReference").GetString()!));policyConcepts[type].Add(meta);
+  policyEvidence.Add(new{Type=type,Concept=concept,ClassificationHash=RhNomRecalculosHistoricos.Hash(meta)});
+ }
+ var baseline=payload.GetProperty("Baseline").GetProperty("Outcomes").EnumerateArray().Where(o=>o.TryGetProperty("Cases",out var cases)&&cases.ValueKind==JsonValueKind.Array).SelectMany(o=>o.GetProperty("Cases").EnumerateArray()).ToDictionary(c=>c.GetProperty("ContextHash").GetString()+"/"+c.GetProperty("Class").GetString(),c=>c.GetProperty("CapsuleHash").GetString());
+ int policyCapsules=0,manualRows=0,pendingRows=0;var archives=new List<object>();
+ var sourceHashes=new Dictionary<string,string>();
+ foreach(var spec in new[]{("RH_PKG_ADJUNTAR_CARGO","d289b1b3951514bc3f8f117922de806375e53d02c541cdc08bdd85c260c32908"),("RH_PKG_PROCESOS_MASIVOS","9b94a220b3cf0a0a59a7f97beea171791d3600ac3c0962c05504f5d070a7c02a")}){
+  var lines=new List<string>();using(var c=Cmd("SELECT TEXT FROM USER_SOURCE WHERE NAME=:n AND TYPE='PACKAGE BODY' ORDER BY LINE",("n",spec.Item1)))using(var r=await c.ExecuteReaderAsync(ct))while(await r.ReadAsync(ct))lines.Add(r.GetString(0).TrimEnd('\r','\n'));
+  var text=string.Join("\n",lines);var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+  Check(lines.Count>0&&hash==spec.Item2,"current-package-matches-reviewed-source-"+spec.Item1);sourceHashes[spec.Item1]=hash;
+ }
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-application-disabled");var outcomes=new List<object>();int cases=0,personCount=0,actualERows=0,rawDifferences=0,invalidConceptRows=0,totalsCompared=0,negativeNets=0,emptyTotals=0,sourceBlocked=0,capsules=0,protectedEChanges=0,ordinaryProjections=0;
+ foreach(var type in new[]{10,12,13,14,20,21,22,23}){
+  RhNomContextoSeleccion? context=null;using(var c=Cmd("SELECT * FROM (SELECT CODIGO_PERIODO,FECHA_NOMINA,PERIODO FROM RH_PERIODOS WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND FECHA_CIERRE IS NULL AND PERIODO BETWEEN 0 AND 9 ORDER BY FECHA_NOMINA DESC,CODIGO_PERIODO DESC) WHERE ROWNUM=1",("e",company),("t",type)))using(var r=await c.ExecuteReaderAsync(ct))if(await r.ReadAsync(ct))context=new(company,type,r.GetInt32(0),DateTime.SpecifyKind(r.GetDateTime(1),DateTimeKind.Unspecified),r.GetInt32(2));
+  if(context is null){outcomes.Add(new{Type=type,State="SIN_PERIODO_ABIERTO"});continue;}
+  var peopleIds=new HashSet<int>();foreach(var kind in new[]{"F","V","E"})using(var c=Cmd("SELECT * FROM (SELECT DISTINCT CODIGO_PERSONA FROM RH_MOV_NOMINA WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND TIPO=:k AND CODIGO_PERSONA>0 ORDER BY CODIGO_PERSONA) WHERE ROWNUM<=3",("e",company),("t",type),("k",kind)))using(var r=await c.ExecuteReaderAsync(ct))while(await r.ReadAsync(ct))peopleIds.Add(r.GetInt32(0));
+  Check(peopleIds.Count<=9,"bounded-person-sample-"+type);var details=new List<object>();
+  foreach(var person in peopleIds.Order()){
+   personCount++;var capture=await RhNomMovimientosPlanDb.Leer(cn,company,type,person,ct);var beforeHash=RhNomRecalculosHistoricos.Hash(capture.Imagenes);actualERows+=capture.Imagenes.Count(i=>i.Tipo=="E");invalidConceptRows+=capture.Imagenes.Count(i=>i.CodigoConcepto<=0);
+   var people=new List<RhNomPersonalSeleccion>();using(var c=Cmd("SELECT CODIGO_EMPRESA,CODIGO_TIPO_NOMINA,CODIGO_PERSONA,CODIGO_RELACION_CARGO,STATUS FROM RH_V_PERSONAL_CARGO WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND CODIGO_PERSONA=:p ORDER BY CODIGO_RELACION_CARGO,STATUS",("e",company),("t",type),("p",person)))using(var r=await c.ExecuteReaderAsync(ct))while(await r.ReadAsync(ct)){Check(people.Count<2000,"bounded-personal-metadata");people.Add(new(r.GetInt32(0),r.GetInt32(1),r.GetInt32(2),r.GetInt32(3),r.IsDBNull(4)?null:r.GetString(4)));}
+   var frequencies=new List<RhNomFrecuenciaSeleccion>();using(var c=Cmd("SELECT D.DESCRIPCION_ID,D.CODIGO FROM RH_DESCRIPTIVAS D WHERE EXISTS (SELECT 1 FROM RH_MOV_NOMINA M WHERE M.CODIGO_EMPRESA=:e AND M.CODIGO_TIPO_NOMINA=:t AND M.CODIGO_PERSONA=:p AND M.FRECUENCIA_ID=D.DESCRIPCION_ID) ORDER BY D.DESCRIPCION_ID",("e",company),("t",type),("p",person)))using(var r=await c.ExecuteReaderAsync(ct))while(await r.ReadAsync(ct))frequencies.Add(new(r.GetInt32(0),r.IsDBNull(1)?null:r.GetString(1)));
+   var concepts=new List<RhNomConceptoSeleccion>();using(var c=Cmd("SELECT C.CODIGO_EMPRESA,C.CODIGO_TIPO_NOMINA,C.CODIGO_CONCEPTO,C.TIPO_CONCEPTO FROM RH_CONCEPTOS C WHERE C.CODIGO_EMPRESA=:e AND C.CODIGO_TIPO_NOMINA=:t AND EXISTS (SELECT 1 FROM RH_MOV_NOMINA M WHERE M.CODIGO_EMPRESA=:e AND M.CODIGO_TIPO_NOMINA=:t AND M.CODIGO_PERSONA=:p AND M.CODIGO_CONCEPTO=C.CODIGO_CONCEPTO) ORDER BY C.CODIGO_CONCEPTO",("e",company),("t",type),("p",person)))using(var r=await c.ExecuteReaderAsync(ct))while(await r.ReadAsync(ct))concepts.Add(new(r.GetInt32(0),r.GetInt32(1),r.GetInt32(2),r.IsDBNull(3)?null:r.GetString(3)));
+   foreach(var kind in new[]{"N","E"}){
+    cases++;var totals=RhNomTotalesPrenomina.Preparar(context,RhNomSeleccionPrenomina.Plantilla(kind),capture.Imagenes,people,frequencies,concepts);var result=totals.Seleccion;
+    async Task<Dictionary<int,int>> Original(bool scoped){
+     var sql="SELECT M.CODIGO_MOV_NOMINA,COUNT(*) FROM RH_MOV_NOMINA M JOIN RH_V_PERSONAL_CARGO P ON P.CODIGO_PERSONA=M.CODIGO_PERSONA AND P.CODIGO_TIPO_NOMINA=M.CODIGO_TIPO_NOMINA JOIN RH_DESCRIPTIVAS D ON D.DESCRIPCION_ID=M.FRECUENCIA_ID JOIN RH_CONCEPTOS C ON C.CODIGO_CONCEPTO=M.CODIGO_CONCEPTO WHERE M.CODIGO_EMPRESA=:e AND M.CODIGO_TIPO_NOMINA=:t AND M.CODIGO_PERSONA=:p AND "+(kind=="N"?"M.TIPO IN ('F','V') AND P.STATUS IN ('A','I','R')":"M.TIPO='E' AND P.STATUS<>'E'")+" AND SUBSTR(D.CODIGO,1,1) IN ('T',:period)"+(scoped?" AND P.CODIGO_EMPRESA=:e AND C.CODIGO_EMPRESA=:e AND C.CODIGO_TIPO_NOMINA=:t":"")+" GROUP BY M.CODIGO_MOV_NOMINA ORDER BY M.CODIGO_MOV_NOMINA";
+     var found=new Dictionary<int,int>();using var c=Cmd(sql,("e",company),("t",type),("p",person),("period",context.NumeroPeriodo.ToString(System.Globalization.CultureInfo.InvariantCulture)));using var r=await c.ExecuteReaderAsync(ct);while(await r.ReadAsync(ct))found.Add(r.GetInt32(0),r.GetInt32(1));return found;
+    }
+    var scoped=await Original(true);var legacy=await Original(false);var calculated=result.Filas.Where(f=>f.CoincidenciasCursor>0).ToDictionary(f=>f.Imagen.Id,f=>f.CoincidenciasCursor);
+    Check(scoped.OrderBy(x=>x.Key).SequenceEqual(calculated.OrderBy(x=>x.Key)),"native-scoped-cursor-multiplicity-"+type+"-"+cases);
+    Check(result.Filas.Select(f=>f.Imagen).SequenceEqual(capture.Imagenes.OrderBy(i=>i.Id)),"all-original-images-preserved-"+cases);
+    Check(!result.MovimientosAplicados&&!result.ImportesCalculados&&!result.ParidadHistoricaCertificada&&!result.TemporalGenerado,"no-computation-or-write-claim-"+cases);
+    var reordered=RhNomSeleccionPrenomina.Preparar(context,RhNomSeleccionPrenomina.Plantilla(kind),capture.Imagenes.AsEnumerable().Reverse().ToList(),people.AsEnumerable().Reverse().ToList(),frequencies.AsEnumerable().Reverse().ToList(),concepts.AsEnumerable().Reverse().ToList());
+    Check(result.Hash==reordered.Hash,"stable-fingerprint-independent-of-source-order-"+cases);
+    var rawMatches=legacy.OrderBy(x=>x.Key).SequenceEqual(scoped.OrderBy(x=>x.Key));if(!rawMatches)rawDifferences++;
+
+    var personTotal=totals.Personas.Single();
+    var totalSql="SELECT COUNT(*),TO_CHAR(NVL(SUM(CASE WHEN C.TIPO_CONCEPTO='A' THEN M.MONTO ELSE 0 END),0),'TM9','NLS_NUMERIC_CHARACTERS=''.,'''),TO_CHAR(NVL(SUM(CASE WHEN C.TIPO_CONCEPTO='D' THEN M.MONTO ELSE 0 END),0),'TM9','NLS_NUMERIC_CHARACTERS=''.,'''),TO_CHAR(NVL(SUM(M.MONTO),0),'TM9','NLS_NUMERIC_CHARACTERS=''.,''') FROM RH_MOV_NOMINA M JOIN RH_V_PERSONAL_CARGO P ON P.CODIGO_PERSONA=M.CODIGO_PERSONA AND P.CODIGO_TIPO_NOMINA=M.CODIGO_TIPO_NOMINA JOIN RH_DESCRIPTIVAS D ON D.DESCRIPCION_ID=M.FRECUENCIA_ID JOIN RH_CONCEPTOS C ON C.CODIGO_CONCEPTO=M.CODIGO_CONCEPTO WHERE M.CODIGO_EMPRESA=:e AND M.CODIGO_TIPO_NOMINA=:t AND M.CODIGO_PERSONA=:p AND "+(kind=="N"?"M.TIPO IN ('F','V') AND P.STATUS IN ('A','I','R')":"M.TIPO='E' AND P.STATUS<>'E'")+" AND SUBSTR(D.CODIGO,1,1) IN ('T',:period) AND P.CODIGO_EMPRESA=:e AND C.CODIGO_EMPRESA=:e AND C.CODIGO_TIPO_NOMINA=:t";
+    int totalRows;string oracleA,oracleD,oracleNet;using(var c=Cmd(totalSql,("e",company),("t",type),("p",person),("period",context.NumeroPeriodo.ToString(System.Globalization.CultureInfo.InvariantCulture))))using(var r=await c.ExecuteReaderAsync(ct)){await r.ReadAsync(ct);totalRows=r.GetInt32(0);oracleA=RhNomReferencias.NormalizarMontoOracle(r.GetString(1))!;oracleD=RhNomReferencias.NormalizarMontoOracle(r.GetString(2))!;oracleNet=RhNomReferencias.NormalizarMontoOracle(r.GetString(3))!;}
+    string comparison;
+    if(result.TieneBloqueos){sourceBlocked++;comparison="FUENTES_BLOQUEADAS";Check(personTotal.Estado=="BLOQUEADO"&&personTotal.Neto is null,"blocked-selection-has-no-partial-payable-total-"+cases);}
+    else if(totalRows==0){emptyTotals++;comparison="SIN_PARTIDAS";Check(personTotal.Estado=="SIN_PARTIDAS"&&personTotal.Asignaciones is null&&personTotal.DeduccionesFirmadas is null&&personTotal.Neto is null,"empty-cursor-is-not-a-zero-payment-"+cases);}
+    else{
+     comparison="SUMAS_EXACTAS_IGUALES";Check(personTotal.Motivos.All(m=>!m.Contains("NUMBER38",StringComparison.Ordinal)),"current-total-within-NUMBER38-"+cases);
+     Check(RhNomTransaccion.Numero(personTotal.Asignaciones!).Equals(RhNomTransaccion.Numero(oracleA))&&RhNomTransaccion.Numero(personTotal.DeduccionesFirmadas!).Equals(RhNomTransaccion.Numero(oracleD))&&RhNomTransaccion.Numero(personTotal.Neto!).Equals(RhNomTransaccion.Numero(oracleNet)),"native-assignments-signed-deductions-net-equal-"+cases);
+     var negative=RhNomTransaccion.Numero(oracleNet).CompareTo(new Oracle.ManagedDataAccess.Types.OracleDecimal(0))<0;if(negative)negativeNets++;
+     Check(negative?personTotal.Estado=="BLOQUEADO"&&personTotal.Motivos.Contains("NETO_NEGATIVO"):personTotal.Estado=="VALIDADO","negative-net-blocked-for-every-person-"+cases);totalsCompared++;
+    }
+    Check(!totals.MovimientosAplicados&&!totals.TemporalGenerado&&!totals.ParidadHistoricaCertificada,"totals-never-claim-execution-or-historical-parity-"+cases);
+
+
+    int budget;using(var c=Cmd("SELECT CODIGO_PRESUPUESTO_ACTUAL FROM RH_TIPOS_NOMINA WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t",("e",company),("t",type)))budget=Convert.ToInt32(await c.ExecuteScalarAsync(ct));Check(budget>0,"declared-current-type-budget-"+cases);
+    var scope=new RhNomAmbitoCapsula(context,budget,person);var metadata=new RhNomMetadatosCapsula(people,frequencies,concepts);
+    var capsule=RhNomCapsulasPrenomina.Capturar(scope,RhNomSeleccionPrenomina.Plantilla(kind),capture,metadata);capsules++;
+    var transport=JsonSerializer.Deserialize<RhNomCapsula>(JsonSerializer.Serialize(capsule))!;
+    Check(baseline[RhNomRecalculosHistoricos.Hash(new{Context=context,Person=person})+"/"+kind]==capsule.Hash,"previous-V1-capsule-byte-compatible-"+cases);
+    if(policy.TryGetValue(type,out var declarations)){
+     var extended=metadata with{Conceptos=concepts.Concat(policyConcepts[type]).GroupBy(c=>c.CodigoConcepto).Select(g=>g.First()).OrderBy(c=>c.CodigoConcepto).ToList()};
+     var v2=RhNomCapsulasPrenomina.Capturar(scope,RhNomSeleccionPrenomina.Plantilla(kind),capture,extended,declarations);policyCapsules++;
+     var v2doc=RhNomCapsulasPrenomina.Leer(v2);Check(v2doc.Version==RhNomCapsulasPrenomina.VersionManuales&&v2doc.DeclaracionesManuales!.Count==declarations.Count,"V2-policy-frozen-"+cases);
+     var v2post=RhNomCapsulasPrenomina.EvaluarDespues(v2,scope,[],capture,extended);var treatment=v2post.TratamientoEspecial!;manualRows+=treatment.ManualesDeclaradas;pendingRows+=treatment.PendientesDeRegla;
+     Check(treatment.Entradas.Select(e=>e.Imagen).SequenceEqual(capture.Imagenes.Where(i=>i.Tipo=="E").OrderBy(i=>i.Id)),"V2-full-E-images-retained-"+cases);
+     Check(JsonSerializer.Serialize(v2post.Totales.Personas)==JsonSerializer.Serialize(totals.Personas),"V2-policy-keeps-all-monetary-totals-"+cases);
+     var applicablePending=treatment.Entradas.Any(e=>e.Tratamiento=="REQUIERE_REGLA_EXPLICITA"&&v2post.Totales.Seleccion.Filas.Any(f=>f.Imagen.Id==e.Imagen.Id&&f.Resultado=="INCLUIDA"));
+     Check(v2post.TieneTratamientoEPendiente==applicablePending&&v2post.TieneBloqueos==(v2post.Totales.TieneBloqueos||applicablePending),"V2-unruled-E-explicitly-blocked-"+cases);
+     Check(!treatment.OrigenHistoricoIndependienteVerificado&&!treatment.PropiedadFinancieraAcreditada,"V2-no-fabricated-provenance-"+cases);
+
+     if(archives.Count==0&&kind=="E"&&capture.Imagenes.Any(i=>i.Tipo=="E")){
+      foreach(var toStore in new[]{capsule,v2}){
+       var key="SDK_R57_CAP_ARC:"+RhNomCapsulasPrenomina.Leer(toStore).Version+":"+toStore.Hash[..24];
+       var first=await RhNomArchivoCapsulasDb.Guardar(cn,company,actor,key,toStore,ct);
+       Check(first.Capsula==toStore,"archive-exact-document-saved-"+archives.Count);
+       var same=await RhNomArchivoCapsulasDb.Guardar(cn,company,actor,key,toStore,ct);Check(same.Cabecera==first.Cabecera&&same.Capsula==first.Capsula,"archive-idempotent-retry-"+archives.Count);
+       var lookup=await RhNomArchivoCapsulasDb.PorClave(cn,company,actor,key,ct);Check(lookup==first.Cabecera,"archive-key-lookup-"+archives.Count);
+       var archiveReplay=RhNomCapsulasPrenomina.Reproducir((await RhNomArchivoCapsulasDb.Leer(cn,company,actor,first.Cabecera.IdCapsula,ct)).Capsula);
+       Check(archiveReplay.Hash==RhNomCapsulasPrenomina.Reproducir(toStore).Hash,"archive-replay-without-source-recapture-"+archives.Count);
+       var original=RhNomCapsulasPrenomina.Leer(toStore);var other=RhNomCapsulasPrenomina.Capturar(original.Ambito with{CodigoPresupuesto=original.Ambito.CodigoPresupuesto+1},original.Definicion,new(original.Imagenes,original.HayAmbitoAjeno),original.Metadatos,original.DeclaracionesManuales);
+       var rejected=false;try{await RhNomArchivoCapsulasDb.Guardar(cn,company,actor,key,other,ct);}catch(OracleException ex)when(ex.Number==20001){rejected=true;}Check(rejected,"archive-same-key-other-context-rejected-"+archives.Count);
+       foreach(var foreign in new[]{(Company:company,Actor:actor-1),(Company:company+1,Actor:actor)}){
+        rejected=false;try{await RhNomArchivoCapsulasDb.Leer(cn,foreign.Company,foreign.Actor,first.Cabecera.IdCapsula,ct);}catch(RhNomError ex)when(ex.Diagnostico.Codigo=="ARCHIVO_CAPSULA_NO_EXISTE"){rejected=true;}Check(rejected,"archive-foreign-scope-hidden-"+foreign.Company+"-"+foreign.Actor+"-"+archives.Count);
+        Check(await RhNomArchivoCapsulasDb.PorClave(cn,foreign.Company,foreign.Actor,key,ct) is null,"archive-foreign-key-hidden-"+archives.Count);
+       }
+       foreach(var action in new[]{"UPDATE RH_NOM_CAP_ARC SET HASH_DOC=HASH_DOC WHERE ID_CAP=:id","DELETE FROM RH_NOM_CAP_ARC WHERE ID_CAP=:id"}){
+        using var tx=cn.BeginTransaction();using var c=Cmd(action,("id",first.Cabecera.IdCapsula));c.Transaction=tx;rejected=false;
+        try{await c.ExecuteNonQueryAsync(ct);}catch(OracleException ex)when(ex.Number==20004){rejected=true;}await tx.RollbackAsync(ct);Check(rejected,"archive-immutable-update-delete-"+archives.Count+"-"+action[..6]);
+       }
+       using var secondConnection=db.GetRhConnection();await secondConnection.OpenAsync(ct);
+       var concurrent=await Task.WhenAll(RhNomArchivoCapsulasDb.Guardar(cn,company,actor,key,toStore,ct),RhNomArchivoCapsulasDb.Guardar(secondConnection,company,actor,key,toStore,ct));
+       Check(concurrent.All(a=>a.Cabecera.IdCapsula==first.Cabecera.IdCapsula&&a.Capsula==toStore),"archive-two-connections-same-key-"+archives.Count);
+       Check((await RhNomArchivoCapsulasDb.Leer(cn,company,actor,first.Cabecera.IdCapsula,ct)).Capsula==toStore,"archive-original-intact-after-conflicts-"+archives.Count);
+       Check(!first.AutorCapturaAutenticadoVerificado&&!first.OrigenHistoricoVerificado&&!first.MovimientosAplicados,"archive-does-not-claim-authenticity-"+archives.Count);
+       archives.Add(new{Id=first.Cabecera.IdCapsula,Key=key,DocumentVersion=first.Cabecera.VersionDocumento,DocumentHash=toStore.Hash,RequestHash=first.Cabecera.HashSolicitud,CreatedAt=first.Cabecera.FechaIns,Bytes=System.Text.Encoding.UTF8.GetByteCount(toStore.Json),ReplayHash=archiveReplay.Hash,ActorIsTechnicalFixture=true});
+      }
+     }
+     var specialV2=capture.Imagenes.FirstOrDefault(i=>i.Tipo=="E");if(specialV2 is not null){var rejectedV2=false;try{RhNomCapsulasPrenomina.EvaluarDespues(v2,scope,[],new(capture.Imagenes.Where(i=>i.Id!=specialV2.Id).ToList(),false),extended);}catch(RhNomError ex)when(ex.Diagnostico.Codigo=="ENTRADAS_E_CAMBIARON"){rejectedV2=true;}Check(rejectedV2,"V2-E-removal-rejected-"+cases);}
+    }
+
+    var replay=RhNomCapsulasPrenomina.Reproducir(transport);Check(replay.Hash==totals.Hash,"capsule-exact-selection-and-totals-replay-"+cases);
+    var unchanged=RhNomCapsulasPrenomina.EvaluarDespues(transport,scope,[],capture,metadata);Check(unchanged.Totales.Hash==totals.Hash&&!unchanged.ProductorEspecialAcreditado&&!unchanged.PropiedadFinancieraAcreditada&&!unchanged.PeriodoOriginalDelMovimientoAcreditado&&!unchanged.PresupuestoOriginalDelMovimientoAcreditado,"capsule-unchanged-images-without-provenance-or-ownership-claim-"+cases);
+    var wrong=false;try{RhNomCapsulasPrenomina.EvaluarDespues(transport,scope with{CodigoPresupuesto=budget+1},[],capture,metadata);}catch(RhNomError e)when(e.Diagnostico.Codigo=="CAPSULA_OTRO_CONTEXTO"){wrong=true;}Check(wrong,"capsule-other-budget-rejected-"+cases);
+    if(frequencies.Count>0){var modified=metadata with{Frecuencias=frequencies.Select((f,i)=>i==0?f with{Codigo=(f.Codigo??"")+"X"}:f).ToList()};var rejected=false;try{RhNomCapsulasPrenomina.EvaluarDespues(transport,scope,[],capture,modified);}catch(RhNomError e)when(e.Diagnostico.Codigo=="CAPSULA_METADATOS_CAMBIARON"){rejected=true;}Check(rejected,"capsule-fresh-metadata-drift-rejected-"+cases);}
+    var special=capture.Imagenes.FirstOrDefault(i=>i.Tipo=="E");
+    if(special is not null){
+     var modified=special with{Extra2=(special.Extra2??"")+"#QA"};var badCapture=new RhNomCapturaMovimientos(capture.Imagenes.Select(i=>i.Id==special.Id?modified:i).ToList(),capture.HayAmbitoAjeno);var rejected=false;
+     try{RhNomCapsulasPrenomina.EvaluarDespues(transport,scope,[],badCapture,metadata);}catch(RhNomError e)when(e.Diagnostico.Codigo=="ENTRADAS_E_CAMBIARON"){rejected=true;}Check(rejected,"capsule-special-extra-change-rejected-"+cases);protectedEChanges++;
+     rejected=false;try{RhNomCapsulasPrenomina.EvaluarDespues(transport,scope,[new("ACTUALIZAR",special,special)],capture,metadata);}catch(RhNomError e)when(e.Diagnostico.Codigo=="ENTRADA_E_PROTEGIDA"){rejected=true;}Check(rejected,"capsule-declared-E-write-rejected-even-with-equal-image-"+cases);
+    }
+    var ordinary=capture.Imagenes.FirstOrDefault(i=>i.Tipo is "F" or "V"&&i.Id>0&&i.CodigoConcepto>0&&i.Monto is not null);
+    if(ordinary is not null){
+     var modified=ordinary with{UsuarioUpd=actor,FechaUpd=context.FechaNomina};var projected=new RhNomCapturaMovimientos(capture.Imagenes.Select(i=>i.Id==ordinary.Id?modified:i).ToList(),capture.HayAmbitoAjeno);
+     var post=RhNomCapsulasPrenomina.EvaluarDespues(transport,scope,[new("ACTUALIZAR",ordinary,modified)],projected,metadata);ordinaryProjections++;
+     Check(!post.MovimientosAplicados&&post.Totales.Seleccion.Filas.Where(f=>f.Imagen.Tipo=="E").Select(f=>f.Imagen).SequenceEqual(capture.Imagenes.Where(i=>i.Tipo=="E").OrderBy(i=>i.Id)),"capsule-ordinary-audit-projection-keeps-special-images-"+cases);
+     Check(JsonSerializer.Serialize(post.Totales.Personas)==JsonSerializer.Serialize(totals.Personas),"hypothetical-audit-only-change-keeps-all-monetary-totals-"+cases);
+    }
+
+    details.Add(new{ContextHash=RhNomRecalculosHistoricos.Hash(new{Context=context,Person=person}),Class=kind,CapsuleHash=capsule.Hash,CapsuleBytes=System.Text.Encoding.UTF8.GetByteCount(capsule.Json),TotalsHash=totals.Hash,TotalsState=personTotal.Estado,TotalsReasons=personTotal.Motivos,TotalsComparison=comparison,Rows=capture.Imagenes.Count,Included=result.Filas.Count(f=>f.Resultado=="INCLUIDA"),Excluded=result.Filas.Count(f=>f.Resultado=="EXCLUIDA"),Blocked=result.Filas.Count(f=>f.Resultado=="BLOQUEADA"),ScopedCursorRows=scoped.Values.Sum(),OriginalCursorRows=legacy.Values.Sum(),OriginalUnscopedMatches=rawMatches,BlockReasons=result.Filas.Where(f=>f.Resultado=="BLOQUEADA").GroupBy(f=>f.Motivo).ToDictionary(g=>g.Key,g=>g.Count()),result.Hash});
+   }
+   Check(beforeHash==RhNomRecalculosHistoricos.Hash((await RhNomMovimientosPlanDb.Leer(cn,company,type,person,ct)).Imagenes),"database-images-unchanged-"+personCount);
+  }
+  outcomes.Add(new{Type=type,State=peopleIds.Count>0?"VERIFICADO":"SIN_MOVIMIENTOS",Period=context.CodigoPeriodo,context.FechaNomina,context.NumeroPeriodo,Cases=details});
+ }
+
+ var fixtureContext=new RhNomContextoSeleccion(company,10,5,new(2025,6,30),2);
+ RhNomImagenMovimiento Fixture(int id,string amount,int person,int concept)=>new(id,company,10,person,concept,20,"E",amount,"A",null,null,null,null,1,new(2025,1,1),null,null);
+ var fixturePeople=new List<RhNomPersonalSeleccion>{new(company,10,123,456,"A"),new(company,10,124,457,"A")};var fixtureConcepts=new List<RhNomConceptoSeleccion>{new(company,10,99,"A"),new(company,10,100,"D")};
+ var fixture=RhNomTotalesPrenomina.Preparar(fixtureContext,RhNomSeleccionPrenomina.Plantilla("E"),[Fixture(1,"10",123,99),Fixture(2,"-5",123,100),Fixture(3,"2",124,99),Fixture(4,"-3",124,100)],fixturePeople,[new(20,"T")],fixtureConcepts);
+ Check(fixture.Personas[0].Neto=="5"&&fixture.Personas[0].Estado=="VALIDADO","fixture-first-person-positive");Check(fixture.Personas[^1].Neto=="-1"&&fixture.Personas[^1].Estado=="BLOQUEADO","fixture-last-person-negative-is-blocked");
+ const string big="99999999999999999999999999999999999999";const string tiny="0.00001";
+ var cancellation=RhNomTotalesPrenomina.Preparar(fixtureContext,RhNomSeleccionPrenomina.Plantilla("E"),[Fixture(1,big,123,99),Fixture(2,tiny,123,99),Fixture(3,"-"+big,123,100)],[fixturePeople[0]],[new(20,"T")],fixtureConcepts).Personas.Single();
+ Check(cancellation.Neto==tiny&&cancellation.Motivos.Contains("ASIGNACIONES_FUERA_NUMBER38"),"exact-small-remainder-preserved-with-explicit-precision-block");
+ string oracleCancellation;using(var c=cn.CreateCommand()){c.BindByName=true;c.CommandTimeout=25;c.CommandText="SELECT TO_CHAR((:big+:tiny)-:big,'TM9','NLS_NUMERIC_CHARACTERS=''.,''') FROM DUAL";RhNomCfgDb.Add(c,"big",OracleDbType.Decimal,RhNomTransaccion.Numero(big));RhNomCfgDb.Add(c,"tiny",OracleDbType.Decimal,RhNomTransaccion.Numero(tiny));oracleCancellation=RhNomReferencias.NormalizarMontoOracle((string)(await c.ExecuteScalarAsync(ct))!)!;}
+
+ Check(cases>0,"nonempty-native-predicate-comparison");Check(archives.Count==2,"two-real-capsules-archived");
+ foreach(var entry in JsonSerializer.SerializeToElement(archives).EnumerateArray())using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_CAP_ARC WHERE CODIGO_EMPRESA=:e AND ACTOR=:a AND CLAVE_SOL=:k",("e",company),("a",actor),("k",entry.GetProperty("Key").GetString()!)))Check(Convert.ToInt32(await c.ExecuteScalarAsync(ct))==1,"one-row-for-each-verified-archive-key");
+ foreach(var t in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"})using(var c=Cmd("SELECT COUNT(*) FROM "+t))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"real-empty-"+t);
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_CTL WHERE ACTIVO=1 OR LEGACY_RETIRADO=1"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"financial-gates-closed");
+ Console.WriteLine("R57_ARCHIVO_CAP="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Archives=archives,ArchiveRowsPersisted=archives.Count,PolicyEvidence=policyEvidence,PolicyCapsules=policyCapsules,ManualRowsInCaseProjections=manualRows,PendingRowsInCaseProjections=pendingRows,PreviousV1CapsulesCompared=cases,Outcomes=outcomes,ReviewedPackageHashes=sourceHashes,Capsules=capsules,ProtectedSpecialChangeChecks=protectedEChanges,InMemoryOrdinaryProjections=ordinaryProjections,TotalsCompared=totalsCompared,NegativeNets=negativeNets,EmptyTotals=emptyTotals,SourceBlocked=sourceBlocked,ExactCancellationFixture=new{Exact=tiny,OracleArithmetic=oracleCancellation,BlockedForAggregatePrecision=true},Cases=cases,Persons=personCount,ActualSpecialMovementRows=actualERows,InvalidConceptImages=invalidConceptRows,UnscopedLegacyDifferences=rawDifferences,SamplePolicy="HASTA_3_PERSONAS_POR_F_V_E_EN_8_TIPOS_Y_UN_PERIODO_ABIERTO_POR_TIPO",NoPayrollWrites=true,NoBusinessConfigurationWrites=true,ArchiveMetadataWritten=true,HistoricalParityCertified=false,HttpAuthenticationTested=false,PublicEndpointAdded=false}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

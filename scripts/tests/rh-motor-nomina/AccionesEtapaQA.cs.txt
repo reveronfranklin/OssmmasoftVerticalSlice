@@ -1,0 +1,16 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var rows=new List<object>();foreach(var version in new[]{52,53,54,55}){var loaded=await new RhNomVersionesHandler(db).Get(new(1,version),company,ct);Check(loaded.IsValid&&loaded.Data is not null,"composed-revision-"+version);var model=loaded.Data!;
+ foreach(var rule in model.Configuracion.ReglasConcepto!){var metadata=new List<object>();using(var c=Cmd("SELECT D.CODIGO,P.CODIGO FROM RH_CONCEPTOS C LEFT JOIN RH_DESCRIPTIVAS D ON D.DESCRIPCION_ID=C.MODULO_ID LEFT JOIN RH_DESCRIPTIVAS P ON P.DESCRIPCION_ID=D.DESCRIPCION_FK_ID WHERE C.CODIGO_EMPRESA=:e AND C.CODIGO_TIPO_NOMINA=:t AND C.CODIGO_CONCEPTO=:c",("e",company),("t",model.CodigoTipoNomina),("c",rule.Concepto.CodigoConcepto)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())metadata.Add(new{Role=r.IsDBNull(0)?null:r.GetString(0),Parent=r.IsDBNull(1)?null:r.GetString(1)});
+ rows.Add(new{Type=model.CodigoTipoNomina,Version=version,ModelHash=model.Hash,Concept=rule.Concepto.CodigoConcepto,Output=rule.VariableSalida,rule.AccionCero,rule.AccionNoAplica,Metadata=metadata});}}
+ Console.WriteLine("R57_ACCIONES_ETAPA="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Rows=rows,NoPayrollWrites=true,NoConfigurationWrites=true,HistoricalMetadataCertified=false}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

@@ -1,0 +1,17 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();var ct=CancellationToken.None;const int actor=2147483646;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ Check(company==13&&cfg.GetValue<bool>("RhMotorNomina:CorridasEnabled"),"qa-worker-enabled");
+ var model=(await new RhNomVersionesHandler(db).Get(new(1,8),company,ct)).Data!;Check(model.Descripcion.Contains("Q57_0523F8B5")&&model.Configuracion.Formato==7,"isolated-format7-model");
+ var handler=new RhNomCorridasHandler(db,cfg);
+ var q=new RhNomCrearCorrida("QA_MODEL_SOURCES_HOSTED_20261119",Lote:new(1,8,[new("A",new(2025,6,30),[new(model.Configuracion.Variables.Single(v=>v.Origen=="ENTRADA").Codigo,"1300")])]));
+ var created=await handler.Crear(q,company,actor,ct);Check(created.IsValid&&created.Data is not null,"queue-format7-snapshot");
+ RhNomCorrida? run=null;for(var n=0;n<60;n++){run=(await handler.Get(new(created.Data!.IdRun),company,actor,ct)).Data;if(run?.Estado is "COMPLETADO" or "ERROR" or "CANCELADO")break;await Task.Delay(500);}
+ Check(run?.Estado=="COMPLETADO","hosted-worker-reads-format7");var detail=await handler.Detalle(new(run!.IdRun,"LOTE_MANUAL"),company,actor,ct);Check(detail.IsValid&&detail.Data!.Resultado!.Lote!.Casos.Single().Resultado.Simulacion.Resultados.Single().Resultado=="325","format7-frozen-result-persisted");
+ Check(detail.Data!.Entrada.Modelo.Configuracion.FuentesActuales!.Count==1&&!detail.Data.Resultado!.ParidadCertificada&&!detail.Data.Resultado.MovimientosAplicados,"source-binding-preserved-no-payroll-no-certification");
+ Console.WriteLine("R57_MODEL_SOURCES_WORKER="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,NoPayrollWrites=true,AuthenticationHttpTested=false}));
+}catch(Exception ex){Console.WriteLine("R57_FAIL="+ex.GetType().Name);Environment.ExitCode=1;}

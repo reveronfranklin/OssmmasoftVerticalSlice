@@ -1,7 +1,7 @@
 # OracleAnalisis - contrato HTTP y publicacion de fase 1
 
-R56. Implementacion inicial: autenticacion de servicio y consulta de metadatos y
-fuentes. No hay pantalla frontend. No hay SQL libre, datos de tablas, ejecucion de
+R56. Implementacion inicial: autenticacion de servicio y consulta de metadatos,
+fuentes y datos con politicas explicitas. No hay pantalla frontend. No hay SQL libre ni ejecucion de
 procedimientos, escritura, DDL ni enlaces remotos. No se crean objetos Oracle.
 
 ## Autenticacion
@@ -170,10 +170,90 @@ configurado por esta implementacion. HTTPS por defecto; HTTP solo si se especifi
 6. Probar destino incorrecto, revocacion, limite, timeout y cancelacion.
 
 Compilacion y pruebas locales no certifican conectividad ni compatibilidad de cada
-vista de diccionario del servidor real. Esta fase no completa el acceso a datos de
-R56: faltan politicas de objetos/columnas/empresa, consultas estructuradas y
-plantillas, DDL segmentado, busquedas, auditoria durable y OpenAPI detallado.
+vista de diccionario del servidor real. El acceso estructurado a datos se detalla abajo; aun faltan plantillas SELECT
+para joins, DDL segmentado, busquedas, auditoria durable y OpenAPI detallado.
 
 La configuracion incluida en ambos appsettings contiene los nueve aliases y sus
 Targets. Completar la identidad esperada de cada destino antes de habilitarlo;
 no se abren conexiones automaticamente al listarlas. BMC y RHC siguen excluidos.
+
+
+## Fase 2 - POST consultarDatos
+
+Permiso: oracle.analisis.datos. El token existente no obtiene este permiso de
+manera implicita. Cada tabla requiere politica en
+OracleAnalysis:Targets:<alias>:DataObjects:<tabla>. Vacio deniega todo acceso.
+El archivo Examples/presupuestos-policy.json contiene la politica inicial PRE.
+No se habilitan otras tablas de los nueve dominios por agregar este endpoint.
+
+Fields: conexion, objeto, columnas (1..40, distintas), filtros (maximo 20), orden
+(1..3 columnas), pageSize (1..500, limitado por MaxRows), cursor y esquema opcional.
+No existe campo codigoEmpresa: se toma settings:EmpresaConfig. Filtros de cliente
+sobre CODIGO_EMPRESA se combinan con el filtro obligatorio; no lo sustituyen.
+Global=true requiere EmpresaColumn=null y una decision explicita de catalogo global.
+
+Politica: Columns allowlist, EmpresaColumn o Global, UseRowId=true y DefaultOrder.
+Solo tablas heap locales visibles en ALL_TABLES; no vistas, sinonimos, IOTs ni
+DB links. No SQL arbitrario, expresiones, joins o funciones de cliente. Identificadores
+verificados contra politica y ALL_TAB_COLUMNS, citados; valores siempre binds
+Oracle tipados. Nombres de columnas con PASSWORD, CLAVE, TOKEN, SECRET, credenciales
+o claves de servicio se deniegan incluso si se agregan accidentalmente a Columns.
+
+Tipos iniciales: NUMBER (hasta 38 cifras significativas, valores como texto para
+no perder precision), VARCHAR2, NVARCHAR2, CHAR, NCHAR y DATE. No CLOB/BLOB ni timestamp
+en este endpoint inicial. Fechas ISO yyyy-MM-dd o yyyy-MM-ddTHH:mm:ss sin zona;
+respuestas DATE con siete decimales por formato .NET, sin convertir a UTC.
+Operadores eq, ne, gt, gte, lt, lte, in (1..100 valores), contains (texto literal),
+isNull e isNotNull. Filtros combinados por AND. Null se consulta solo mediante
+isNull/isNotNull. No aceptar valores nulos implicitos ni cadenas vacias de Oracle.
+
+Ejemplo: Examples/ultimo-presupuesto.json. Puede enviarse con la utilidad curl
+usando --operation consultarDatos y --body con el JSON correspondiente.
+
+Respuesta en data.resultado:
+
+```json
+{
+  "empresa": 13,
+  "objeto": "PRE_PRESUPUESTOS",
+  "columnas": [{"name":"CODIGO_PRESUPUESTO","type":"NUMBER","length":22}],
+  "datos": {
+    "filas": [{"CODIGO_PRESUPUESTO":"20"}],
+    "hasMore": true,
+    "truncado": false,
+    "limite": 1
+  },
+  "nextCursor": "cursor-opaco-si-hay-mas-filas",
+  "consistencia": "Sin snapshot entre paginas. ROWID como desempate en tabla heap; invalidar investigacion si se reorganiza la tabla."
+}
+```
+
+Cursor cifrado/autenticado AES-GCM, vence a los 15 minutos. Vinculado a consulta,
+orden, empresa, politica, columnas/tipos, cliente y destino. Una rotacion de token
+invalida cursores anteriores. Enviar el mismo cuerpo con cursor=nextCursor; no
+cambiar pageSize ni filtros. La revocacion del permiso se comprueba en cada llamada.
+No devolver ROWID ni columnas internas OA$ en las filas. Los cursores no se registran.
+
+Paginacion keyset Oracle 10g: comparaciones lexicograficas con NULLS LAST y ROWID
+como desempate unico. PRE_PRESUPUESTOS no tiene PK visible en QA, por lo que UseRowId
+es la estrategia aprobable explicita. No modificar/mover/reorganizar la tabla durante
+la investigacion; entre paginas no hay snapshot y cambios concurrentes pueden afectar
+resultados. No se publica un total inventado ni se ejecuta COUNT automaticamente.
+Ordenar texto requiere longitud declarada hasta 1000 bytes. Limites de filas/bytes
+pueden producir hasMore/truncado: continuar desde nextCursor cuando exista. Si una
+sola fila supera el presupuesto disponible, reducir proyeccion o pedir soporte.
+
+La descripcion de metadatos no requiere permiso de datos. Cambiar politica requiere
+configuracion del servidor; ninguna solicitud puede registrar una politica. Auditar
+requestId, cliente, alias, tabla, empresa, cantidad de filas y hash de consulta,
+sin filtros con valores, token ni filas. Validacion local no acredita QA hasta
+publicar el codigo y habilitar solo la politica de presupuestos.
+
+### Validacion QA de datos
+
+Publicado con autorizacion explicita en release r56-datos-20261118T175204Z.
+Se verificaron ultimo presupuesto por HTTP, tres paginas sin duplicados, 401 sin
+token, aislamiento por empresa, rechazo de columna sensible, tabla sin politica
+y cursor alterado. La politica activada es exclusivamente PRE.PRE_PRESUPUESTOS.
+No se cambiaron registros de negocio ni el token existente. Pruebas realizadas
+por HTTP loopback mediante SSH; no certifican exposicion por URL publica.

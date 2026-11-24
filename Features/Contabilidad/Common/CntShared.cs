@@ -57,7 +57,7 @@ internal static class CntDb
 
     public static CntDetalleResponse MapDetalle(IDataReader reader)
     {
-        var monto = reader.SafeGetDecimal("MONTO");
+        var monto = CntMoney.FromOracle(reader.SafeGetDecimal("MONTO"));
         var debe = monto < 0 ? Math.Abs(monto) : 0m;
         var haber = monto > 0 ? monto : 0m;
 

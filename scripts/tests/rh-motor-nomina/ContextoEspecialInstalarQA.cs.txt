@@ -1,0 +1,22 @@
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var checks=new List<string>();
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+string Normalize(string text)=>Regex.Replace(string.Join("\n",text.Replace("\r","").Split('\n').Where(l=>!l.TrimStart().StartsWith("--")).Select(l=>l.TrimEnd())).Trim(),@"\A(PROCEDURE|TRIGGER|PACKAGE BODY|PACKAGE)\s+","$1 ");
+try{
+ using var cn=new OracleConnection(cfg["ConnectionStrings:DefaultConnectionRH"]);await cn.OpenAsync();OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.BindByName=true;c.CommandTimeout=25;c.CommandText=sql;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(cfg.GetValue<int>("settings:EmpresaConfig")==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","qa-identity");}
+ var sql=File.ReadAllText(args[0]);var ddl=string.Join("\n",sql.Split('\n').Where(l=>!l.TrimStart().StartsWith("--")&&l.Trim()!="/"));
+ Check(ddl.TrimStart().StartsWith("CREATE OR REPLACE PROCEDURE RH.SP_RH_NOM_CTX_HIST (",StringComparison.Ordinal)&&sql.Split('\n').Count(l=>l.Trim()=="/")==1,"single-reviewed-context-procedure");
+ using(var c=Cmd("SELECT TEXT FROM USER_SOURCE WHERE NAME='SP_RH_NOM_CTX_HIST' AND TYPE='PROCEDURE' ORDER BY LINE"))using(var r=await c.ExecuteReaderAsync()){
+ var installed=new StringBuilder();while(await r.ReadAsync())installed.Append(r.GetString(0));
+ var expected=ddl.Replace("CREATE OR REPLACE PROCEDURE RH.","PROCEDURE ");
+ Check(installed.Length>0&&(Normalize(installed.ToString())==Normalize(expected)||Normalize(installed.ToString())==Normalize(expected.Replace("NOT IN ('F','V','E')","NOT IN ('F','V')"))),"existing-definition-reviewed-old-or-new");}
+ using(var c=Cmd(ddl))await c.ExecuteNonQueryAsync();
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='SP_RH_NOM_CTX_HIST' AND OBJECT_TYPE='PROCEDURE' AND STATUS='VALID'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"context-procedure-valid");
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_ERRORS WHERE NAME='SP_RH_NOM_CTX_HIST'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"no-compilation-errors");
+ Console.WriteLine("R57_CTX_ESPECIAL="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,NoPayrollWrites=true,LegacyPackageChanged=false}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

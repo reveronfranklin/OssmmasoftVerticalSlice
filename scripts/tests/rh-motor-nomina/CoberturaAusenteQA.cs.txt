@@ -1,0 +1,23 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var from=new DateTime(2023,11,21);var until=new DateTime(2026,11,22);var coverage=new List<object>();
+ const string sql=@"WITH T AS (SELECT CODIGO_TIPO_NOMINA T,COUNT(*) N FROM RH_TIPOS_NOMINA WHERE CODIGO_EMPRESA=:e GROUP BY CODIGO_TIPO_NOMINA),H AS (
+ SELECT CODIGO_TIPO_NOMINA T,COUNT(*) N,MIN(FECHA_NOMINA) FIRST_DATE,MAX(FECHA_NOMINA) LAST_DATE,SUM(CASE WHEN FECHA_NOMINA IS NULL THEN 1 ELSE 0 END) NULL_DATES,SUM(CASE WHEN FECHA_NOMINA>=:f AND FECHA_NOMINA<:u THEN 1 ELSE 0 END) WINDOW_ROWS FROM RH_HISTORICO_NOMINA WHERE CODIGO_EMPRESA=:e GROUP BY CODIGO_TIPO_NOMINA),C AS (
+ SELECT CODIGO_TIPO_NOMINA T,COUNT(*) N,MIN(FECHA_NOMINA) FIRST_DATE,MAX(FECHA_NOMINA) LAST_DATE,SUM(CASE WHEN FECHA_NOMINA IS NULL THEN 1 ELSE 0 END) NULL_DATES,SUM(CASE WHEN FECHA_NOMINA>=:f AND FECHA_NOMINA<:u THEN 1 ELSE 0 END) WINDOW_ROWS FROM RH_HISTORICO_PERSONAL_CARGO WHERE CODIGO_EMPRESA=:e GROUP BY CODIGO_TIPO_NOMINA),K AS (SELECT T FROM T UNION SELECT T FROM H UNION SELECT T FROM C)
+ SELECT K.T,NVL(T.N,0),NVL(H.N,0),TO_CHAR(H.FIRST_DATE,'YYYY-MM-DD HH24:MI:SS'),TO_CHAR(H.LAST_DATE,'YYYY-MM-DD HH24:MI:SS'),NVL(H.NULL_DATES,0),NVL(H.WINDOW_ROWS,0),NVL(C.N,0),TO_CHAR(C.FIRST_DATE,'YYYY-MM-DD HH24:MI:SS'),TO_CHAR(C.LAST_DATE,'YYYY-MM-DD HH24:MI:SS'),NVL(C.NULL_DATES,0),NVL(C.WINDOW_ROWS,0)
+ FROM K LEFT JOIN T ON DECODE(K.T,T.T,1,0)=1 LEFT JOIN H ON DECODE(K.T,H.T,1,0)=1 LEFT JOIN C ON DECODE(K.T,C.T,1,0)=1 ORDER BY K.T NULLS FIRST";
+ using(var c=Cmd(sql,("e",company),("f",from),("u",until)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync()){
+ string? Text(int i)=>r.IsDBNull(i)?null:r.GetString(i);long Num(int i)=>Convert.ToInt64(r.GetValue(i));
+ coverage.Add(new{Type=r.IsDBNull(0)?(int?)null:Convert.ToInt32(r.GetValue(0)),ConfiguredRows=Num(1),HistoryRows=Num(2),FirstHistory=Text(3),LastHistory=Text(4),HistoryNullDates=Num(5),HistoryInWindow=Num(6),CargoRows=Num(7),FirstCargo=Text(8),LastCargo=Text(9),CargoNullDates=Num(10),CargoInWindow=Num(11)});}
+ var names=new List<object>();using(var c=Cmd("SELECT CODIGO_TIPO_NOMINA,TIPO_NOMINA,COUNT(*) FROM RH_HISTORICO_PERSONAL_CARGO WHERE CODIGO_EMPRESA=:e AND FECHA_NOMINA>=:f AND FECHA_NOMINA<:u GROUP BY CODIGO_TIPO_NOMINA,TIPO_NOMINA ORDER BY CODIGO_TIPO_NOMINA,TIPO_NOMINA",("e",company),("f",from),("u",until)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())names.Add(new{Type=r.IsDBNull(0)?(int?)null:Convert.ToInt32(r.GetValue(0)),ArchivedTypeName=r.IsDBNull(1)?null:r.GetString(1),Rows=Convert.ToInt64(r.GetValue(2))});
+ Console.WriteLine("R57_COBERTURA_AUSENTE="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,FromInclusive=from,UntilExclusive=until,Coverage=coverage,ArchivedTypeNames=names,NoPayrollWrites=true,NoAmountsOrPersonalNamesRead=true,AcceptanceGranted=false}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

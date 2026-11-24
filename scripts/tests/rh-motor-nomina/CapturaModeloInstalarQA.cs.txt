@@ -1,0 +1,25 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"application-disabled-before-install");
+ using var payload=JsonDocument.Parse(File.ReadAllText(args[0]));var sql=payload.RootElement.GetProperty("Sql").GetString()!;var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(sql))).ToLowerInvariant();
+ Check(hash==payload.RootElement.GetProperty("SqlSha256").GetString(),"reviewed-sql-hash");
+ var objects=new[]{"RH_PKG_NOM_RUN","RH_NOM_CAP_ARC","RH_NOM_CAP_ARC_SEQ","RH_PKG_NOM_CAP_ARC","TR_RH_NOM_CAP_ARC_IMM"};var previous=new List<object>();
+ foreach(var name in objects)using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME=:n",("n",name)))previous.Add(new{Name=name,Count=Convert.ToInt32(await c.ExecuteScalarAsync(ct))});
+ var commands=System.Text.RegularExpressions.Regex.Split(sql,@"(?m)^\s*/\s*$").Where(x=>!string.IsNullOrWhiteSpace(x)).ToList();Check(commands.Count==9,"run-mode-and-V4-archive-upgrade");
+ foreach(var statement in commands){using var c=Cmd(statement);await c.ExecuteNonQueryAsync(ct);}
+ var installed=new List<object>();foreach(var name in objects){using var c=Cmd("SELECT OBJECT_TYPE,STATUS FROM USER_OBJECTS WHERE OBJECT_NAME=:n ORDER BY OBJECT_TYPE",("n",name));using var rd=await c.ExecuteReaderAsync(ct);var statuses=new List<string>();while(await rd.ReadAsync(ct)){Check(rd.GetString(1)=="VALID","valid-object-"+name+"-"+rd.GetString(0));statuses.Add(rd.GetString(0));}Check(statuses.Count>0,"object-installed-"+name);installed.Add(new{Name=name,Types=statuses});}
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_ERRORS WHERE NAME IN ('RH_PKG_NOM_RUN','RH_PKG_NOM_CAP_ARC','TR_RH_NOM_CAP_ARC_IMM')"))Check(Convert.ToInt32(await c.ExecuteScalarAsync(ct))==0,"no-compilation-errors");
+
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-execution-disabled");foreach(var table in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"})using(var c=Cmd("SELECT COUNT(*) FROM "+table))Check(Convert.ToInt32(await c.ExecuteScalarAsync(ct))==0,"real-empty-"+table);
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_CONSTRAINTS WHERE CONSTRAINT_NAME='CK_RH_NOM_RUN_MOD2' AND STATUS='ENABLED' AND VALIDATED='VALIDATED'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync(ct))==1,"four-modes-constraint-validated");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,SqlSha256=hash,Previous=previous,Installed=installed,ReadOnlySourceProcedure=true,ArchiveV4Supported=true,NoPayrollWrites=true,NoBusinessConfigurationWrites=true,SchemaObjectsInstalled=true,ProceduresExecuted=false}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

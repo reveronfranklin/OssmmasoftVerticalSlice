@@ -1,0 +1,22 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var outcomes=new List<object>();
+ foreach(var type in new[]{10,12,20,21}){
+ int period;DateTime date;
+ using(var c=Cmd("SELECT * FROM (SELECT CODIGO_PERIODO,FECHA_NOMINA FROM RH_PERIODOS WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND FECHA_CIERRE IS NULL ORDER BY FECHA_NOMINA DESC,CODIGO_PERIODO) WHERE ROWNUM=1",("e",company),("t",type)))using(var r=await c.ExecuteReaderAsync()){Check(await r.ReadAsync(),"open-context-"+type);period=r.GetInt32(0);date=DateTime.SpecifyKind(r.GetDateTime(1),DateTimeKind.Unspecified);}
+ var context=new RhNomContextoHistorico(company,type,period,date);var captured=await RhNomReferenciaIntegral.Leer(cn,context,ct);RhNomReferenciaIntegral.Verificar(captured,context);Check(captured.Documento.Candidatos.Count<=1,"unique-or-clock-"+type);
+ var serialized=JsonSerializer.Serialize(captured,RhNomCorridas.Json);var restored=JsonSerializer.Deserialize<RhNomReferenciaIntegralCapturada>(serialized,RhNomCorridas.Json)!;RhNomReferenciaIntegral.Verificar(restored,context);Check(restored.Hash==captured.Hash,"frozen-reference-replay-"+type);
+ try{RhNomReferenciaIntegral.Verificar(restored with{FechaReferencia=restored.FechaReferencia.AddDays(1)},context);throw new InvalidOperationException("tamper-not-rejected");}catch(RhNomError){Check(true,"changed-reference-rejected-"+type);}
+ outcomes.Add(new{Type=type,Period=period,NominalDate=date,ReferenceDate=captured.FechaReferencia,OracleClock=captured.Documento.RelojOracle,Origin=captured.Origen,Candidates=captured.Documento.Candidatos.Count,Hash=captured.Hash,StateHistoricallyVerified=captured.EstadoHistoricoVerificado});
+ }
+ Console.WriteLine("R57_REF_INT="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Outcomes=outcomes,NoPayrollWrites=true,NoConfigWrites=true,LegacyFunctionCalled=false,PublishedProvider=false}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

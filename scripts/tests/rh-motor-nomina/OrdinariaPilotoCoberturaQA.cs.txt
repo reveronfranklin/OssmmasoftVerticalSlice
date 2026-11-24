@@ -1,0 +1,17 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var loaded=await new RhNomVersionesHandler(db).Get(new(1,71),company,ct);Check(loaded.IsValid&&loaded.Data is not null,"pilot-model-readable");var model=loaded.Data!;
+ var rules=model.Configuracion.ReglasConcepto!.Select(r=>new{Concept=r.Concepto.CodigoConcepto,Code=r.Concepto.Codigo,Name=r.Concepto.Denominacion,Kind=r.TipoMovimiento,Output=r.VariableSalida}).ToList();var ids=rules.Select(r=>r.Concept).ToHashSet();
+ var catalogue=new List<object>();var notCovered=new List<int>();var automatic=0;
+ using(var c=cn.CreateCommand()){c.CommandTimeout=25;c.CommandText="SELECT C.CODIGO_CONCEPTO,C.CODIGO,C.DENOMINACION,C.AUTOMATICO,C.STATUS,C.FRECUENCIA_ID,C.ID_MODELO_CALCULO,(SELECT COUNT(*) FROM RH_MOV_NOMINA M WHERE M.CODIGO_EMPRESA=C.CODIGO_EMPRESA AND M.CODIGO_TIPO_NOMINA=C.CODIGO_TIPO_NOMINA AND M.CODIGO_CONCEPTO=C.CODIGO_CONCEPTO) FROM RH_CONCEPTOS C WHERE C.CODIGO_EMPRESA=13 AND C.CODIGO_TIPO_NOMINA=10 ORDER BY C.CODIGO_CONCEPTO";using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync()){Check(catalogue.Count<1000,"bounded-type-catalogue");var id=r.GetInt32(0);var a=r.IsDBNull(3)?(int?)null:r.GetInt32(3);var status=r.IsDBNull(4)?null:r.GetString(4);if(a==1&&status=="A"){automatic++;if(!ids.Contains(id))notCovered.Add(id);}catalogue.Add(new{Concept=id,Code=r.IsDBNull(1)?null:r.GetString(1),Name=r.IsDBNull(2)?null:r.GetString(2),Automatic=a,Status=status,Frequency=r.IsDBNull(5)?(int?)null:r.GetInt32(5),BoundModel=r.IsDBNull(6)?(int?)null:r.GetInt32(6),CurrentMovementCount=r.GetInt32(7),InPilotRules=ids.Contains(id)});}}
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-disabled");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Type=10,Model=1,Revision=71,ModelHash=model.Hash,Rules=rules,Catalogue=catalogue,ActiveAutomaticCount=automatic,ActiveAutomaticWithoutPilotRule=notCovered,AutomaticFlagIsNotFormulaEvidence=true,NoPayrollWrites=true,NoConfigurationWrites=true,OperationalModelCertified=false}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

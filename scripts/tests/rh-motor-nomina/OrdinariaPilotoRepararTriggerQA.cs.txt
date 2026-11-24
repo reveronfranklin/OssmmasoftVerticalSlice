@@ -1,0 +1,19 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var input=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;var source=new System.Text.StringBuilder();using(var c=cn.CreateCommand()){c.CommandText="SELECT TEXT FROM ALL_SOURCE WHERE OWNER='RH' AND NAME='RH_TRG_BEF_UPD_CONCEPTOS' AND TYPE='TRIGGER' ORDER BY LINE";using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync())source.Append(r.GetString(0));}
+ var beforeHash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(source.ToString())));Check(beforeHash==input.GetProperty("OriginalTriggerSha256").GetString(),"exact-reviewed-original-trigger");
+ var replacement=input.GetProperty("ReplacementTrigger").GetString()!;Check(replacement.StartsWith("CREATE OR REPLACE TRIGGER RH.RH_TRG_BEF_UPD_CONCEPTOS")&&!replacement.Contains("from v$session",StringComparison.OrdinalIgnoreCase)&&replacement.Contains("INSERT INTO RH.RH_H_CONCEPTOS")&&replacement.Contains("Raise_Application_Error (-20001"),"audit-and-delete-prohibition-preserved");
+ using(var c=cn.CreateCommand()){c.CommandText="SELECT SYS_CONTEXT('USERENV','OS_USER'),SYS_CONTEXT('USERENV','HOST') FROM DUAL";using var r=await c.ExecuteReaderAsync();Check(await r.ReadAsync()&&!r.IsDBNull(0)&&!r.IsDBNull(1),"audit-context-available");}
+ using(var c=cn.CreateCommand()){c.CommandText=replacement;await c.ExecuteNonQueryAsync();}
+ using(var c=cn.CreateCommand()){c.CommandText="SELECT COUNT(*) FROM ALL_OBJECTS WHERE OWNER='RH' AND OBJECT_NAME='RH_TRG_BEF_UPD_CONCEPTOS' AND OBJECT_TYPE='TRIGGER' AND STATUS='VALID'";Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"trigger-valid");}
+ using(var c=cn.CreateCommand()){c.CommandText="SELECT COUNT(*) FROM ALL_ERRORS WHERE OWNER='RH' AND NAME='RH_TRG_BEF_UPD_CONCEPTOS' AND TYPE='TRIGGER' AND ATTRIBUTE='ERROR'";Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"zero-trigger-compilation-errors");}
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{OriginalSha256=beforeHash,ReplacementSha256=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(replacement))),AuditPreserved=true,DeleteProhibitionPreserved=true,NoPayrollWrites=true,TriggerRepaired=true}}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

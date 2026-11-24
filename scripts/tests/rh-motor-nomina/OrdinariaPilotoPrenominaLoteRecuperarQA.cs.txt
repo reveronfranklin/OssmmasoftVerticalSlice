@@ -1,0 +1,16 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ int owner;using(var c=cn.CreateCommand()){c.CommandText="SELECT ACTOR FROM RH_NOM_PRE_LOT WHERE ID_LOTE=3 AND CODIGO_EMPRESA=13 AND CLAVE_SOL='QA_UI_ORD10_20261123_01'";owner=Convert.ToInt32(await c.ExecuteScalarAsync());}Check(owner>0&&owner!=actor,"existing-signed-request-owner");var before=(await RhNomPrenominaDb.Leer(cn,13,owner,3,null,ct))!;var completed=before.Documento.Casos.Where(c=>c.Estado=="CALCULADO").ToDictionary(c=>c.Persona,c=>JsonSerializer.Serialize(c));
+ var previous=await RhNomCorridasDb.Leer(cn,13,owner,552,ct);Check(previous.Estado=="ERROR"&&previous.HashResultado is null,"previous-failed-run-retained");
+ if(before.Documento.Estado=="BLOQUEADA"){var result=await new RhNomPrenominaReintentoHandler(db,cfg).Recuperar(new(3,before.Version),13,owner,ct);Check(result.IsValid,result.Message??"retry-rejected");}
+ var after=(await RhNomPrenominaDb.Leer(cn,13,owner,3,null,ct))!;var target=after.Documento.Casos.Single(c=>c.Persona==2460);Check(target.IdRun is not null&&target.IdRun!=552,"new-retry-run");var retry=await RhNomCorridasDb.Leer(cn,13,owner,target.IdRun!.Value,ct);Check(retry.HashDatos==previous.HashDatos,"identical-frozen-input-hash");Check(retry.IdempotencyKey=="PRE_3_2460_RETRY_552","previous-run-trace-in-durable-key");foreach(var c in completed)Check(JsonSerializer.Serialize(after.Documento.Casos.Single(x=>x.Persona==c.Key))==c.Value,"completed-case-preserved-"+c.Key);
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Lote=3,State=after.Documento.Estado,PreviousRun=552,RetryRun=retry.IdRun,HashDatos=retry.HashDatos,CompletedCasesPreserved=completed.Count,WorkerRecoveryOfExistingSignedRequest=true,NewSisHttpCallClaimed=false,NoSourceRecapture=true,NoOriginalMovementWrites=true}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+":"+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(Exception ex){Console.WriteLine("R57_FAIL_CHECK="+ex.GetType().Name+":"+ex.Message);Environment.ExitCode=1;}

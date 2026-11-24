@@ -1,0 +1,77 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ using var input=JsonDocument.Parse(File.ReadAllText(args[1]));
+ if(!string.IsNullOrWhiteSpace(File.ReadAllText(args[0]))){
+ var sql=File.ReadAllText(args[0]);var lines=sql.Split('\n');var ddl=string.Join("\n",lines.Where(l=>!l.TrimStart().StartsWith("--")&&l.Trim()!="/"));
+ Check(ddl.TrimStart().StartsWith("CREATE OR REPLACE PROCEDURE RH.SP_RH_NOM_POB_HIST (",StringComparison.Ordinal)&&lines.Count(l=>l.Trim()=="/")==1,"single-allowlisted-procedure");
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='SP_RH_NOM_POB_HIST' AND OBJECT_TYPE<>'PROCEDURE'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"no-name-conflict");
+ using(var c=Cmd("SELECT TEXT FROM USER_SOURCE WHERE NAME='SP_RH_NOM_POB_HIST' AND TYPE='PROCEDURE' ORDER BY LINE"))using(var r=await c.ExecuteReaderAsync()){
+ var existing=new System.Text.StringBuilder();while(await r.ReadAsync())existing.Append(r.GetString(0));
+ if(existing.Length>0)Check(existing.ToString().Replace("\r","").Trim()==ddl.Replace("CREATE OR REPLACE PROCEDURE RH.","PROCEDURE ").Replace("\r","").Trim(),"existing-definition-identical");}
+ using(var c=Cmd(ddl))await c.ExecuteNonQueryAsync();
+ }
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='SP_RH_NOM_POB_HIST' AND OBJECT_TYPE='PROCEDURE' AND STATUS='VALID'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"procedure-valid");
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_ERRORS WHERE NAME='SP_RH_NOM_POB_HIST'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"no-sql-errors");
+ var outcomes=new List<object>();var handler=new RhNomPoblacionHistoricaHandler(db);int cases=0;string? firstHash=null;RhNomPoblacionHistoricaQuery? firstQuery=null;
+ foreach(var sample in input.RootElement.GetProperty("CandidatePeriods").EnumerateArray()){
+ var type=sample.GetProperty("Type").GetInt32();var period=sample.GetProperty("Period").GetInt32();var date=DateTime.SpecifyKind(sample.GetProperty("Date").GetDateTime(),DateTimeKind.Unspecified);var query=new RhNomPoblacionHistoricaQuery(type,period,date.ToString("yyyy-MM-dd'T'HH:mm:ss",System.Globalization.CultureInfo.InvariantCulture));
+ var result=await handler.Handle(query,company,ct);Check(result.IsValid&&result.Data is not null,"population-"+type+"-"+period);var report=result.Data!;
+ using(var c=Cmd("SELECT COUNT(*),COUNT(DISTINCT CODIGO_PERSONA) FROM RH_HISTORICO_PERSONAL_CARGO WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND CODIGO_PERIODO=:p AND FECHA_NOMINA=:f",("e",company),("t",type),("p",period),("f",date)))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(report.FilasCargo==Convert.ToInt32(r.GetValue(0)),"all-cargo-rows-"+period);Check(report.Personas.Count(x=>x.Archivo.CodigoPersona is not null&&x.Archivo.FilasCargo>0)==Convert.ToInt32(r.GetValue(1)),"all-cargo-persons-"+period);}
+ using(var c=Cmd("SELECT COUNT(*),COUNT(DISTINCT CODIGO_PERSONA) FROM RH_HISTORICO_NOMINA WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND CODIGO_PERIODO=:p AND FECHA_NOMINA=:f",("e",company),("t",type),("p",period),("f",date)))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(report.Partidas==Convert.ToInt32(r.GetValue(0)),"all-result-rows-"+period);Check(report.Personas.Count(x=>x.Archivo.CodigoPersona is not null&&x.Archivo.Partidas>0)==Convert.ToInt32(r.GetValue(1)),"all-result-persons-"+period);}
+ Check(report.PoblacionCompleta&&!report.ParidadCertificada&&!report.EntradasOriginalesVerificadas&&!report.MovimientosAplicados,"no-parity-claim-"+period);
+ Check(report.CandidatosUnCargo+report.PersonasConBloqueos==report.Personas.Count,"all-persons-classified-"+period);
+ var blocks=report.Personas.SelectMany(x=>x.Bloqueos).GroupBy(x=>x).ToDictionary(g=>g.Key,g=>g.Count());
+ outcomes.Add(new{Type=type,Period=period,Date=query.FechaNomina,Groups=report.Personas.Count,report.FilasCargo,report.Partidas,report.CandidatosUnCargo,report.PersonasConBloqueos,Blocks=blocks,report.HashPoblacion});cases++;firstHash??=report.HashPoblacion;firstQuery??=query;
+ }
+ Check(cases==input.RootElement.GetProperty("CandidatePeriods").GetArrayLength(),"all-selected-periods");
+ var replay=await handler.Handle(firstQuery!,company,ct);Check(replay.IsValid&&replay.Data!.HashPoblacion==firstHash,"stable-recapture");
+ Check(!(await handler.Handle(firstQuery!,company+1000000,ct)).IsValid,"other-company-context-denied");
+ Check(!(await handler.Handle(firstQuery! with{FechaNomina="2099-01-01T00:00:00"},company,ct)).IsValid,"absent-exact-context-denied");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_EVT"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"real-ledger-empty");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_SOL"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"real-receipts-empty");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_CTL WHERE ACTIVO=1 OR LEGACY_RETIRADO=1"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"financial-gates-closed");
+ var isolated=input.RootElement.TryGetProperty("RunIsolatedSql",out var flag)&&flag.GetBoolean();
+ if(isolated){
+ // SQL edge cases use disposable tables, never the RH payroll tables.
+ var prefix="Q57P"+Guid.NewGuid().ToString("N")[..8].ToUpperInvariant()+"_";
+ var names=new[]{prefix+"CARGO",prefix+"NOMINA",prefix+"PERIODO",prefix+"POB"};var created=new List<(string Type,string Name)>();
+ try{
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME LIKE :n",("n",prefix+"%")))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"shadow-prefix-unused");
+ async Task Create(string kind,string name,string ddl){using var c=Cmd(ddl);await c.ExecuteNonQueryAsync();created.Add((kind,name));}
+ const string common="CODIGO_EMPRESA NUMBER,CODIGO_TIPO_NOMINA NUMBER,CODIGO_PERIODO NUMBER,FECHA_NOMINA DATE";
+ await Create("TABLE",names[0],"CREATE TABLE "+names[0]+" ("+common+",CODIGO_PERSONA NUMBER,CODIGO_RELACION_CARGO NUMBER)");
+ await Create("TABLE",names[1],"CREATE TABLE "+names[1]+" ("+common+",CODIGO_PERSONA NUMBER)");
+ await Create("TABLE",names[2],"CREATE TABLE "+names[2]+" ("+common+",FECHA_CIERRE DATE)");
+ var shadow=File.ReadAllText(args[2]).Replace("RH.SP_RH_NOM_POB_HIST","RH."+names[3]).Replace("RH.RH_HISTORICO_PERSONAL_CARGO","RH."+names[0]).Replace("RH.RH_HISTORICO_NOMINA","RH."+names[1]).Replace("RH.RH_PERIODOS","RH."+names[2]);
+ shadow=string.Join("\n",shadow.Split('\n').Where(l=>!l.TrimStart().StartsWith("--")&&l.Trim()!="/"));await Create("PROCEDURE",names[3],shadow);
+ async Task Insert(string table,string tail){using var c=Cmd("INSERT INTO "+table+" VALUES(13,10,5,DATE '2025-10-15',"+tail+")");await c.ExecuteNonQueryAsync();}
+ await Insert(names[2],"DATE '2025-10-16'");
+ foreach(var tail in new[]{"101,1","102,2","102,3","103,4","103,4","104,5","NULL,6","0,7","106,0","107,NULL"})await Insert(names[0],tail);
+ foreach(var tail in new[]{"101","101","102","103","105","NULL","0","106","107"})await Insert(names[1],tail);
+ using(var c=Cmd("INSERT INTO "+names[0]+" VALUES(14,10,5,DATE '2025-10-15',900,900)"))await c.ExecuteNonQueryAsync();
+ using(var c=Cmd("INSERT INTO "+names[1]+" VALUES(13,10,5,DATE '2025-10-15'+1/24,901)"))await c.ExecuteNonQueryAsync();
+ async Task<List<RhNomPersonaArchivo>> ShadowRows(){using var c=cn.CreateCommand();c.CommandType=System.Data.CommandType.StoredProcedure;c.CommandText="RH."+names[3];c.BindByName=true;c.CommandTimeout=25;c.Parameters.Add("p_EMPRESA",OracleDbType.Int32).Value=13;c.Parameters.Add("p_TIPO",OracleDbType.Int32).Value=10;c.Parameters.Add("p_PERIODO",OracleDbType.Int32).Value=5;c.Parameters.Add("p_FECHA",OracleDbType.Date).Value=new DateTime(2025,10,15);c.Parameters.Add("p_RESULT",OracleDbType.RefCursor,System.Data.ParameterDirection.Output);using var r=await c.ExecuteReaderAsync();var rows=new List<RhNomPersonaArchivo>();while(await r.ReadAsync()){int? Opt(string n)=>r.IsDBNull(r.GetOrdinal(n))?null:Convert.ToInt32(r.GetValue(r.GetOrdinal(n)));rows.Add(new(Opt("CODIGO_PERSONA"),Opt("FILAS_CARGO")!.Value,Opt("RELACIONES")!.Value,Opt("REL_INVALIDAS")!.Value,Opt("RELACION_UNICA"),Opt("PARTIDAS")!.Value));}return rows;}
+ var synthetic=RhNomPoblaciones.Analizar(new(new(13,10,5,new DateTime(2025,10,15)),new DateTime(2025,10,16),null,9,7,0,0,0),await ShadowRows());
+ Check(synthetic.FilasCargo==10&&synthetic.Partidas==9&&synthetic.Personas.Count==9,"shadow-full-outer-universe");
+ Check(synthetic.CandidatosUnCargo==1&&synthetic.Personas.Single(x=>x.CandidatoUnCargo).Archivo.CodigoPersona==101,"shadow-only-unique-cargo-candidate");
+ Check(synthetic.Personas.Single(x=>x.Archivo.CodigoPersona is null).Archivo is{FilasCargo:1,Partidas:1},"shadow-null-join-preserved");
+ Check(synthetic.Personas.Single(x=>x.Archivo.CodigoPersona==102).Bloqueos.Contains("MULTIPLES_CARGOS_REQUIEREN_SEGMENTOS"),"shadow-multiple-cargos");
+ Check(synthetic.Personas.Single(x=>x.Archivo.CodigoPersona==103).Bloqueos.Contains("SNAPSHOT_DUPLICADO"),"shadow-duplicate-snapshot");
+ Check(synthetic.Personas.Single(x=>x.Archivo.CodigoPersona==104).Bloqueos.Contains("CARGO_SIN_PARTIDAS"),"shadow-cargo-only");
+ Check(synthetic.Personas.Single(x=>x.Archivo.CodigoPersona==105).Bloqueos.Contains("PARTIDAS_SIN_CARGO"),"shadow-result-only");
+ Check(synthetic.Personas.Where(x=>x.Archivo.CodigoPersona is 106 or 107).All(x=>x.Bloqueos.Contains("RELACION_INVALIDA")),"shadow-null-zero-relations");
+ await Insert(names[2],"DATE '2025-10-16'");Check((await ShadowRows()).Count==0,"shadow-duplicate-period-not-selected");
+ }finally{foreach(var item in created.AsEnumerable().Reverse()){Check(names.Contains(item.Name)&&item.Name.StartsWith(prefix,StringComparison.Ordinal),"shadow-drop-allowlisted");using var c=Cmd("DROP "+item.Type+" "+item.Name+(item.Type=="TABLE"?" PURGE":""));await c.ExecuteNonQueryAsync();}}
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME LIKE :n",("n",prefix+"%")))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"shadow-objects-cleaned");
+ }
+ Console.WriteLine("R57_POBLACION="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Outcomes=outcomes,NoPayrollWrites=true,NoConfigurationWrites=true,NoNamesOrAmountsRead=true,IsolatedSqlTested=isolated,ShadowObjectsCleaned=isolated?(bool?)true:null,LegacyPackageCalled=false,HistoricalParityCertified=false}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

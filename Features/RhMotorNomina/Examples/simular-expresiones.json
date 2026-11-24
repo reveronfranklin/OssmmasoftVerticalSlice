@@ -1,0 +1,12 @@
+{
+  "entradas": [
+    { "codigo": "SUELDO_BASE", "valor": "1300" },
+    { "codigo": "TASA_PH", "valor": "0.01" },
+    { "codigo": "DIVISOR_PERIODO", "valor": "2" }
+  ],
+  "formulas": [
+    { "variableSalida": "NETO", "expresion": "[SUELDO_PERIODO] + [PH]" },
+    { "variableSalida": "PH", "expresion": "TRUNC(-ROUND([SUELDO_BASE] * [TASA_PH], 2) / [DIVISOR_PERIODO], 2)" },
+    { "variableSalida": "SUELDO_PERIODO", "expresion": "ROUND([SUELDO_BASE] / [DIVISOR_PERIODO], 2)" }
+  ]
+}

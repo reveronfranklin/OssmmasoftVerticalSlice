@@ -19,7 +19,7 @@ public record OracleAnalisisEnvelope(string RequestId, string Ambiente, string C
 [ApiController]
 [Route("api/OracleAnalisis")]
 [Authorize(AuthenticationSchemes = OracleAnalisisRules.Scheme)]
-public sealed class OracleAnalisisController(ConnectionDB db, IConfiguration config,
+public sealed partial class OracleAnalisisController(ConnectionDB db, IConfiguration config,
     IWebHostEnvironment environment, ILogger<OracleAnalisisController> logger) : ControllerBase
 {
     private static readonly SemaphoreSlim Gate = new(2);

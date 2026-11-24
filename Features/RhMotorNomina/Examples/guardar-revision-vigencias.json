@@ -1,0 +1,45 @@
+{
+  "modeloId": 7,
+  "versionEsperada": 0,
+  "codigoTipoNomina": 10,
+  "escenario": "ADJUNTAR_CARGO",
+  "descripcion": "Borrador con divisor por vigencia (valores sinteticos)",
+  "variables": [
+    {
+      "id": 1,
+      "versionEsperada": 1
+    },
+    {
+      "id": 2,
+      "versionEsperada": 1
+    },
+    {
+      "id": 3,
+      "versionEsperada": 1
+    }
+  ],
+  "formulas": [
+    {
+      "variableSalida": "SUELDO_PERIODO",
+      "expresion": "ROUND([SUELDO]/[DIVISOR],2)"
+    }
+  ],
+  "parametros": [
+    {
+      "clave": "DIV_PRIMER_SEM",
+      "codigoVariable": "DIVISOR",
+      "valor": "2",
+      "desde": "2025-01-01",
+      "hasta": "2025-06-30",
+      "codigoTipoNomina": null
+    },
+    {
+      "clave": "DIV_SEGUNDO_SEM",
+      "codigoVariable": "DIVISOR",
+      "valor": "4",
+      "desde": "2025-07-01",
+      "hasta": null,
+      "codigoTipoNomina": null
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;c.Parameters.Add("e",OracleDbType.Int32).Value=company;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL WHERE :e=13"))using(var r=await c.ExecuteReaderAsync()){if(!await r.ReadAsync()||r.GetString(0)!=cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]||r.GetString(1)!=cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]||r.GetString(2)!="RH")throw new InvalidOperationException("identity-qa");}
+ var results=new Dictionary<string,object>();
+ async Task Read(string name,string sql,int limit){using var c=Cmd(sql);c.InitialLONGFetchSize=-1;using var r=await c.ExecuteReaderAsync();var rows=new List<Dictionary<string,object?>>();while(await r.ReadAsync()){if(rows.Count>=limit)throw new InvalidOperationException("row-limit-"+name);var row=new Dictionary<string,object?>();for(int i=0;i<r.FieldCount;i++)row[r.GetName(i)]=r.IsDBNull(i)?null:r.GetValue(i);rows.Add(row);}results[name]=rows;}
+ await Read("FreeSpace","SELECT TABLESPACE_NAME,SUM(BYTES) FREE_BYTES,MAX(BYTES) LARGEST_EXTENT FROM USER_FREE_SPACE WHERE :e=13 GROUP BY TABLESPACE_NAME",100);
+ await Read("OwnLobs","SELECT L.TABLE_NAME,L.COLUMN_NAME,L.SEGMENT_NAME,S.TABLESPACE_NAME,S.BYTES FROM USER_LOBS L LEFT JOIN USER_SEGMENTS S ON S.SEGMENT_NAME=L.SEGMENT_NAME WHERE :e=13 AND L.TABLE_NAME LIKE 'RH_NOM_%' ORDER BY L.TABLE_NAME,L.COLUMN_NAME",100);
+ await Read("Privileges","SELECT PRIVILEGE FROM SESSION_PRIVS WHERE :e=13 AND PRIVILEGE IN ('ALTER DATABASE','ALTER TABLESPACE','UNLIMITED TABLESPACE','SELECT ANY DICTIONARY')",10);
+ await Read("Quota","SELECT TABLESPACE_NAME,BYTES,MAX_BYTES FROM USER_TS_QUOTAS WHERE :e=13",100);
+ await Read("DiagnosticJobs","SELECT VER_MODELO,ESTADO,INTENTOS,MENSAJE FROM RH_NOM_RUN WHERE CODIGO_EMPRESA=:e AND CLAVE_SOL LIKE 'QA_DED_HOSTED_20261119_%' ORDER BY VER_MODELO",20);
+ Console.WriteLine("R57_METADATA="+JsonSerializer.Serialize(new{Status="OK",Results=results,NoPersonalData=true,NoPayrollWrites=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

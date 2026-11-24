@@ -1,0 +1,11 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();
+try{
+ using var cn=new OracleConnection(cfg["ConnectionStrings:DefaultConnectionRH"]);await cn.OpenAsync();
+ using(var c=cn.CreateCommand()){c.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await c.ExecuteReaderAsync();await r.ReadAsync();if(cfg.GetValue<int>("settings:EmpresaConfig")!=13||r.GetString(0)!=cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]||r.GetString(1)!=cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]||r.GetString(2)!="RH")throw new InvalidOperationException();}
+ var values=new Dictionary<string,string>();using(var c=cn.CreateCommand()){c.CommandText="SELECT PARAMETER,VALUE FROM NLS_SESSION_PARAMETERS WHERE PARAMETER IN ('NLS_TERRITORY','NLS_DATE_LANGUAGE','NLS_DATE_FORMAT') ORDER BY PARAMETER";using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync())values.Add(r.GetString(0),r.GetString(1));}
+ string monday,sunday;using(var c=cn.CreateCommand()){c.CommandText="SELECT TO_CHAR(TO_DATE('2025-06-02','YYYY-MM-DD'),'D'),TO_CHAR(TO_DATE('2025-06-01','YYYY-MM-DD'),'D') FROM DUAL";using var r=await c.ExecuteReaderAsync();await r.ReadAsync();monday=r.GetString(0);sunday=r.GetString(1);}
+ Console.WriteLine("R57_CALENDAR="+JsonSerializer.Serialize(new{Status="OK",Session=values,MondayOrdinal=monday,SundayOrdinal=sunday,HistoricalSessionVerified=false,NoPayrollWrites=true}));
+}catch(Exception ex){Console.WriteLine("R57_FAIL="+ex.GetType().Name);Environment.ExitCode=1;}

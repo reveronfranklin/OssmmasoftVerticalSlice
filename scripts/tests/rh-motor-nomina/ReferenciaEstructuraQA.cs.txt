@@ -1,0 +1,17 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ using var input=JsonDocument.Parse(File.ReadAllText(args[0]));var outcomes=new List<object>();foreach(var sample in input.RootElement.GetProperty("CandidatePeriods").EnumerateArray()){
+ var type=sample.GetProperty("Type").GetInt32();var period=sample.GetProperty("Period").GetInt32();var date=sample.GetProperty("Date").GetDateTime();var groups=new List<object>();
+ using(var c=Cmd("SELECT TIPO,FRECUENCIA_ID,STATUS,COUNT(*),SUM(CASE WHEN CODIGO_HISTORICO_NOMINA IS NULL OR CODIGO_HISTORICO_NOMINA<=0 THEN 1 ELSE 0 END),SUM(CASE WHEN CODIGO_CONCEPTO IS NULL OR CODIGO_CONCEPTO<=0 THEN 1 ELSE 0 END),SUM(CASE WHEN MONTO IS NULL THEN 1 ELSE 0 END) FROM RH_HISTORICO_NOMINA WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND CODIGO_PERIODO=:p AND FECHA_NOMINA=:f GROUP BY TIPO,FRECUENCIA_ID,STATUS ORDER BY TIPO,FRECUENCIA_ID,STATUS",("e",company),("t",type),("p",period),("f",date)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())groups.Add(new{MovementType=r.IsDBNull(0)?null:r.GetString(0),Frequency=r.IsDBNull(1)?(int?)null:Convert.ToInt32(r.GetValue(1)),Status=r.IsDBNull(2)?null:r.GetString(2),Rows=Convert.ToInt32(r.GetValue(3)),InvalidHistoryId=Convert.ToInt32(r.GetValue(4)),InvalidConceptId=Convert.ToInt32(r.GetValue(5)),NullAmount=Convert.ToInt32(r.GetValue(6))});
+ outcomes.Add(new{Type=type,Period=period,Date=date,Groups=groups});}
+ Console.WriteLine("R57_REF_ESTRUCTURA="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Outcomes=outcomes,NoPayrollWrites=true,NoNamesOrAmountsRead=true,LegacyPackageCalled=false}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

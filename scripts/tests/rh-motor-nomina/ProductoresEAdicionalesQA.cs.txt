@@ -1,0 +1,20 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+
+ var sources=new Dictionary<string,string>();var info=new List<object>();
+ foreach(var name in new[]{"SP_CALCULO_NOMINA","RH_GROUP_CREATED_NEW_DESC_COM","RH_PKG_PROCESOS_MASIVOS_OLD"}){
+  var lines=new List<string>();using(var c=Cmd("SELECT TEXT FROM USER_SOURCE WHERE NAME=:n AND TYPE=CASE WHEN :n='RH_PKG_PROCESOS_MASIVOS_OLD' THEN 'PACKAGE BODY' ELSE 'PROCEDURE' END ORDER BY LINE",("n",name)))using(var r=await c.ExecuteReaderAsync(ct))while(await r.ReadAsync(ct)){if(lines.Count>=10000)throw new InvalidOperationException("source-limit");lines.Add(r.GetString(0).TrimEnd('\r','\n'));}
+  Check(lines.Count>0,"source-present-"+name);var text=string.Join("\n",lines);sources[name]=text;var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+  info.Add(new{Name=name,Lines=lines.Count,Sha256=hash,ReadsHistoricalPayroll=text.Contains("RH_HISTORICO_NOMINA",StringComparison.OrdinalIgnoreCase),ReadsHistoricalCargo=text.Contains("RH_HISTORICO_PERSONAL_CARGO",StringComparison.OrdinalIgnoreCase)});
+ }
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-execution-disabled");foreach(var table in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"})using(var c=Cmd("SELECT COUNT(*) FROM "+table))Check(Convert.ToInt32(await c.ExecuteScalarAsync(ct))==0,"real-empty-"+table);
+ Console.WriteLine("R57_PRODUCTORES_ADICIONALES="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Sources=sources,Info=info,NoPayrollWrites=true,NoConfigurationWrites=true,ProceduresExecuted=false}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

@@ -1,0 +1,42 @@
+using System.Data;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).AddInMemoryCollection(new Dictionary<string,string?>{{"RhMotorNomina:CorridasEnabled","true"}}).Build();
+var db=new ConnectionDB(cfg);var checks=new List<string>();const int actor=2147483646;var company=cfg.GetValue<int>("settings:EmpresaConfig");var ct=CancellationToken.None;
+void Check(bool v,string name){if(!v)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();using var sis=db.GetSisConnection();await cn.OpenAsync();await sis.OpenAsync();
+ OracleCommand Cmd(OracleConnection con,string sql,params (string,object)[] values){var c=con.CreateCommand();c.CommandText=sql;c.BindByName=true;c.CommandTimeout=25;foreach(var (n,v) in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:OracleDbType.Varchar2).Value=v;return c;}
+ foreach(var (con,alias) in new[]{(cn,"RH"),(sis,"SIS")}){using var c=Cmd(con,"SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL");using var r=await c.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg[$"OracleAnalysis:Targets:{alias}:ExpectedDatabaseName"]&&r.GetString(1)==cfg[$"OracleAnalysis:Targets:{alias}:ExpectedServerHost"]&&r.GetString(2)==alias,"identity-"+alias);}
+ using(var c=Cmd(sis,"SELECT COUNT(*) FROM SIS.SIS_USUARIOS WHERE CODIGO_USUARIO=:id",("id",actor)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"synthetic-actor-not-user");
+ using(var c=Cmd(cn,"SELECT COUNT(*) FROM RH_NOM_RUN"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"empty-isolated-run-table-before-test");
+ var models=new RhNomVersionesHandler(db);var list=await models.GetAll(new(SearchText:"Q57_0523F8B5"),company,ct);Check(list.IsValid&&list.Data!.Count==1&&list.Data[0].ModeloId==1&&list.Data[0].UltimaVersion==7&&list.Data[0].Descripcion.Contains("QA TEST NO USAR"),"isolated-fixture-v7");
+ using(var c=Cmd(cn,"SELECT COUNT(*) FROM RH_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND ID_MODELO_CALCULO=1",("e",company)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"no-live-concept-binding");
+ var model=(await models.Get(new(1,7),company,ct)).Data!;var input=model.Configuracion.Variables.Single(v=>v.Origen=="ENTRADA").Codigo;
+ RhNomCrearCorrida Request(string key)=>new("QA_RUN_20261119_"+key,Lote:new(1,7,[new("A",new(2025,6,30),[new(input,"1300")])]));
+ var handler=new RhNomCorridasHandler(db,cfg);
+ async Task<RhNomCorrida> Create(string key){var r=await handler.Crear(Request(key),company,actor,ct);Check(r.IsValid&&r.Data is not null,"create-"+key);return r.Data!;}
+ async Task<RhNomCorrida> Read(int id)=>await RhNomCorridasDb.Leer(cn,company,actor,id,ct);
+ async Task Expire(int id,int attempts){using var tx=cn.BeginTransaction();using var c=Cmd(cn,"UPDATE RH_NOM_RUN SET VENCE_RUN=SYSDATE-1,INTENTOS=:n WHERE ID_RUN=:id AND ACTOR=:a AND CODIGO_EMPRESA=:e AND ESTADO='EN_CURSO'",("n",attempts),("id",id),("a",actor),("e",company));c.Transaction=tx;Check(await c.ExecuteNonQueryAsync()==1,"expire-owned-fixture");tx.Commit();}
+ var first=await Create("CANCEL");Check(first.Estado=="PENDIENTE"&&!first.MovimientosAplicados,"pending-no-movements");
+ var same=await handler.Crear(Request("CANCEL"),company,actor,ct);Check(same.IsValid&&same.Data!.IdRun==first.IdRun,"idempotency-no-duplicate");
+ var conflict=Request("CANCEL") with{Lote=new(1,7,[new("B",new(2025,6,30),[new(input,"1301")])])};Check(!(await handler.Crear(conflict,company,actor,ct)).IsValid,"idempotency-conflict-rejected");
+ Check(!(await handler.Get(new(first.IdRun),company,actor-1,ct)).IsValid,"foreign-actor-denied");Check(!(await handler.Get(new(first.IdRun),company+1,actor,ct)).IsValid,"foreign-company-denied");
+ Check(!(await handler.Detalle(new(first.IdRun,"ACTUAL"),company,actor,ct)).IsValid,"wrong-mode-no-document");
+ Check((await handler.Cancelar(new(first.IdRun,first.Version),company,actor,ct)).Data!.Estado=="CANCELADO","cancel-pending");Check(!(await handler.Cancelar(new(first.IdRun,first.Version),company,actor,ct)).IsValid,"stale-cancel-rejected");
+ var completed=await Create("COMPLETE");Check(await RhNomCorridaProcessor.Tick(db,company,ct),"worker-tick");completed=await Read(completed.IdRun);Check(completed.Estado=="COMPLETADO"&&completed.Intentos==1,"completed-once");
+ var detail=await handler.Detalle(new(completed.IdRun,"LOTE_MANUAL"),company,actor,ct);Check(detail.IsValid&&detail.Data!.Resultado!.Lote!.Casos.Single().Resultado.Simulacion.Resultados.Single().Resultado=="325"&&!detail.Data.Resultado.MovimientosAplicados&&!detail.Data.Resultado.ParidadCertificada,"snapshot-result-roundtrip");
+ var running=await Create("CANCEL_ACTIVE");var token=Guid.NewGuid().ToString("N");var claimed=await RhNomCorridasDb.Tomar(cn,company,token,ct);Check(claimed.Id==running.IdRun,"claim-active");running=await Read(running.IdRun);await handler.Cancelar(new(running.IdRun,running.Version),company,actor,ct);await Expire(running.IdRun,1);await RhNomCorridasDb.Tomar(cn,company,Guid.NewGuid().ToString("N"),ct);Check((await Read(running.IdRun)).Estado=="CANCELADO","cancel-after-worker-interruption");
+ var recover=await Create("RECOVER");token=Guid.NewGuid().ToString("N");Check((await RhNomCorridasDb.Tomar(cn,company,token,ct)).Id==recover.IdRun,"claim-recovery");await Expire(recover.IdRun,1);var token2=Guid.NewGuid().ToString("N");Check((await RhNomCorridasDb.Tomar(cn,company,token2,ct)).Id==recover.IdRun,"recover-expired");
+ try{await RhNomCorridasDb.Terminar(cn,recover,token,null,"Old lease",ct);throw new InvalidOperationException("stale-token-accepted");}catch(OracleException ex)when(ex.Number==20002){Check(true,"stale-token-cannot-finish");}
+ await RhNomCorridasDb.Terminar(cn,recover,token2,null,"QA synthetic failure",ct);Check((await Read(recover.IdRun)).Estado=="ERROR","error-terminal");
+ var max=await Create("MAX_RETRY");await RhNomCorridasDb.Tomar(cn,company,Guid.NewGuid().ToString("N"),ct);await Expire(max.IdRun,3);await RhNomCorridasDb.Tomar(cn,company,Guid.NewGuid().ToString("N"),ct);Check((await Read(max.IdRun)).Estado=="ERROR","exhausted-retries-terminal");
+ try{using var c=Cmd(cn,"UPDATE RH_NOM_RUN SET HASH_DATOS=HASH_DATOS WHERE ID_RUN=:id",("id",first.IdRun));await c.ExecuteNonQueryAsync();throw new InvalidOperationException("immutable-trigger-missing");}catch(OracleException ex)when(ex.Number==20004){Check(true,"immutable-input-trigger");}
+ var concurrent=await Task.WhenAll(handler.Crear(Request("CONCURRENT"),company,actor,ct),handler.Crear(Request("CONCURRENT"),company,actor,ct));Check(concurrent.All(r=>r.IsValid)&&concurrent[0].Data!.IdRun==concurrent[1].Data!.IdRun,"concurrent-idempotency-one-row");await RhNomCorridaProcessor.Tick(db,company,ct);
+ var page=await handler.Listar(new(PageNumber:1,PageSize:100),company,actor,ct);Check(page.IsValid&&page.Data!.Count==6&&page.Data.All(r=>r.Estado is "CANCELADO" or "COMPLETADO" or "ERROR"),"all-test-runs-terminal");
+ Check(!await RhNomCorridaProcessor.Tick(db,company,ct),"queue-empty");
+ Console.WriteLine("R57_RUNS="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,RunCount=page.Data!.Count,NoPayrollWrites=true,NoPersonalDataInOutput=true,AuthenticationHttpTested=false}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

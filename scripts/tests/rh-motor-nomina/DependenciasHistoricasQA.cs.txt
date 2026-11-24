@@ -1,0 +1,20 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var outcomes=new List<object>();var service=new RhNomDependenciasHistoricasHandler(db);var models=new RhNomVersionesHandler(db);var versions=new[]{14,23,24}.Concat(Enumerable.Range(26,26)).ToArray();
+ foreach(var version in versions){var loaded=await models.Get(new(1,version),company,ct);Check(loaded.IsValid,"model-found-"+version);var model=loaded.Data!;var result=await service.Handle(new(1,version),company,ct);Check(result.IsValid,"report-valid-"+version);var report=result.Data!;Check(report.HashModelo==model.Hash&&report.ModeloId==1&&report.Version==version,"same-immutable-revision-"+version);Check(!report.DatosHistoricosLeidos&&!report.MovimientosAplicados&&!report.ParidadCertificada&&!report.AplicacionDisponible,"no-data-or-operational-claim-"+version);
+ RhNomError? failure=null;try{RhNomRecalculosHistoricos.Proveedores(model);}catch(RhNomError ex){failure=ex;}
+ Check(report.TieneBloqueos==(failure is not null),"same-recalculation-gate-"+version);if(failure is not null)Check(report.Entradas.Any(e=>e.Estado==failure.Diagnostico.Codigo)||report.BloqueosModelo.Any(e=>e.Codigo==failure.Diagnostico.Codigo),"first-engine-block-is-in-report-"+version);
+ Check((await models.Get(new(1,version),company,ct)).Data!.Hash==model.Hash,"revision-preserved-"+version);
+ outcomes.Add(new{Version=version,Type=model.CodigoTipoNomina,Scenario=model.Escenario,report.TieneBloqueos,Compatible=report.Entradas.Count(e=>e.CompatibleDiagnostico),Blocked=report.Entradas.Where(e=>!e.CompatibleDiagnostico).Select(e=>new{e.CodigoVariable,e.ProveedorModelo,e.Estado}).ToList(),GlobalBlocks=report.BloqueosModelo.Select(e=>e.Codigo).ToList()});}
+ Check(!(await service.Handle(new(0,0),company,ct)).IsValid,"invalid-selector-denied");Check(!(await service.Handle(new(1,51),company+1,ct)).IsValid,"foreign-company-denied");
+ Console.WriteLine("R57_DEPENDENCIAS="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Outcomes=outcomes,NoPayrollWrites=true,NoConfigurationWrites=true,HistoricalDataRead=false,LegacyPackageCalled=false,HistoricalParityCertified=false}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}
