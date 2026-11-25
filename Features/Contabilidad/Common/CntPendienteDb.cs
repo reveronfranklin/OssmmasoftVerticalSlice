@@ -7,6 +7,10 @@ namespace OssmmasoftVerticalSlice.Features.Contabilidad;
 public static class CntMoney
 {
     public static decimal Normalize(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
+    // API/WORK: negative=Debe. Oracle voucher storage: positive=Debito.
+    // Call only at voucher persistence boundaries, never for bank statement amounts.
+    public static decimal ToOracle(decimal apiAmount) => -Normalize(apiAmount);
+    public static decimal FromOracle(decimal oracleAmount) => -Normalize(oracleAmount);
     public static bool IsBalanced(IEnumerable<decimal> amounts) => amounts.Sum(Normalize) == 0m;
 }
 

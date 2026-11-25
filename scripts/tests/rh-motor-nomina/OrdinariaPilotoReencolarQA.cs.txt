@@ -1,0 +1,23 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var input=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;var candidates=input.GetProperty("Cases").EnumerateArray().ToList();Check(candidates.Count is >0 and <=2,"bounded-requeue");
+ var output=new List<object>();var counts=new Dictionary<string,int>();var handler=new RhNomCorridaDesdeCapturaHandler(db,cfg);
+ async Task<int> Active(){using var c=cn.CreateCommand();c.CommandTimeout=20;c.CommandText="SELECT COUNT(*) FROM RH_NOM_RUN WHERE CODIGO_EMPRESA=13 AND ACTOR=2147483646 AND ESTADO IN ('PENDIENTE','EN_CURSO')";return Convert.ToInt32(await c.ExecuteScalarAsync());}
+ foreach(var candidate in candidates){
+  var key=candidate.GetProperty("CaseHash").GetString()!;var archive=candidate.GetProperty("Archive").GetInt32();
+  for(var n=0;n<100&&await Active()>=5;n++)await Task.Delay(500);
+  var q=new RhNomCrearCorridaCaptura("QA_ORD_LOTE1_RUN_"+key[..24],1,71,archive);var result=await handler.Crear(q,company,actor,ct);
+  var state=result.IsValid&&result.Data is not null?result.Data.Estado:"REINTENTO_NO_CONFIRMADO";
+  counts[state]=counts.GetValueOrDefault(state)+1;output.Add(new{CaseHash=key,Run=result.Data?.IdRun,Archive=archive,State=state,Errors=result.IsValid?new List<string>():[result.Message]});
+ }
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-closed");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{BatchStart=input.GetProperty("BatchStart").GetInt32(),Counts=counts,Cases=output,ImmutableSourcesReused=true,NoPayrollWrites=true}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

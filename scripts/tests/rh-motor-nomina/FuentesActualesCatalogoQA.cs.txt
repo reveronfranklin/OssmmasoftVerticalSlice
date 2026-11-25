@@ -1,0 +1,21 @@
+using System.Data;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Oracle.ManagedDataAccess.Client;
+using var cfg=JsonDocument.Parse(File.ReadAllText("/srv/ossmmasoft-pruebas/shared/config/vertical.json"));var root=cfg.RootElement;var company=int.Parse(root.GetProperty("settings").GetProperty("EmpresaConfig").ToString());var checks=new List<string>();
+void Check(bool value,string name){if(!value)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ var b=new OracleConnectionStringBuilder(root.GetProperty("ConnectionStrings").GetProperty("DefaultConnectionRH").GetString());using var cn=new OracleConnection(b.ConnectionString);await cn.OpenAsync();
+ OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.CommandText=sql;c.BindByName=true;c.CommandTimeout=25;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();var t=root.GetProperty("OracleAnalysis").GetProperty("Targets").GetProperty("RH");Check(company==13&&r.GetString(0)==t.GetProperty("ExpectedDatabaseName").GetString()&&r.GetString(1)==t.GetProperty("ExpectedServerHost").GetString()&&r.GetString(2)=="RH","identity-qa-rh-company13");}
+ async Task<string> Hash(){using var c=Cmd("SELECT TEXT FROM USER_SOURCE WHERE NAME='RH_PKG_ADJUNTAR_CARGO' ORDER BY TYPE,LINE");using var r=await c.ExecuteReaderAsync();var s=new StringBuilder();while(await r.ReadAsync())s.Append(r.IsDBNull(0)?"":r.GetString(0));return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s.ToString())));}
+ var old=await Hash();using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='SP_RH_NOM_CAR_ACT'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"owned-object-present-before-update");
+ using(var c=Cmd("SELECT TEXT FROM USER_SOURCE WHERE NAME='SP_RH_NOM_CAR_ACT' ORDER BY LINE"))using(var r=await c.ExecuteReaderAsync()){var prior=new StringBuilder();while(await r.ReadAsync())prior.Append(r.GetString(0));Check(prior.ToString().Contains("P.CODIGO_PRESUPUESTO=p_PRESUPUESTO")&&!prior.ToString().Contains("PRESUPUESTO_PERIODO"),"expected-prior-procedure-shape");}
+ using(var c=Cmd(string.Join("\n",File.ReadAllLines(args[0]).Where(l=>l.Trim()!="/"))))await c.ExecuteNonQueryAsync();
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='SP_RH_NOM_CAR_ACT' AND STATUS='VALID'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"new-procedure-valid");
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_ERRORS WHERE NAME='SP_RH_NOM_CAR_ACT'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"new-procedure-no-errors");
+ bool sample=false;
+ using(var c=Cmd("SELECT COUNT(*) FROM RH.RH_PERIODOS P JOIN RH.RH_TIPOS_NOMINA T ON T.CODIGO_EMPRESA=P.CODIGO_EMPRESA AND T.CODIGO_TIPO_NOMINA=P.CODIGO_TIPO_NOMINA JOIN RH.RH_RELACION_CARGOS R ON R.CODIGO_EMPRESA=P.CODIGO_EMPRESA AND R.CODIGO_TIPO_NOMINA=P.CODIGO_TIPO_NOMINA AND R.CODIGO_PRESUPUESTO=T.CODIGO_PRESUPUESTO_ACTUAL WHERE P.CODIGO_EMPRESA=13 AND P.CODIGO_TIPO_NOMINA=10 AND P.FECHA_CIERRE IS NULL AND R.CODIGO_PERSONA>0 AND R.CODIGO_RELACION_CARGO>0 AND R.FECHA_FIN IS NULL AND R.SUELDO IS NOT NULL AND (R.FECHA_INI IS NULL OR R.FECHA_INI<=P.FECHA_NOMINA) AND (R.FECHA_INI_VIGENCIA IS NULL OR R.FECHA_INI_VIGENCIA<=P.FECHA_NOMINA) AND (R.FECHA_FIN_VIGENCIA IS NULL OR R.FECHA_FIN_VIGENCIA>=P.FECHA_NOMINA)"))sample=Convert.ToInt32(await c.ExecuteScalarAsync())>0;
+ Check(old==await Hash(),"legacy-package-unchanged");Console.WriteLine("R57_ACTUAL_CAT="+JsonSerializer.Serialize(new{Status="OK",Company=company,Checks=checks,EligibleType10Context=sample,OldPayrollHash=old,NoPayrollWrites=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

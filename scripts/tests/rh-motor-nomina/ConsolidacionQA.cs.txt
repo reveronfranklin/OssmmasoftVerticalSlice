@@ -1,0 +1,26 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var service=new RhNomCorridasHandler(db,cfg);var ids=new List<int>();
+ foreach(var item in new[]{(Role:"FPS",Key:"QA_FPS_HOSTED_20261119_20"),(Role:"PF",Key:"QA_DED_HOSTED_20261119_20_PF"),(Role:"PH",Key:"QA_PH_HOSTED_20261120_20")}){
+ int oldId;using(var c=Cmd("SELECT ID_RUN FROM RH_NOM_RUN WHERE CODIGO_EMPRESA=:e AND ACTOR=:a AND CLAVE_SOL=:k",("e",company),("a",actor),("k",item.Key)))oldId=Convert.ToInt32(await c.ExecuteScalarAsync());
+ var original=await service.Detalle(new(oldId,"ACTUAL"),company,actor,ct);Check(original.IsValid,"source-run-"+item.Role);var d=original.Data!.Entrada;var s=d.FuenteActual!;
+ Check(d.Modelo.ModeloId==1&&d.Modelo.Descripcion.Contains("QA TEST NO USAR"),"isolated-fixture-"+item.Role);
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_CONCEPTOS WHERE ID_MODELO_CALCULO=1"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"fixture-unbound-"+item.Role);
+ var created=await service.Crear(new("QA_CONSOL_20261120_"+item.Role,Actual:new(1,d.Modelo.Version,s.CodigoPeriodo,s.FechaNomina.ToString("yyyy-MM-dd'T'HH:mm:ss"),s.CodigoPresupuesto,s.CodigoPersona,s.CodigoRelacionCargo,null,d.PoliticaPresupuesto??"",d.MotivoPresupuesto)),company,actor,ct);Check(created.IsValid,"queue-"+item.Role);ids.Add(created.Data!.IdRun);
+ }
+ var completed=new List<RhNomCorridaDetalle>();foreach(var id in ids){RhNomCorridaDetalle? d=null;for(var i=0;i<30;i++){var r=await service.Detalle(new(id,"ACTUAL"),company,actor,ct);Check(r.IsValid,"own-detail");d=r.Data!;if(d.Corrida.Estado=="COMPLETADO")break;if(d.Corrida.Estado is "FALLIDO" or "CANCELADO")throw new InvalidOperationException("worker-failed");await Task.Delay(1000,ct);}Check(d!.Corrida.Estado=="COMPLETADO"&&d.Resultado!.IsValid,"hosted-completed");completed.Add(d);}
+ var handler=new RhNomConsolidacionHandler(db,cfg);var diagnostic=await handler.Handle(new(ids),company,actor,ct);Check(diagnostic.IsValid&&!diagnostic.Data!.TieneConflictos,"three-disjoint-destinations");Check(diagnostic.Data!.Destinos.Count==3,"three-concepts");Check(diagnostic.Data.Destinos.All(d=>d.Origenes.Count==1),"one-origin-per-destination");Check(!diagnostic.Data.AplicacionDisponible&&!diagnostic.Data.MovimientosAplicados&&!diagnostic.Data.ParidadHistoricaCertificada,"no-financial-or-certification");
+ var reversed=await handler.Handle(new(ids.AsEnumerable().Reverse().ToList()),company,actor,ct);Check(reversed.IsValid&&RhNomCorridas.Serializar(reversed.Data!,100000)==RhNomCorridas.Serializar(diagnostic.Data,100000),"canonical-order");
+ var foreign=await handler.Handle(new(ids),company,actor-1,ct);Check(!foreign.IsValid,"foreign-actor-denied");
+ var duplicate=completed[0] with{Corrida=completed[0].Corrida with{IdRun=int.MaxValue}};var conflict=RhNomConsolidaciones.Preparar([completed[0],duplicate],company,actor);Check(conflict.TieneConflictos&&conflict.Destinos.Single().Estado=="CONFLICTO_DESTINO_REPETIDO","duplicate-destination-not-summed");
+ Console.WriteLine("R57_CONSOLIDACION="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,RunIds=ids,Diagnostic=diagnostic.Data,NoPayrollWrites=true,LegacyPackageCalled=false,HistoricalParityCertified=false}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

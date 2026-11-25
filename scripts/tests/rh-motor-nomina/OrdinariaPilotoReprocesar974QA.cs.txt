@@ -1,0 +1,27 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var input=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;var cases=new List<object>();var handler=new RhNomCorridasHandler(db,cfg);
+ foreach(var candidate in input.GetProperty("Cases").EnumerateArray()){
+ var key=candidate.GetProperty("CaseHash").GetString()!;var oldId=candidate.GetProperty("Archive").GetInt32();var oldRun=candidate.GetProperty("Run").GetInt32();var old=await RhNomArchivoCapsulasDb.Leer(cn,company,actor,oldId,ct);var frozenText=old.Capsula;var source=RhNomCapsulasPrenomina.Leer(frozenText).FuentesModelo!.Fuente;
+ Check(RhNomCapturasServidor.Resumir(old,company,actor,true).Estado=="BLOQUEADO","old-capture-block-preserved-"+oldId);
+ var q=new RhNomCapturarParaModelo("QA_ORD_REH974_CAP_"+key[..24],1,71,5696,source.CodigoPersona,source.CodigoRelacionCargo,RhNomPresupuestos.PoliticaContrato,null);
+ var captured=await new RhNomCapturaParaModeloHandler(db,cfg).Crear(q,company,actor,ct);Check(captured.IsValid&&captured.Data is not null,"new-capture-"+oldId);var summary=captured.Data!;var archive=summary.Archivo.IdCapsula;Check(archive!=oldId&&summary.Estado=="DIAGNOSTICO","new-context-unblocked-"+oldId);
+ var queued=await new RhNomCorridaDesdeCapturaHandler(db,cfg).Crear(new("QA_ORD_REH974_RUN_"+key[..24],1,71,archive),company,actor,ct);Check(queued.IsValid&&queued.Data is not null,"new-job-"+oldId);var runId=queued.Data!.IdRun;RhNomCorrida? run=null;
+ for(var i=0;i<100;i++){run=(await handler.Get(new(runId),company,actor,ct)).Data;if(run?.Estado is "COMPLETADO" or "ERROR" or "CANCELADO")break;await Task.Delay(1000);}
+ Check(run?.Estado=="COMPLETADO","new-job-completed-"+runId);var detail=await handler.Detalle(new(runId,RhNomModelosDesdeCaptura.Modo),company,actor,ct);Check(detail.IsValid&&detail.Data?.Resultado is not null,"new-result-readable-"+runId);var result=detail.Data!.Resultado!;var replay=RhNomCorridas.Evaluar(detail.Data.Entrada,ct);Check(result.IsValid&&RhNomCorridas.Serializar(result,RhNomCorridas.MaxResultadoBytes)==RhNomCorridas.Serializar(replay,RhNomCorridas.MaxResultadoBytes)&&RhNomCorridas.Hash(RhNomCorridas.Serializar(result,RhNomCorridas.MaxResultadoBytes))==run!.HashResultado,"new-exact-replay-"+runId);
+ Check(!result.MovimientosAplicados&&!result.ParidadCertificada&&result.Captura?.AptaParaAplicacion==false,"no-financial-claim-"+runId);
+ Check((await RhNomArchivoCapsulasDb.Leer(cn,company,actor,oldId,ct)).Capsula==frozenText,"old-capture-bytes-unchanged-"+oldId);var prior=await handler.Get(new(oldRun),company,actor,ct);Check(prior.Data!.HashResultado==candidate.GetProperty("ResultHash").GetString(),"old-result-hash-unchanged-"+oldRun);
+ cases.Add(new{CaseHash=key,PreviousArchive=oldId,PreviousRun=oldRun,Archive=archive,Run=runId,State="CALCULADO_DIAGNOSTICO",ResultHash=run!.HashResultado,Inputs=result.Captura!.Entradas.Count,FormulaResults=result.Captura.Simulacion!.Simulacion.Resultados.Count,ConceptProposals=result.Captura.Simulacion.ProyeccionConceptos!.Partidas.Count,OldEvidencePreserved=true});
+ }
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-gate-closed");
+ foreach(var table in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"}){using var c=cn.CreateCommand();c.CommandText="SELECT COUNT(*) FROM "+table;Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"financial-empty-"+table);}
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Period=5696,Type=10,Date="2026-11-23",Class="N",Cases=cases,NoPayrollWrites=true,HistoricalParityCertified=false,HttpAuthenticationTested=false}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

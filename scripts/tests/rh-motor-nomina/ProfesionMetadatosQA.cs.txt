@@ -1,0 +1,16 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;c.Parameters.Add("e",OracleDbType.Int32).Value=company;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL WHERE :e=13"))using(var r=await c.ExecuteReaderAsync()){if(!await r.ReadAsync()||r.GetString(0)!=cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]||r.GetString(1)!=cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]||r.GetString(2)!="RH")throw new InvalidOperationException("identity-qa");}
+ var results=new Dictionary<string,object>();
+ async Task Read(string name,string sql,int limit){using var c=Cmd(sql);c.InitialLONGFetchSize=-1;using var r=await c.ExecuteReaderAsync();var rows=new List<Dictionary<string,object?>>();while(await r.ReadAsync()){if(rows.Count>=limit)throw new InvalidOperationException("row-limit-"+name);var row=new Dictionary<string,object?>();for(int i=0;i<r.FieldCount;i++)row[r.GetName(i)]=r.IsDBNull(i)?null:r.GetValue(i);rows.Add(row);}results[name]=rows;}
+ await Read("ProfessionalConcepts",@"SELECT CODIGO_TIPO_NOMINA,CODIGO_CONCEPTO,CODIGO,DENOMINACION,TIPO_CONCEPTO,FRECUENCIA_ID,STATUS,AUTOMATICO FROM RH_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND EXTRA1='PROFESION' ORDER BY CODIGO_TIPO_NOMINA,CODIGO_CONCEPTO",101);
+ await Read("SalaryBaseConcepts",@"SELECT CODIGO_TIPO_NOMINA,CODIGO_CONCEPTO,CODIGO,STATUS,AUTOMATICO FROM RH_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND EXTRA1='SUELDO' AND CODIGO<>'-170' ORDER BY CODIGO_TIPO_NOMINA,CODIGO_CONCEPTO",101);
+ await Read("TitlePercentages",@"SELECT A1.DESCRIPCION_ID TITULO,A1.EXTRA3 PORCENTAJE FROM RH_DESCRIPTIVAS A,RH_TITULOS B,RH_DESCRIPTIVAS A1,RH_TITULOS B1 WHERE B.CODIGO_TITULO='NED' AND A.TITULO_ID=B.TITULO_ID AND B1.CODIGO_TITULO='TIT' AND A1.TITULO_ID=B1.TITULO_ID AND A1.DESCRIPCION_FK_ID=A.DESCRIPCION_ID AND A1.CODIGO_EMPRESA=:e ORDER BY A1.DESCRIPCION_ID",101);
+ await Read("MovementScope",@"SELECT M.CODIGO_TIPO_NOMINA,M.STATUS,M.TIPO,COUNT(*) CANTIDAD FROM RH_MOV_NOMINA M,RH_CONCEPTOS C WHERE M.CODIGO_EMPRESA=:e AND C.CODIGO_EMPRESA=M.CODIGO_EMPRESA AND C.CODIGO_CONCEPTO=M.CODIGO_CONCEPTO AND C.EXTRA1='SUELDO' AND C.CODIGO<>'-170' GROUP BY M.CODIGO_TIPO_NOMINA,M.STATUS,M.TIPO ORDER BY M.CODIGO_TIPO_NOMINA,M.STATUS,M.TIPO",101);
+ Console.WriteLine("R57_METADATA="+JsonSerializer.Serialize(new{Status="OK",Results=results,NoPersonalData=true,NoPayrollWrites=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

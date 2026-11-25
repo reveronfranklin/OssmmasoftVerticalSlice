@@ -1,0 +1,15 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var objects=new List<(string Name,string Type)>();using(var c=Cmd("SELECT DISTINCT S.NAME,S.TYPE FROM ALL_SOURCE S WHERE S.OWNER='RH' AND (UPPER(S.TEXT) LIKE '%SUPLEN%' OR (UPPER(S.TEXT) LIKE '%EXTRA1%' AND EXISTS (SELECT 1 FROM ALL_DEPENDENCIES D WHERE D.OWNER=S.OWNER AND D.NAME=S.NAME AND D.REFERENCED_OWNER='RH' AND D.REFERENCED_NAME IN ('RH_PERSONAS','RH_RELACION_CARGOS','RH_V_PERSONAL_CARGO','RH_HISTORICO_PERSONAL_CARGO')))) ORDER BY S.NAME,S.TYPE"))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())objects.Add((r.GetString(0),r.GetString(1)));Check(objects.Count<=100,"bounded-source-objects");var sources=new List<object>();var total=0;
+ foreach(var o in objects){var lines=new List<object>();using(var c=Cmd("SELECT LINE,TEXT FROM ALL_SOURCE WHERE OWNER='RH' AND NAME=:n AND TYPE=:t ORDER BY LINE",("n",o.Name),("t",o.Type)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync()){if(++total>100000)throw new InvalidOperationException("source-line-limit");lines.Add(new{Line=Convert.ToInt32(r.GetValue(0)),Text=r.GetString(1)});}sources.Add(new{o.Name,o.Type,Lines=lines});}
+ Console.WriteLine("R57_SUPLENCIA_SOURCE="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Objects=sources,NoPayrollWrites=true,LegacyPackageCalled=false}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

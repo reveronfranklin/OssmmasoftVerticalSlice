@@ -1,0 +1,12 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;c.Parameters.Add("e",OracleDbType.Int32).Value=company;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL WHERE :e=13"))using(var r=await c.ExecuteReaderAsync()){if(!await r.ReadAsync()||r.GetString(0)!=cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]||r.GetString(1)!=cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]||r.GetString(2)!="RH")throw new InvalidOperationException("identity-qa");}
+ var concepts=new List<object>();using(var c=Cmd("SELECT C.CODIGO_CONCEPTO,C.CODIGO,C.DENOMINACION,C.AUTOMATICO,C.STATUS,C.TIPO_CONCEPTO,D.CODIGO,C.FRECUENCIA_ID FROM RH_CONCEPTOS C LEFT JOIN RH_DESCRIPTIVAS D ON D.DESCRIPCION_ID=C.MODULO_ID WHERE C.CODIGO_EMPRESA=:e AND C.CODIGO_TIPO_NOMINA=19 ORDER BY C.CODIGO_CONCEPTO"))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())concepts.Add(new{Id=r.GetInt32(0),Code=r.IsDBNull(1)?null:r.GetString(1),Description=r.IsDBNull(2)?null:r.GetString(2),Auto=r.IsDBNull(3)?(int?)null:r.GetInt32(3),Status=r.IsDBNull(4)?null:r.GetString(4),Type=r.IsDBNull(5)?null:r.GetString(5),Module=r.IsDBNull(6)?null:r.GetString(6),Frequency=r.IsDBNull(7)?(int?)null:r.GetInt32(7)});
+ var typeInfo=new List<object>();using(var c=Cmd("SELECT CODIGO_TIPO_NOMINA,SIGLAS_TIPO_NOMINA FROM RH_TIPOS_NOMINA WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=19"))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())typeInfo.Add(new{Type=r.GetInt32(0),Siglas=r.IsDBNull(1)?null:r.GetString(1)});
+ Console.WriteLine("R57_METADATA="+JsonSerializer.Serialize(new{Status="OK",Types=typeInfo,Concepts=concepts,NoPersonalData=true,NoPayrollWrites=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

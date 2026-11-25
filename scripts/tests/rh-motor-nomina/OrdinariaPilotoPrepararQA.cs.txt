@@ -1,0 +1,28 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-disabled");
+ using var payload=JsonDocument.Parse(File.ReadAllText(args[0]));var sql=payload.RootElement.GetProperty("Sql").GetString()!;Check(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(sql))).ToLowerInvariant()==payload.RootElement.GetProperty("SqlSha256").GetString(),"reviewed-seed-hash");
+ var statement=System.Text.RegularExpressions.Regex.Split(sql,@"(?m)^\s*/\s*$").Single(s=>!string.IsNullOrWhiteSpace(s));
+ async Task<string> MovementsHash(){using var c=cn.CreateCommand();c.CommandTimeout=25;c.CommandText="SELECT CODIGO_MOV_NOMINA,CODIGO_EMPRESA,CODIGO_TIPO_NOMINA,CODIGO_PERSONA,CODIGO_CONCEPTO,FRECUENCIA_ID,TIPO,TO_CHAR(MONTO,'TM9','NLS_NUMERIC_CHARACTERS=''.,'''),STATUS,COMPLEMENTO_CONCEPTO,EXTRA1,EXTRA2,EXTRA3,USUARIO_INS,TO_CHAR(FECHA_INS,'YYYY-MM-DD HH24:MI:SS'),USUARIO_UPD,TO_CHAR(FECHA_UPD,'YYYY-MM-DD HH24:MI:SS') FROM RH_MOV_NOMINA WHERE CODIGO_EMPRESA=13 ORDER BY CODIGO_MOV_NOMINA";using var r=await c.ExecuteReaderAsync();var rows=new List<List<string?>>();while(await r.ReadAsync()){if(rows.Count>=100000)throw new InvalidOperationException("movement-guard-limit");var values=new List<string?>();for(var i=0;i<r.FieldCount;i++)values.Add(r.IsDBNull(i)?null:Convert.ToString(r.GetValue(i),System.Globalization.CultureInfo.InvariantCulture));rows.Add(values);}return RhNomRecalculosHistoricos.Hash(rows);}
+ var before=await MovementsHash();int period;bool created;
+ using(var tx=cn.BeginTransaction()){
+  try{
+   using var c=cn.CreateCommand();c.Transaction=tx;c.BindByName=true;c.CommandTimeout=30;c.CommandText=statement;
+   c.Parameters.Add("p_DB",OracleDbType.Varchar2).Value=cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"];c.Parameters.Add("p_HOST",OracleDbType.Varchar2).Value=cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"];
+   var output=c.Parameters.Add("p_PERIOD",OracleDbType.Int32,System.Data.ParameterDirection.Output);var changed=c.Parameters.Add("p_CREATED",OracleDbType.Int32,System.Data.ParameterDirection.Output);await c.ExecuteNonQueryAsync();period=int.Parse(output.Value.ToString()!);created=changed.Value.ToString()=="1";
+   using var verify=cn.CreateCommand();verify.Transaction=tx;verify.BindByName=true;verify.CommandText="SELECT COUNT(*) FROM RH_PERIODOS WHERE CODIGO_PERIODO=:p AND CODIGO_EMPRESA=13 AND CODIGO_TIPO_NOMINA=10 AND FECHA_NOMINA=DATE '2026-11-23' AND PERIODO=2 AND TIPO_NOMINA='N' AND FECHA_CIERRE IS NULL AND FECHA_PRECIERRE IS NULL AND CODIGO_PRESUPUESTO=0 AND DESCRIPCION='R57 QA ORDINARIA EMPLEADOS 2026-11-23'";verify.Parameters.Add("p",OracleDbType.Int32).Value=period;Check(Convert.ToInt32(await verify.ExecuteScalarAsync())==1,"exact-requested-open-ordinary-pilot");
+   Check(before==await MovementsHash(),"all-company-movement-images-unchanged-before-commit");await tx.CommitAsync();
+  }catch{await tx.RollbackAsync();throw;}
+ }
+ Check(before==await MovementsHash(),"all-company-movement-images-unchanged-after-commit");
+ foreach(var table in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"}){using var c=cn.CreateCommand();c.CommandText="SELECT COUNT(*) FROM "+table;Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"financial-empty-"+table);}
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Period=period,Type=10,Date="2026-11-23",Class="N",Number=2,Created=created,PeriodBudget=0,SourceBudget="CONTRATO_TIPO_ACTUAL",SisActorImpersonated=false,Audit="Oracle RH technical seed; no SIS authentication claimed",MovementImagesHash=before,NoPayrollWrites=true,ClosedPeriodsModified=false}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

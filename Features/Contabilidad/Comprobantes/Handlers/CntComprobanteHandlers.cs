@@ -70,6 +70,7 @@ public class GetCntComprobantesHandler(ConnectionDB connectionDB, IConfiguration
             cmd.Parameters.Add("p_SearchText", OracleDbType.Varchar2).Value = CntDb.StringDbValue(value.SearchText);
             cmd.Parameters.Add("p_CODIGO_PERIODO", OracleDbType.Int32).Value = CntDb.DbValue(value.CodigoPeriodo);
             cmd.Parameters.Add("p_ORIGEN_ID", OracleDbType.Int32).Value = CntDb.DbValue(value.OrigenId);
+            cmd.Parameters.Add("p_TIPO_COMPROBANTE_ID", OracleDbType.Int32).Value = CntDb.DbValue(value.TipoComprobanteId);
             cmd.Parameters.Add("p_FECHA_DESDE", OracleDbType.Date).Value = CntDb.DbValue(value.FechaDesde);
             cmd.Parameters.Add("p_FECHA_HASTA", OracleDbType.Date).Value = CntDb.DbValue(value.FechaHasta);
             cmd.Parameters.Add("p_ESTADO_CMP", OracleDbType.Varchar2).Value = CntDb.StringDbValue(value.EstadoContable);
@@ -79,6 +80,8 @@ public class GetCntComprobantesHandler(ConnectionDB connectionDB, IConfiguration
             var pMessage = cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
             var pTotalRecords = cmd.Parameters.Add("p_TotalRecords", OracleDbType.Int32, ParameterDirection.Output);
             var pTotalPages = cmd.Parameters.Add("p_TotalPages", OracleDbType.Int32, ParameterDirection.Output);
+            var pTotalDebe = cmd.Parameters.Add("p_TOTAL_DEBE", OracleDbType.Decimal, ParameterDirection.Output);
+            var pTotalHaber = cmd.Parameters.Add("p_TOTAL_HABER", OracleDbType.Decimal, ParameterDirection.Output);
 
             var list = new List<CntComprobanteResponse>();
             using (var reader = await cmd.ExecuteReaderAsync())
@@ -98,7 +101,9 @@ public class GetCntComprobantesHandler(ConnectionDB connectionDB, IConfiguration
                 Message = message,
                 Page = pageNumber,
                 TotalPage = CntDb.GetIntOutput(pTotalPages),
-                CantidadRegistros = CntDb.GetIntOutput(pTotalRecords)
+                CantidadRegistros = CntDb.GetIntOutput(pTotalRecords),
+                Total1 = isSuccess ? CntDb.GetDecimalOutput(pTotalDebe) : 0m,
+                Total2 = isSuccess ? CntDb.GetDecimalOutput(pTotalHaber) : 0m
             };
         }
         catch (Exception ex)
@@ -462,13 +467,7 @@ public class CreateCntComprobanteHandler(ConnectionDB connectionDB, IConfigurati
                 {
                     using var detCmd = new OracleCommand("CNT.SP_CNT_DET_INS", cn) { CommandType = CommandType.StoredProcedure, BindByName = true, Transaction = tx };
                     detCmd.Parameters.Add("p_CODIGO_COMPROBANTE", OracleDbType.Int32).Value = comprobanteId;
-                    detCmd.Parameters.Add("p_CODIGO_MAYOR", OracleDbType.Int32).Value = detalle.CodigoMayor;
-                    detCmd.Parameters.Add("p_CODIGO_AUXILIAR", OracleDbType.Int32).Value = detalle.CodigoAuxiliar;
-                    detCmd.Parameters.Add("p_REFERENCIA1", OracleDbType.Varchar2).Value = CntDb.StringDbValue(detalle.Referencia1);
-                    detCmd.Parameters.Add("p_REFERENCIA2", OracleDbType.Varchar2).Value = CntDb.StringDbValue(detalle.Referencia2);
-                    detCmd.Parameters.Add("p_REFERENCIA3", OracleDbType.Varchar2).Value = CntDb.StringDbValue(detalle.Referencia3);
-                    detCmd.Parameters.Add("p_DESCRIPCION", OracleDbType.Varchar2).Value = CntDb.StringDbValue(detalle.Descripcion);
-                    detCmd.Parameters.Add("p_MONTO", OracleDbType.Decimal).Value = detalle.Monto;
+                    CntDetalleWriteSupport.AddDetailParams(detCmd, detalle);
                     detCmd.Parameters.Add("p_USUARIO_ID", OracleDbType.Int32).Value = usuarioId;
                     detCmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
                     detCmd.Parameters.Add("p_CODIGO_OUT", OracleDbType.Int32, ParameterDirection.Output);
@@ -761,6 +760,6 @@ internal static class CntDetalleWriteSupport
         cmd.Parameters.Add("p_REFERENCIA2", OracleDbType.Varchar2).Value = CntDb.StringDbValue(detalle.Referencia2);
         cmd.Parameters.Add("p_REFERENCIA3", OracleDbType.Varchar2).Value = CntDb.StringDbValue(detalle.Referencia3);
         cmd.Parameters.Add("p_DESCRIPCION", OracleDbType.Varchar2).Value = CntDb.StringDbValue(detalle.Descripcion);
-        cmd.Parameters.Add("p_MONTO", OracleDbType.Decimal).Value = CntMoney.Normalize(detalle.Monto);
+        cmd.Parameters.Add("p_MONTO", OracleDbType.Decimal).Value = CntMoney.ToOracle(detalle.Monto);
     }
 }

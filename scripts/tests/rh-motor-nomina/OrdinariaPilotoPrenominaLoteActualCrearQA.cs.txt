@@ -1,0 +1,14 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ int owner;using(var c=cn.CreateCommand()){c.CommandText="SELECT ACTOR FROM RH_NOM_PRE_LOT WHERE ID_LOTE=3 AND CODIGO_EMPRESA=13";owner=Convert.ToInt32(await c.ExecuteScalarAsync());}var original=(await RhNomPrenominaDb.Leer(cn,13,owner,3,null,ct))!;
+ var q=original.Documento.Solicitud with{ClaveSolicitud="QA_PRE_ACTUAL_ORD10_20261123_01"};var result=await new RhNomPrenominaHandler(db,cfg).Crear(q,13,actor,ct);Check(result.IsValid,result.Message??"create-failed");var lot=result.Data;Check(lot.Documento.Casos.Count==137&&lot.Documento.Excluidos==5,"same-complete-population");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Lote=lot.IdLote,lot.Version,State=lot.Documento.Estado,Periodo=5696,Tipo=10,Nomina="2026-11-23",NewTechnicalQaCapture=true,NewSisHttpCreationClaimed=false,PreviousSignedLote=3,Reason="Fresh sources after Oracle clock date changed during capacity interruption",Eligible=132,Excluded=5,NoOriginalMovementWrites=true}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+":"+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(Exception ex){Console.WriteLine("R57_FAIL_CHECK="+ex.GetType().Name+":"+ex.Message);Environment.ExitCode=1;}

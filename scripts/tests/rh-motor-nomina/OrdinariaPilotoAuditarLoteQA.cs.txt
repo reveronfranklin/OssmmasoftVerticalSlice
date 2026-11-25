@@ -1,0 +1,41 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var input=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;var period=input.GetProperty("Pilot").GetProperty("Period").GetInt32();var candidates=input.GetProperty("Cases").EnumerateArray().ToList();Check(candidates.Count is >0 and <=10,"bounded-audit");
+ var handler=new RhNomCorridasHandler(db,cfg);var cases=new List<object>();var counts=new Dictionary<string,int>();
+ foreach(var candidate in candidates){
+  var key=candidate.GetProperty("CaseHash").GetString()!;string state=candidate.GetProperty("State").GetString()!;var errors=candidate.GetProperty("Errors").EnumerateArray().Select(e=>e.GetString()).ToList();var inputs=0;var outputs=0;var proposals=0;var reasons=new List<string>();string? resultHash=null;double? seconds=null;
+  int? id=candidate.GetProperty("Run").ValueKind==JsonValueKind.Number?candidate.GetProperty("Run").GetInt32():null;
+  int? archive=candidate.GetProperty("Archive").ValueKind==JsonValueKind.Number?candidate.GetProperty("Archive").GetInt32():null;
+  if(id is {} runId){
+   var status=await handler.Get(new(runId),company,actor,ct);Check(status.IsValid&&status.Data is not null,"owned-job-"+runId);var run=status.Data!;state=run.Estado;resultHash=run.HashResultado;
+   if(run.FechaFin is {} end&&run.FechaInicio is {} begin)seconds=(end-begin).TotalSeconds;
+   if(state is "COMPLETADO" or "ERROR"){
+    var detail=await handler.Detalle(new(runId,RhNomModelosDesdeCaptura.Modo),company,actor,ct);Check(detail.IsValid&&detail.Data is not null,"owned-document-"+runId);var doc=detail.Data!.Entrada;
+    var frozen=doc.Captura!.Archivo;var source=RhNomCapsulasPrenomina.Leer(frozen.Capsula);var f=source.FuentesModelo!.Fuente;
+    Check(doc.Modelo.ModeloId==1&&doc.Modelo.Version==71&&f.CodigoTipoNomina==10&&f.CodigoEmpresa==company&&f.CodigoPeriodo==period&&f.FechaNomina==new DateTime(2026,11,23)&&source.PeriodoCapturado?.Clase=="N","requested-case-scope-"+runId);
+    Check(RhNomRecalculosHistoricos.Hash(new{Company=company,Type=10,Period=period,Person=f.CodigoPersona,Relation=f.CodigoRelacionCargo})==key&&frozen.Cabecera.IdCapsula==archive,"case-identity-bound-"+runId);
+    var result=detail.Data.Resultado;
+    if(result is null){state="ERROR_SIN_RESULTADO";errors.Add(run.Mensaje);}
+    else{
+     var replay=RhNomCorridas.Evaluar(doc,ct);Check(RhNomCorridas.Hash(RhNomCorridas.Serializar(replay,RhNomCorridas.MaxResultadoBytes))==run.HashResultado&&RhNomCorridas.Serializar(replay,RhNomCorridas.MaxResultadoBytes)==RhNomCorridas.Serializar(result,RhNomCorridas.MaxResultadoBytes),"final-worker-result-exact-replay-"+runId);
+     Check(!result.MovimientosAplicados&&!result.ParidadCertificada&&result.Captura?.AptaParaAplicacion==false,"not-a-financial-authorization-"+runId);
+     inputs=result.Captura!.Entradas.Count;outputs=result.Captura.Simulacion?.Simulacion.Resultados.Count??0;proposals=result.Captura.Simulacion?.ProyeccionConceptos?.Partidas.Count??0;errors.AddRange((result.Errores??[]).Select(e=>e.Codigo));
+     var summary=RhNomCapturasServidor.Resumir(frozen,company,actor,true);reasons=summary.Totales.SelectMany(t=>t.Motivos).Distinct().Order().ToList();
+     state=result.IsValid?(summary.Estado=="BLOQUEADO"?"CALCULADO_CONTEXTO_BLOQUEADO":summary.Estado=="SIN_PARTIDAS"?"CALCULADO_SIN_PARTIDAS":"CALCULADO_DIAGNOSTICO"):"ERROR_MODELO";
+    }
+   }
+  }
+  counts[state]=counts.GetValueOrDefault(state)+1;cases.Add(new{CaseHash=key,State=state,Run=id,Archive=archive,ResultHash=resultHash,Inputs=inputs,FormulaResults=outputs,ConceptProposals=proposals,Seconds=seconds,SelectionReasons=reasons,Errors=errors});
+ }
+ Check(cases.Count==candidates.Count,"all-audit-cases-accounted");Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-gate-closed");
+ foreach(var table in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"}){using var c=cn.CreateCommand();c.CommandText="SELECT COUNT(*) FROM "+table;Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"financial-empty-"+table);}
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Period=period,Type=10,Date="2026-11-23",Class="N",BatchStart=input.GetProperty("BatchStart").GetInt32(),Counts=counts,Cases=cases,NoPayrollWrites=true,HistoricalParityCertified=false,HttpAuthenticationTested=false}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

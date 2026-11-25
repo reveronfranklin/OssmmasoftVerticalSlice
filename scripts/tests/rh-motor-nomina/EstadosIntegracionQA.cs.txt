@@ -1,0 +1,31 @@
+using System.Data;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var (n,v) in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var models=new RhNomVersionesHandler(db,cfg);var list=await models.GetAll(new(SearchText:"Q57_0523F8B5"),company,ct);Check(list.IsValid&&list.Data!.Count==1&&list.Data[0].ModeloId==1&&list.Data[0].UltimaVersion==14&&list.Data[0].Descripcion.Contains("QA TEST NO USAR"),"isolated-fixture-version14");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND ID_MODELO_CALCULO=1",("e",company)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"fixture-not-bound-to-business-concepts");
+ var model=(await models.Get(new(1,14),company,ct)).Data!;var handler=new RhNomEstadosHandler(db,cfg);var original=await handler.Get(new(1,14),company,ct);Check(original.IsValid&&original.Data!.Estado=="BORRADOR"&&original.Data.VersionEstado==0,"initial-state-draft-version-zero");
+ var run=await RhNomCorridasDb.PorClave(cn,company,actor,"QA_TYPES_HOSTED_20261119",ct);Check(run?.Estado=="COMPLETADO"&&run.VersionModelo==14,"completed-real-worker-test-available");
+ var q=new RhNomValidarRevision(1,14,model.Hash,0,[run!.IdRun],"QA evidencia tecnica de fixture aislado; sin aplicacion de nomina.");
+ Check(!(await handler.Validar(q with{HashModeloEsperado=new string('B',64)},company,actor,ct)).IsValid,"wrong-model-hash-rejected-before-state-write");
+ var validated=await handler.Validar(q,company,actor,ct);Check(validated.IsValid&&validated.Data!.Estado=="VALIDADO"&&validated.Data.VersionEstado==1,"validation-state-persisted-with-version");var state=validated.Data!;Check(state.Evidencia!.Nivel=="TECNICO"&&!state.Publicable&&!state.Evidencia.ParidadCertificada&&state.Evidencia.Pruebas.Single().IdRun==run.IdRun,"successful-worker-test-does-not-become-parity-certification");RhNomValidaciones.Verificar(state.Evidencia,1,14,model.Hash);
+ var audit=await handler.Auditoria(new(1,14),company,ct);Check(audit.IsValid&&audit.Data!.Count==1&&audit.Data[0].Accion=="VALIDAR","validation-audit-committed-atomically");
+ Check(!(await handler.Validar(q,company,actor,ct)).IsValid,"stale-state-version-rejected");Check(!(await handler.Validar(q with{VersionEstadoEsperada=1},company,actor-1,ct)).IsValid,"other-actor-cannot-reuse-private-test");
+ var publish=new RhNomPublicarRevision(1,14,model.Hash,1,state.Evidencia.Hash,new(2026,11,1),null,"QA comprobar bloqueo de publicacion sin paridad certificada.");
+ Check(!(await handler.Publicar(publish,company,actor-1,ct)).IsValid,"technical-only-evidence-blocks-publication");Check(!(await handler.Publicar(publish,company,actor,ct)).IsValid,"configurator-cannot-self-publish");
+ Check((await handler.Auditoria(new(1,14),company,ct)).Data!.Count==1,"failed-operations-left-no-audit-or-state-partials");
+ var retired=await handler.Retirar(new(1,14,model.Hash,1,"QA retirar revision de fixture aislado; sin reversion de movimientos."),company,actor,ct);Check(retired.IsValid&&retired.Data!.Estado=="RETIRADO"&&retired.Data.VersionEstado==2,"withdrawal-state-persisted");
+ Check(!(await handler.Validar(q with{VersionEstadoEsperada=2},company,actor,ct)).IsValid,"withdrawn-version-cannot-be-revalidated");
+ var final=await handler.Auditoria(new(1,14),company,ct);Check(final.IsValid&&final.Data!.Count==2&&final.CantidadRegistros==2&&final.Data[0].Accion=="RETIRAR","two-audit-events-with-pagination-total");
+ var immutable=false;using(var tx=cn.BeginTransaction()){try{using var c=Cmd("UPDATE RH_NOM_MOD_AUD SET MOTIVO='QA cambio no permitido' WHERE ID_EVENTO=:id",("id",final.Data![0].IdEvento));c.Transaction=tx;await c.ExecuteNonQueryAsync();}catch(OracleException ex) when(ex.Number==20004){immutable=true;}finally{await tx.RollbackAsync();}}Check(immutable,"database-audit-is-immutable");
+ var reread=(await models.Get(new(1,14),company,ct)).Data!;Check(reread.Hash==model.Hash&&reread.Estado=="RETIRADO","configuration-hash-unchanged-state-header-current");Check(!(await handler.Get(new(1,14),int.MaxValue,ct)).IsValid,"foreign-company-cannot-read-state");
+ var off=new ConfigurationBuilder().AddConfiguration(cfg).AddInMemoryCollection(new Dictionary<string,string?>{{"RhMotorNomina:VersionesEnabled","false"}}).Build();Check(!(await new RhNomEstadosHandler(db,off).Get(new(1,14),company,ct)).IsValid,"disabled-feature-rejects-operations");
+ Console.WriteLine("R57_STATES="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Version=14,State="RETIRADO",AuditEvents=2,TechnicalOnly=true,PublicationBlocked=true,NoPayrollWrites=true,ParityCertified=false,NoPersonalDataInOutput=true,AuthenticationHttpTested=false}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

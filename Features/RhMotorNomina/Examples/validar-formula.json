@@ -1,0 +1,8 @@
+{
+  "variableSalida": "SUELDO_PERIODO",
+  "expresion": "ROUND([SUELDO_BASE] / [DIVISOR_PERIODO], 2)",
+  "variables": [
+    { "codigo": "SUELDO_BASE", "valor": "1300" },
+    { "codigo": "DIVISOR_PERIODO", "valor": "2" }
+  ]
+}

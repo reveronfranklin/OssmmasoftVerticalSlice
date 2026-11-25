@@ -1,0 +1,48 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+
+ using var input=JsonDocument.Parse(File.ReadAllText(args[0]));var outcomes=new List<object>();
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"real-application-disabled");
+ foreach(var selected in input.RootElement.GetProperty("Models").EnumerateArray()){
+  var version=selected.GetProperty("Version").GetInt32();var type=selected.GetProperty("Type").GetInt32();
+  var loaded=await new RhNomVersionesHandler(db).Get(new(1,version),company,ct);
+  Check(loaded.IsValid&&loaded.Data!.Hash==selected.GetProperty("Hash").GetString(),"pinned-model-"+version);
+  var original=loaded.Data!;var s=original.Configuracion;
+  var definitions=s.Variables.Select(v=>new RhNomVariableSave(0,0,v.Codigo,v.Descripcion,v.Tipo,v.Unidad,v.Origen,v.Activa)).ToList();
+  var request=new RhNomModeloSave(1,0,type,s.Escenario,s.Descripcion,[],s.Formulas,s.Parametros,true,RhNomCondiciones.Version,s.TablasTramos,RhNomTramos.Version,s.ReglasConcepto!.Select(RhNomReglasConcepto.Solicitud).ToList(),RhNomReglasConcepto.Version,s.FuentesActuales,RhNomFuentesModelo.Version,s.AccionesControl!.Select(RhNomAccionesControl.Solicitud).ToList(),RhNomAccionesControl.Version);
+  var catalog=s.ReglasConcepto.Select(r=>r.Concepto).Concat(s.AccionesControl.Select(a=>a.Concepto)).Distinct().ToList();
+  var before=JsonSerializer.Serialize(new RhNomBloqueModelo(definitions,request),RhNomCorridas.Json);
+  var compiled=RhNomComposicionModelo.Unir(company,catalog,s.Descripcion,[new(definitions,request)]);
+  Check(compiled.Modelo.AccionesControl?.Count==s.AccionesControl.Count&&compiled.Modelo.VersionAccionesCliente==RhNomAccionesControl.Version,"control-decisions-preserved-"+type);
+  var frozen=RhNomConfiguracion.Snapshot(compiled.Solicitud(1,0,s.Descripcion,s.Variables),s.Variables,company,conceptos:catalog);
+  var encoded=RhNomConfiguracion.Serializar(frozen);
+  Check(encoded.Hash==original.Hash,"full-model-hash-preserved-"+type);
+  Check(before==JsonSerializer.Serialize(new RhNomBloqueModelo(definitions,request),RhNomCorridas.Json),"input-block-not-mutated-"+type);
+  var round=RhNomConfiguracion.Leer(encoded.Text,encoded.Hash,company,1);
+  Check(RhNomConfiguracion.Serializar(round).Hash==original.Hash,"serialized-roundtrip-"+type);
+  var run=await RhNomCorridasDb.Leer(cn,company,actor,selected.GetProperty("IdRun").GetInt32(),ct);
+  var text=await RhNomCorridasDb.Documento(cn,run,"ENTRADA",ct)??throw new InvalidOperationException("missing-input");
+  var document=RhNomCorridas.Leer(text,run.HashDatos,company,actor);
+  Check(document.Modelo.Hash==original.Hash&&document.Modelo.Version==version,"pinned-worker-document-"+type);
+  var baseline=RhNomCorridas.Evaluar(document);
+  var result=RhNomCorridas.Evaluar(document with{Modelo=original with{Configuracion=round,Hash=encoded.Hash}});
+  Check(baseline.IsValid&&result.IsValid&&JsonSerializer.Serialize(baseline,RhNomCorridas.Json)==JsonSerializer.Serialize(result,RhNomCorridas.Json),"exact-worker-replay-preserved-"+type);
+  Check(RhNomRecalculosHistoricos.Hash(s.FuentesActuales)==RhNomRecalculosHistoricos.Hash(frozen.FuentesActuales),"all-sources-and-pre-post-stages-preserved-"+type);
+  var oldClient=request with{VersionAccionesCliente=null};bool rejected=false;
+  try{RhNomComposicionModelo.Unir(company,catalog,s.Descripcion,[new(definitions,oldClient)]);}catch(RhNomError e)when(e.Diagnostico.Codigo=="CLIENTE_ACCIONES_REQUERIDO"){rejected=true;}
+  Check(rejected,"client-without-control-ack-rejected-"+type);
+  Check((await new RhNomVersionesHandler(db).Get(new(1,version),company,ct)).Data!.Hash==original.Hash,"stored-model-not-modified-"+type);
+  outcomes.Add(new{Type=type,Version=version,Hash=encoded.Hash,RunId=run.IdRun,MonetaryRules=frozen.ReglasConcepto!.Count,ControlDecisions=frozen.AccionesControl!.Count,Inputs=document.EntradasActuales!.Count,ExactReplay=true});
+ }
+ foreach(var table in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"})using(var c=Cmd("SELECT COUNT(*) FROM "+table))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"real-empty-"+table);
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_CTL WHERE ACTIVO=1 OR LEGACY_RETIRADO=1"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"real-financial-gates-closed");
+ Console.WriteLine("R57_COMPOSICION_ACCIONES="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Outcomes=outcomes,NoPayrollWrites=true,NoConfigurationWrites=true,HistoricalParityCertified=false,Scope="RECOMPOSICION_DE_CUATRO_MODELOS_EXISTENTES_Y_REPLAY"}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

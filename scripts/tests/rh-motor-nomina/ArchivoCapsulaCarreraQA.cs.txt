@@ -1,0 +1,33 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+
+ using var payload=JsonDocument.Parse(File.ReadAllText(args[0]));var saved=payload.RootElement.GetProperty("Archives");var replays=new List<object>();RhNomCapsula? source=null;
+ foreach(var entry in saved.EnumerateArray()){
+  var id=entry.GetProperty("Id").GetInt32();var archived=await RhNomArchivoCapsulasDb.Leer(cn,company,actor,id,ct);var replay=RhNomCapsulasPrenomina.Reproducir(archived.Capsula);
+  Check(archived.Capsula.Hash==entry.GetProperty("DocumentHash").GetString()&&replay.Hash==entry.GetProperty("ReplayHash").GetString(),"fresh-process-archive-only-replay-"+id);
+  source??=archived.Capsula;replays.Add(new{Id=id,archived.Capsula.Hash,ReplayHash=replay.Hash});
+ }
+ Check(replays.Count==2&&source is not null,"two-archive-only-replays");var key="SDK_R57_CAP_RACE:"+source!.Hash[..24];Check(await RhNomArchivoCapsulasDb.PorClave(cn,company,actor,key,ct) is null,"new-race-key-not-previously-stored");
+ using var other=db.GetRhConnection();await other.OpenAsync(ct);using var locker=db.GetRhConnection();await locker.OpenAsync(ct);
+ Task<RhNomCapsulaArchivada> first,second;bool bothBlocked;
+ using(var tx=locker.BeginTransaction()){
+  using var command=new OracleCommand("SELECT ACTOR FROM RH_NOM_RUN_ACT WHERE CODIGO_EMPRESA=:e AND ACTOR=:a FOR UPDATE",locker){BindByName=true,Transaction=tx,CommandTimeout=25};command.Parameters.Add("e",OracleDbType.Int32).Value=company;command.Parameters.Add("a",OracleDbType.Int32).Value=actor;
+  Check(Convert.ToInt32(await command.ExecuteScalarAsync(ct))==actor,"actor-mutex-held-for-race");
+  first=RhNomArchivoCapsulasDb.Guardar(cn,company,actor,key,source,ct);second=RhNomArchivoCapsulasDb.Guardar(other,company,actor,key,source,ct);
+  await Task.Delay(200,ct);bothBlocked=!first.IsCompleted&&!second.IsCompleted;await tx.RollbackAsync(ct);
+ }
+ var results=await Task.WhenAll(first,second);Check(bothBlocked,"two-insert-attempts-waited-on-mutex");
+ Check(results[0].Cabecera==results[1].Cabecera&&results.All(r=>r.Capsula==source),"fresh-concurrent-creation-single-id-and-document");
+ var race=results[0];Check((await RhNomArchivoCapsulasDb.Leer(cn,company,actor,race.Cabecera.IdCapsula,ct)).Capsula==source,"race-archive-readable-after-both-commits");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_CAP_ARC WHERE CODIGO_EMPRESA=:e AND ACTOR=:a AND CLAVE_SOL=:k",("e",company),("a",actor),("k",key)))Check(Convert.ToInt32(await c.ExecuteScalarAsync(ct))==1,"one-row-for-two-fresh-creators");
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-execution-disabled");foreach(var table in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"})using(var c=Cmd("SELECT COUNT(*) FROM "+table))Check(Convert.ToInt32(await c.ExecuteScalarAsync(ct))==0,"real-empty-"+table);
+ Console.WriteLine("R57_CAP_ARC_RACE="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,ArchiveOnlyReplays=replays,RaceArchiveId=race.Cabecera.IdCapsula,RaceKey=key,RaceDocumentHash=source.Hash,FreshConcurrentRequests=2,RowsForRaceKey=1,PayrollTablesReadForReplay=false,NoPayrollWrites=true,NoBusinessConfigurationWrites=true,ArchiveMetadataWritten=true,ProceduresExecuted=false}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

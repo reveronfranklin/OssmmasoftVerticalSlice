@@ -1,0 +1,156 @@
+using System.Data;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();
+using var bundle=JsonDocument.Parse(File.ReadAllText(args[0]));var metadata=bundle.RootElement.GetProperty("manifest");var prefix=metadata.GetProperty("prefix").GetString()!;
+var map=JsonSerializer.Deserialize<Dictionary<string,string>>(metadata.GetProperty("map").GetRawText())!;
+string N(string original)=>map[original];
+var checks=new List<string>();void Check(bool ok,string label){if(!ok)throw new InvalidOperationException(label);checks.Add(label);}
+var db=new ConnectionDB(cfg);using var cn=db.GetRhConnection();await cn.OpenAsync();var ct=CancellationToken.None;var owns=false;var cleaned=false;var passed=false;int shadowEvents=0;string? realBefore=null;
+OracleCommand Cmd(string sql,params (string,object?)[] pars){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in pars)RhNomCfgDb.Add(c,n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2,v);return c;}
+async Task Exec(string sql,params (string,object?)[] p){using var c=Cmd(sql,p);await c.ExecuteNonQueryAsync();}
+async Task<long> Count(string table){using var c=Cmd("SELECT COUNT(*) FROM "+table);return Convert.ToInt64(await c.ExecuteScalarAsync());}
+async Task<string> RealHash(){var rows=new List<string>();using var c=Cmd("SELECT CODIGO_MOV_NOMINA,CODIGO_EMPRESA,CODIGO_TIPO_NOMINA,CODIGO_PERSONA,CODIGO_CONCEPTO,FRECUENCIA_ID,TIPO,TO_CHAR(MONTO,'TM9','NLS_NUMERIC_CHARACTERS=''.,'''),STATUS,COMPLEMENTO_CONCEPTO,EXTRA1,EXTRA2,EXTRA3,USUARIO_INS,FECHA_INS,USUARIO_UPD,FECHA_UPD FROM RH.RH_MOV_NOMINA ORDER BY CODIGO_MOV_NOMINA");using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync()){var values=new object?[r.FieldCount];for(var i=0;i<values.Length;i++)values[i]=r.IsDBNull(i)?null:r.GetValue(i);rows.Add(JsonSerializer.Serialize(values));}return RhNomRecalculosHistoricos.Hash(rows);}
+List<string> Blocks(string sql){var list=new List<string>();var b=new StringBuilder();foreach(var line in sql.Split('\n')){if(line.TrimStart().StartsWith("--"))continue;if(line.Trim()=="/"){if(b.Length>0)list.Add(b.ToString().Trim());b.Clear();}else b.AppendLine(line);}Check(string.IsNullOrWhiteSpace(b.ToString()),"complete-sql-blocks");return list;}
+try{
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(cfg.GetValue<int>("settings:EmpresaConfig")==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","qa-identity");}
+ Check(System.Text.RegularExpressions.Regex.IsMatch(prefix,@"\AQ57T[A-F0-9]{6}_\z")&&map.Values.All(n=>n.StartsWith(prefix)&&n.Length<=30),"isolated-identifier-allowlist");
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE SUBSTR(OBJECT_NAME,1,:l)=:p",("l",prefix.Length),("p",prefix)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"namespace-absent-before-test");
+ var parsed=bundle.RootElement.GetProperty("sql").EnumerateObject().ToDictionary(x=>x.Name,x=>Blocks(x.Value.GetString()!));
+ var inverse=map.ToDictionary(x=>x.Value,x=>x.Key);var shadowTokens=new System.Text.RegularExpressions.Regex(@"\b(?:"+string.Join("|",inverse.Keys.Select(System.Text.RegularExpressions.Regex.Escape))+@")\b");
+ string Normalize(string text)=>System.Text.RegularExpressions.Regex.Replace(string.Join("\n",text.Replace("\r","").Split('\n').Select(x=>x.TrimEnd())).Trim(),@"\A(PACKAGE BODY|PACKAGE|PROCEDURE)\s+","$1 ");
+ foreach(var spec in new (string File,int Index,string Name,string Type)[]{(File:"Sql/06_RH_NOM_FIN_PLAN.sql",Index:2,Name:"RH_PKG_NOM_FIN_PLAN",Type:"PACKAGE"),("Sql/06_RH_NOM_FIN_PLAN.sql",3,"RH_PKG_NOM_FIN_PLAN","PACKAGE BODY"),("Sql/07_RH_NOM_FIN_EVT.sql",2,"RH_PKG_NOM_FIN_EVT","PACKAGE"),("Sql/07_RH_NOM_FIN_EVT.sql",3,"RH_PKG_NOM_FIN_EVT","PACKAGE BODY"),("Sql/08_RH_NOM_FIN_TX.sql",2,"RH_PKG_NOM_FIN_TX","PACKAGE"),("Sql/08_RH_NOM_FIN_TX.sql",3,"RH_PKG_NOM_FIN_TX","PACKAGE BODY"),("Sql/SP_RH_NOM_MOV_PLAN.sql",0,"SP_RH_NOM_MOV_PLAN","PROCEDURE")}){
+  var expected=shadowTokens.Replace(parsed[spec.File][spec.Index],m=>inverse[m.Value]).Replace("CREATE OR REPLACE ","").Replace("PROCEDURE RH.","PROCEDURE ");
+  var installed=new StringBuilder();using(var c=Cmd("SELECT TEXT FROM USER_SOURCE WHERE NAME=:n AND TYPE=:t ORDER BY LINE",("n",spec.Name),("t",spec.Type)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())installed.Append(r.GetString(0));
+  Check(Normalize(installed.ToString())==Normalize(expected),"native-source-matches-clone-origin-"+spec.Name+"-"+spec.Type);
+ }
+ realBefore=await RealHash();Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"real-server-setting-disabled");using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_CTL WHERE ACTIVO=1 OR LEGACY_RETIRADO=1"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"real-database-gates-closed");Check(await Count("RH_NOM_FIN_EVT")==0&&await Count("RH_NOM_FIN_SOL")==0,"real-financial-journals-empty");owns=true;
+ await Exec("CREATE TABLE "+N("RH_MOV_NOMINA")+" AS SELECT * FROM RH.RH_MOV_NOMINA WHERE 1=0");
+ await Exec("CREATE UNIQUE INDEX "+N("RH_MOV_NOMINA_U1")+" ON "+N("RH_MOV_NOMINA")+"(CODIGO_MOV_NOMINA)");
+ await Exec("CREATE UNIQUE INDEX "+N("RH_MOV_NOMINA_U2")+" ON "+N("RH_MOV_NOMINA")+"(CODIGO_TIPO_NOMINA,CODIGO_PERSONA,CODIGO_CONCEPTO,COMPLEMENTO_CONCEPTO,TIPO)");
+ foreach(var n in new[]{"RH_ADMINISTRATIVOS","RH_CONCEPTOS","RH_CONCEPTOS_ACUMULA","RH_DESCRIPTIVAS","RH_EDUCACION","RH_FORMULA_CONCEPTOS","RH_HISTORICO_NOMINA","RH_PERSONAS_MOV_CONTROL","RH_RELACION_CARGOS"})await Exec("CREATE TABLE "+N(n)+"(ID NUMBER)");
+ await Exec("CREATE TABLE "+N("RH_NOM_RUN_ACT")+"(CODIGO_EMPRESA NUMBER,ACTOR NUMBER,PRIMARY KEY(CODIGO_EMPRESA,ACTOR))");
+ await Exec("CREATE TABLE "+N("RH_PERIODOS")+"(CODIGO_EMPRESA NUMBER,CODIGO_TIPO_NOMINA NUMBER,CODIGO_PERIODO NUMBER,FECHA_NOMINA DATE,FECHA_CIERRE DATE)");
+ await Exec("CREATE TABLE "+N("RH_TIPOS_NOMINA")+"(CODIGO_EMPRESA NUMBER,CODIGO_TIPO_NOMINA NUMBER,CODIGO_PRESUPUESTO_ACTUAL NUMBER)");
+ await Exec("CREATE TABLE "+N("RH_NOM_MOD_VER")+"(ID_MODELO NUMBER,CODIGO_EMPRESA NUMBER,VERSION NUMBER,CODIGO_TIPO_NOMINA NUMBER,ESCENARIO VARCHAR2(24))");
+ await Exec("CREATE TABLE "+N("RH_NOM_MOD_EST")+"(ID_MODELO NUMBER,CODIGO_EMPRESA NUMBER,VER_MODELO NUMBER,HASH_MODELO VARCHAR2(64),ESTADO VARCHAR2(12),APTA NUMBER,NIVEL VARCHAR2(12),DESDE DATE,HASTA DATE)");
+ foreach(var file in new[]{"Sql/06_RH_NOM_FIN_PLAN.sql","Sql/07_RH_NOM_FIN_EVT.sql","Sql/08_RH_NOM_FIN_TX.sql","Sql/SP_RH_NOM_MOV_PLAN.sql"})foreach(var sql in parsed[file])await Exec(sql);
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_ERRORS WHERE SUBSTR(NAME,1,:l)=:p",("l",prefix.Length),("p",prefix)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"cloned-programs-compile-without-errors");
+ var date=new DateTime(2026,11,15);const int actor=7;const int company=13;const int type=10;const int person=123;
+ await Exec("INSERT INTO "+N("RH_NOM_FIN_CTL")+" VALUES(13,1,1)");
+ await Exec("INSERT INTO "+N("RH_PERIODOS")+" VALUES(13,10,5,:d,NULL)",("d",date));
+ await Exec("INSERT INTO "+N("RH_TIPOS_NOMINA")+" VALUES(13,10,1)");
+ await Exec("INSERT INTO "+N("RH_NOM_MOD_VER")+" VALUES(7,13,1,10,'RECALCULA_VARIACIONES')");
+ await Exec("INSERT INTO "+N("RH_NOM_MOD_EST")+" VALUES(7,13,1,:h,'PUBLICADO',1,'INTEGRAL',:d,NULL)",("h",new string('B',64)),("d",date.AddDays(-1)));
+ using(var c=Cmd("INSERT INTO "+N("RH_MOV_NOMINA")+"(CODIGO_MOV_NOMINA,CODIGO_EMPRESA,CODIGO_TIPO_NOMINA,CODIGO_PERSONA,CODIGO_CONCEPTO,FRECUENCIA_ID,TIPO,MONTO,STATUS,EXTRA1,USUARIO_INS,FECHA_INS) VALUES(1000,13,10,123,45,20,'E',:m,'A','CONSERVAR',5,SYSDATE)")){RhNomCfgDb.Add(c,"m",OracleDbType.Decimal,RhNomTransaccion.Numero("12345678901234567890123456789012345678"));await c.ExecuteNonQueryAsync();}
+ var initial=await ShadowMovDb.Leer(cn,company,type,person,ct);var manual=initial.Imagenes.Single();Check(manual.Tipo=="E"&&manual.Monto=="12345678901234567890123456789012345678","manual-38-digit-fixture-in-shadow-only");
+ var p=new RhNomPartidaPropuesta("R","OUT",44,20,"A","V","10","REGISTRAR_RESULTADO","10");var o=new RhNomOrigenConsolidado(1,7,1,new('A',64),new('B',64),456,new('C',64),p);
+ var context=new RhNomConsolidacion(company,type,5,date,1,person,"RECALCULA_VARIACIONES",[new(44,20,"V","DESTINO_UNICO",[o])]);
+ var planDoc=new RhNomPlanDocumento(RhNomPlanesGuardados.Version,company,actor,[1],context,initial);var text=RhNomPlanesGuardados.Serializar(planDoc);var planHash=RhNomCorridas.Hash(text);var planRequestHash=RhNomPlanesGuardados.HashSolicitud(new("SHADOW_PLAN",[1]),company,actor);int planId;
+ using(var c=new OracleCommand("RH."+N("RH_PKG_NOM_FIN_PLAN")+".CREAR",cn){BindByName=true,CommandType=CommandType.StoredProcedure}){RhNomCfgDb.Add(c,"p_EMPRESA",OracleDbType.Int32,company);RhNomCfgDb.Add(c,"p_ACTOR",OracleDbType.Int32,actor);RhNomCfgDb.Add(c,"p_CLAVE",OracleDbType.Varchar2,"SHADOW_PLAN");RhNomCfgDb.Add(c,"p_HASH_SOL",OracleDbType.Varchar2,planRequestHash);RhNomCfgDb.Add(c,"p_DOC",OracleDbType.Clob,text);RhNomCfgDb.Add(c,"p_HASH_DOC",OracleDbType.Varchar2,planHash);var id=RhNomCfgDb.Out(c,"p_ID");await c.ExecuteNonQueryAsync();planId=int.Parse(id.Value.ToString()!);}
+ var plan=RhNomPlanGuardado.Desde(new(planId,company,actor,"SHADOW_PLAN",planRequestHash,planHash,date),RhNomMovimientosPlanDb.Preparar(context,initial));
+ var isolatedConfig=new ConfigurationBuilder().AddConfiguration(cfg).AddInMemoryCollection(new Dictionary<string,string?>{{"RhMotorNomina:AplicacionEnabled","true"}}).Build();
+ var handler=new ShadowApplicationHandler(db,isolatedConfig);
+ RhNomEjecutarPlan Request(string key,int? target=null)=>new(planId,planHash,key,"QA_AISLADO:"+new string((char)0x00F1,489),target);
+ async Task<(RhNomLibroEvento Event,RhNomReciboFinanciero Receipt)> Write(RhNomEjecutarPlan q,Func<(int Id,DateTime Clock),RhNomCapturaMovimientos,Task<List<RhNomCambioAplicado>>> factory,bool throwAfterRegister=false){
+  return await RhNomCfgDb.Guardar(cn,async tx=>{
+   var selectedPlan=q.IdPlan==planId?plan:await ShadowPlanDb.Leer(cn,await ShadowPlanDb.Cabecera(cn,company,actor,q.IdPlan,ct),company,actor,ct);
+   var start=await ShadowTxDb.Iniciar(cn,selectedPlan,actor,q.IdRevertido is not null,ct);var old=await ShadowBookDb.Eventos(cn,company,type,person,ct);var state=RhNomLibroFinanciero.Reconstruir(old,company,type,person,ct);var before=await ShadowMovDb.Leer(cn,company,type,person,ct);var changes=await factory(start,before);
+   var d=new RhNomLibroDocumento(RhNomLibroFinanciero.Version,company,type,person,5,date,1,actor,q.IdPlan,q.HashPlanEsperado,q.IdRevertido is null?"APLICACION":"REVERSION",q.IdRevertido,changes,q.Motivo);
+   RhNomTransaccion.CapacidadLibro(old,d);var e=new RhNomLibroEvento(start.Id,state.UltimoEvento,state.UltimoHash,start.Clock,RhNomLibroFinanciero.Hash(d),"",d);e=e with{HashEvento=RhNomLibroFinanciero.Huella(e)};RhNomLibroFinanciero.Reconstruir(old.Append(e).ToList(),company,type,person,ct);
+   foreach(var change in changes)await ShadowTxDb.Cambiar(cn,change,ct);
+   var after=await ShadowMovDb.Leer(cn,company,type,person,ct);RhNomCambiosFinancieros.VerificarResultado(before.Imagenes,changes,after);Check(after.Imagenes.Single(r=>r.Id==1000)==manual,"manual-fixture-preserved");
+   d=d with{Cambios=changes.Select(c=>c.Despues is null?c:c with{Despues=after.Imagenes.Single(r=>r.Id==c.Despues.Id)}).ToList()};e=e with{Documento=d,HashDocumento=RhNomLibroFinanciero.Hash(d)};e=e with{HashEvento=RhNomLibroFinanciero.Huella(e)};RhNomLibroFinanciero.Reconstruir(old.Append(e).ToList(),company,type,person,ct);
+   await ShadowTxDb.Registrar(cn,q,RhNomTransaccion.Validar(q,company,actor),e,ct);if(throwAfterRegister)throw new InvalidOperationException("FAIL_AFTER_REGISTER");return(e,new RhNomReciboFinanciero(e.IdEvento,q.IdPlan,RhNomTransaccion.Validar(q,company,actor),e.HashEvento,e.FechaBd));
+  },ct);
+ }
+ var createQ=Request("SHADOW_CREATE");var first=await Write(createQ,async(start,before)=>{var id=await ShadowTxDb.NuevoId(cn,ct);return[new("CREAR",null,new(id,company,type,person,44,20,"V","10","A",null,null,null,null,actor,start.Clock,null,null))];});var targetId=first.Event.Documento.Cambios.Single().Despues!.Id;
+ Check(await Count(N("RH_NOM_FIN_EVT"))==1&&await Count(N("RH_NOM_FIN_SOL"))==1,"create-event-receipt-committed-together");
+ using(var observer=db.GetRhConnection()){await observer.OpenAsync();var read=await ShadowMovDb.Leer(observer,company,type,person,ct);Check(read.Imagenes.Any(x=>x.Id==targetId&&x.Monto=="10"),"committed-movement-visible-in-other-session");var b=await ShadowBookDb.Leer(observer,company,type,person,ct);Check(b.Eventos==1&&b.Propiedades.Single().UltimaImagen.Id==targetId,"committed-nonempty-ledger-readback");var decoded=await ShadowBookDb.Eventos(observer,company,type,person,ct);Check(decoded.Single().Documento.Motivo==createQ.Motivo,"fragmented-unicode-clob-roundtrip");}
+ var retry=await ShadowTxDb.Solicitud(cn,company,actor,createQ.ClaveSolicitud,RhNomTransaccion.Validar(createQ,company,actor),planId,ct);Check(retry?.IdEvento==first.Event.IdEvento,"same-key-recovers-original-receipt");
+ var disabledHandler=new ShadowApplicationHandler(db,cfg);var retried=await disabledHandler.Ejecutar(createQ,company,actor,ct);Check(retried.IsValid&&retried.Data!.IdEvento==first.Event.IdEvento,"handler-retry-recovers-commit-even-with-execution-disabled");
+ Check(!(await handler.Ejecutar(Request("SHADOW_FOREIGN",first.Event.IdEvento),company,actor+1,ct)).IsValid,"handler-rejects-foreign-plan-owner");
+ var conflict=false;try{await ShadowTxDb.Solicitud(cn,company,actor,createQ.ClaveSolicitud,new('F',64),planId,ct);}catch(RhNomError){conflict=true;}Check(conflict,"changed-request-hash-rejected");
+ var midFailed=false;try{await RhNomCfgDb.Guardar(cn,async tx=>{var start=await ShadowTxDb.Iniciar(cn,plan,actor,false,ct);var before=await ShadowMovDb.Leer(cn,company,type,person,ct);var old=before.Imagenes.Single(r=>r.Id==targetId);await ShadowTxDb.Cambiar(cn,new("ACTUALIZAR",old,old with{Monto="999",UsuarioUpd=actor,FechaUpd=start.Clock}),ct);await ShadowTxDb.Cambiar(cn,new("CREAR",null,old with{UsuarioIns=actor,FechaIns=start.Clock}),ct);return 1;},ct);}catch(OracleException ex)when(ex.Number==1){midFailed=true;}
+ Check(midFailed,"sql-constraint-failure-after-first-write");Check((await ShadowMovDb.Leer(cn,company,type,person,ct)).Imagenes.Single(x=>x.Id==targetId).Monto=="10"&&await Count(N("RH_NOM_FIN_EVT"))==1,"mid-write-failure-rolls-back-earlier-write");
+ var lateFailed=false;try{await Write(createQ,(start,before)=>{var old=before.Imagenes.Single(x=>x.Id==targetId);return Task.FromResult(new List<RhNomCambioAplicado>{new("ACTUALIZAR",old,old with{Monto="11",UsuarioUpd=actor,FechaUpd=start.Clock})});});}catch(OracleException ex)when(ex.Number==1){lateFailed=true;}
+ Check(lateFailed,"receipt-key-collision-after-ledger-insert");Check(await Count(N("RH_NOM_FIN_EVT"))==1&&await Count(N("RH_NOM_FIN_SOL"))==1&&(await ShadowMovDb.Leer(cn,company,type,person,ct)).Imagenes.Single(x=>x.Id==targetId).Monto=="10","late-register-failure-rolls-back-movement-event-and-receipt");
+ var update=await Write(Request("SHADOW_UPDATE"),(start,before)=>{var old=before.Imagenes.Single(x=>x.Id==targetId);return Task.FromResult(new List<RhNomCambioAplicado>{new("ACTUALIZAR",old,old with{Monto="0.5",UsuarioUpd=actor,FechaUpd=start.Clock})});});Check(RhNomTransaccion.Numero(update.Event.Documento.Cambios.Single().Despues!.Monto!).Equals(RhNomTransaccion.Numero(".5")),"update-stores-and-reads-oracle-number-without-rounding");
+ Check(!(await handler.Ejecutar(Request("SHADOW_OUT_OF_ORDER",first.Event.IdEvento),company,actor,ct)).IsValid,"handler-rejects-out-of-order-reversal");
+ Check(await Count(N("RH_NOM_FIN_EVT"))==2,"failed-handler-reversal-records-no-event");
+ await Exec("UPDATE "+N("RH_MOV_NOMINA")+" SET EXTRA1='CORRECCION_MANUAL' WHERE CODIGO_MOV_NOMINA=:i",("i",targetId));
+ Check(!(await handler.Ejecutar(Request("SHADOW_MANUAL_EDIT",update.Event.IdEvento),company,actor,ct)).IsValid,"handler-protects-manual-edit-of-owned-row");
+ Check((await ShadowMovDb.Leer(cn,company,type,person,ct)).Imagenes.Single(x=>x.Id==targetId).Extra1=="CORRECCION_MANUAL"&&await Count(N("RH_NOM_FIN_EVT"))==2,"rejected-reversal-does-not-overwrite-manual-edit");
+ await Exec("UPDATE "+N("RH_MOV_NOMINA")+" SET EXTRA1=NULL WHERE CODIGO_MOV_NOMINA=:i",("i",targetId));
+ var decision=new RhNomDecisionControl("SS_CONTROL",44,20,"V","CTL_SS_FIXTURE","1","RETIRAR_GENERADO");
+ var controlOrigin=o with{Partida=null,DecisionControl=decision};
+ var controlContext=context with{Destinos=[new(44,20,"V","DESTINO_UNICO",[controlOrigin])],VersionDecisionesControl=RhNomConsolidaciones.VersionDecisiones};
+ var beforeControl=await ShadowMovDb.Leer(cn,company,type,person,ct);
+ var controlDoc=new RhNomPlanDocumento(RhNomPlanesGuardados.Version,company,actor,[1],controlContext,beforeControl);
+ var controlId=await ShadowPlanDb.Crear(cn,company,actor,new("SHADOW_CONTROL_PLAN",[1]),controlDoc,ct);
+ var controlPlan=await ShadowPlanDb.Leer(cn,await ShadowPlanDb.Cabecera(cn,company,actor,controlId,ct),company,actor,ct);
+ Check(controlPlan.Diagnostico.Consolidacion.Destinos.Single().Origenes.Single().DecisionControl==decision,"control-plan-persisted-without-monetary-placeholder");
+ var blockedUnowned=RhNomPlanesFinancieros.Preparar(controlContext,beforeControl.Imagenes,[]).Pasos.Single();
+ Check(blockedUnowned.Bloqueo=="MOVIMIENTO_NO_PROPIO","control-does-not-adopt-unowned-fixture");
+ var owning=(await ShadowBookDb.Leer(cn,company,type,person,ct)).Propiedades;
+ var edited=beforeControl.Imagenes.Select(x=>x.Id==targetId?x with{Extra2="CORRECCION"}:x).ToList();
+ Check(RhNomPlanesFinancieros.Preparar(controlContext,edited,owning).Pasos.Single().Bloqueo=="MOVIMIENTO_MODIFICADO_POSTERIORMENTE","control-detects-posterior-extra-change");
+ var retired=await Write(Request("SHADOW_RETIRE") with{IdPlan=controlId,HashPlanEsperado=controlPlan.Cabecera.HashDocumento},async (start,before)=>{
+   var owned=await ShadowBookDb.Leer(cn,company,type,person,ct);
+   var step=RhNomPlanesFinancieros.Preparar(controlContext,before.Imagenes,owned.Propiedades).Pasos.Single();
+   Check(step.Accion=="PROPONER_RETIRO_PROPIO"&&step.MontoNuevo is null,"control-one-builds-owned-retirement-with-no-new-amount");
+   var change=RhNomCambiosFinancieros.Aplicar(step,controlContext,targetId,actor,start.Clock)!;
+   Check(change.Accion=="RETIRAR"&&change.Antes!.Id==targetId&&change.Despues is null,"control-plan-materializes-retirement-images");
+   return new List<RhNomCambioAplicado>{change};
+ });
+ Check((await ShadowBookDb.Leer(cn,company,type,person,ct)).Propiedades.Count==0,"retirement-clears-ownership");
+ var closedApply=await handler.Ejecutar(Request("SHADOW_CURRENT_PROFILE_BLOCK"),company,actor,ct);
+ Check(!closedApply.IsValid&&closedApply.Message.Contains("Los proveedores cambiaron",StringComparison.Ordinal),"current-profile-keeps-application-closed");
+ RhNomEjecutarPlan ForEvent(string key,RhNomLibroEvento e)=>Request(key,e.IdEvento) with{IdPlan=e.Documento.IdPlan,HashPlanEsperado=e.Documento.HashPlan};
+
+ await Exec("UPDATE "+N("RH_PERIODOS")+" SET FECHA_CIERRE=SYSDATE");
+ Check(!(await handler.Ejecutar(ForEvent("SHADOW_CLOSED",retired.Event),company,actor,ct)).IsValid,"handler-rejects-closed-period");
+ await Exec("UPDATE "+N("RH_PERIODOS")+" SET FECHA_CIERRE=NULL");
+ await Exec("UPDATE "+N("RH_TIPOS_NOMINA")+" SET CODIGO_PRESUPUESTO_ACTUAL=2");
+ Check(!(await handler.Ejecutar(ForEvent("SHADOW_WRONG_BUDGET",retired.Event),company,actor,ct)).IsValid,"handler-rejects-changed-budget");
+ await Exec("UPDATE "+N("RH_TIPOS_NOMINA")+" SET CODIGO_PRESUPUESTO_ACTUAL=1");
+ Check(!(await handler.Ejecutar(ForEvent("SHADOW_WRONG_HASH",retired.Event) with{HashPlanEsperado=new string('F',64)},company,actor,ct)).IsValid,"handler-rejects-wrong-plan-hash");
+ await Exec("UPDATE "+N("RH_NOM_MOD_EST")+" SET ESTADO='RETIRADO'");
+ foreach(var original in new[]{retired.Event,update.Event,first.Event}){
+  var q=ForEvent("SHADOW_REVERSE_"+original.IdEvento,original);var countBefore=await Count(N("RH_NOM_FIN_EVT"));
+  var concurrent=await Task.WhenAll(handler.Ejecutar(q,company,actor,ct),handler.Ejecutar(q,company,actor,ct));
+  var reversed=concurrent.FirstOrDefault(x=>x.IsValid&&x.Data is not null)??throw new InvalidOperationException("no-concurrent-reversal-succeeded");
+  Check(concurrent.Where(x=>x.IsValid).All(x=>x.Data!.IdEvento==reversed.Data!.IdEvento),"concurrent-inverse-has-one-receipt");
+  Check(await Count(N("RH_NOM_FIN_EVT"))==countBefore+1,"concurrent-inverse-commits-one-event");
+  Check(reversed.IsValid&&reversed.Data is not null,"full-handler-inverse-of-event-"+original.IdEvento);
+  var again=await handler.Ejecutar(q,company,actor,ct);Check(again.IsValid&&again.Data!.IdEvento==reversed.Data!.IdEvento,"handler-inverse-retry-has-same-receipt");
+ }
+ await Exec("UPDATE "+N("RH_NOM_MOD_EST")+" SET ESTADO='PUBLICADO'");
+ Check((await ShadowBookDb.Leer(cn,company,type,person,ct)).Propiedades.Count==0&&(await ShadowMovDb.Leer(cn,company,type,person,ct)).Imagenes.Single()==manual,"inverse-stack-restores-initial-business-state");
+ Check(!(await handler.Ejecutar(ForEvent("SHADOW_DOUBLE_REVERSE",retired.Event),company,actor,ct)).IsValid,"handler-rejects-second-reversal-under-new-key");
+ Check(await Count(N("RH_NOM_FIN_EVT"))==6,"failed-second-reversal-commits-no-event");
+ var beforeFinal=await Count(N("RH_NOM_FIN_EVT"));var afterRegisterFailed=false;
+ try{await Write(Request("SHADOW_ABORT_AFTER_REGISTER"),async(start,before)=>{var id=await ShadowTxDb.NuevoId(cn,ct);return[new("CREAR",null,new(id,company,type,person,44,20,"V","10","A",null,null,null,null,actor,start.Clock,null,null))];},true);}catch(InvalidOperationException ex)when(ex.Message=="FAIL_AFTER_REGISTER"){afterRegisterFailed=true;}
+ Check(afterRegisterFailed&&await Count(N("RH_NOM_FIN_EVT"))==beforeFinal&&await Count(N("RH_NOM_FIN_SOL"))==beforeFinal&&(await ShadowMovDb.Leer(cn,company,type,person,ct)).Imagenes.Count==1,"application-exception-after-register-rolls-back-everything");
+ var lostQ=Request("SHADOW_RESPONSE_LOST");var lost=await Write(lostQ,async(start,before)=>{var id=await ShadowTxDb.NuevoId(cn,ct);return[new("CREAR",null,new(id,company,type,person,44,20,"V","10","A",null,null,null,null,actor,start.Clock,null,null))];});
+ using(var recovery=db.GetRhConnection()){await recovery.OpenAsync();var receipt=await ShadowTxDb.Solicitud(recovery,company,actor,lostQ.ClaveSolicitud,RhNomTransaccion.Validar(lostQ,company,actor),planId,ct);Check(receipt?.IdEvento==lost.Receipt.IdEvento&&receipt.HashEvento==lost.Receipt.HashEvento,"new-session-recovers-receipt-after-response-loss");}
+ shadowEvents=(int)await Count(N("RH_NOM_FIN_EVT"));Check(shadowEvents==7,"seven-shadow-events-only");passed=true;
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(Exception ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}
+finally{
+ if(owns){try{
+  var objects=new List<(string Name,string Type)>();using(var c=Cmd("SELECT OBJECT_NAME,OBJECT_TYPE FROM USER_OBJECTS WHERE SUBSTR(OBJECT_NAME,1,:l)=:p",("l",prefix.Length),("p",prefix)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())objects.Add((r.GetString(0),r.GetString(1)));
+  Check(objects.All(x=>map.Values.Contains(x.Name)),"cleanup-only-manifest-owned-objects");
+  foreach(var x in objects.Where(x=>x.Type=="PACKAGE"))await Exec("DROP PACKAGE "+x.Name);
+  foreach(var x in objects.Where(x=>x.Type is "PROCEDURE" or "FUNCTION"))await Exec("DROP "+x.Type+" "+x.Name);
+  foreach(var x in objects.Where(x=>x.Type=="TABLE"))await Exec("DROP TABLE "+x.Name+" CASCADE CONSTRAINTS PURGE");
+  foreach(var x in objects.Where(x=>x.Type=="SEQUENCE"))await Exec("DROP SEQUENCE "+x.Name);
+  using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE SUBSTR(OBJECT_NAME,1,:l)=:p",("l",prefix.Length),("p",prefix)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"no-shadow-objects-left");cleaned=true;
+ }catch(Exception ex){Console.WriteLine("R57_CLEANUP_FAILED="+prefix+":"+(ex is OracleException oe?oe.Number.ToString():ex.GetType().Name));Environment.ExitCode=1;}}
+ if(realBefore is not null){try{Check(realBefore==await RealHash(),"real-payroll-images-unchanged");Check(await Count("RH_NOM_FIN_EVT")==0&&await Count("RH_NOM_FIN_SOL")==0,"real-ledger-and-receipts-still-empty");using var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_CTL WHERE ACTIVO=1 OR LEGACY_RETIRADO=1");Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"real-financial-gates-still-closed");}catch(Exception ex){Console.WriteLine("R57_PRESERVATION_FAILED="+ex.Message);Environment.ExitCode=1;}}
+}
+if(passed&&cleaned&&Environment.ExitCode==0)Console.WriteLine("R57_SHADOW_CONTROL_V="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Prefix=prefix,ShadowEvents=shadowEvents,Cleaned=cleaned,RealPayrollWrites=false,RealFinancialEvents=0,RealGateEnabled=false,HistoricalParityCertified=false,FullReverseHandlerTested=true,ConcurrentReverseTested=true,FullApplyHandlerCertified=false,ControlRetirementPrimitiveTested=true,MovementKind="V",CurrentProviderProfileApplicationBlocked=true}));

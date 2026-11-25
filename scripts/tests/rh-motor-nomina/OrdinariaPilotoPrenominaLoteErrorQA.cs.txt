@@ -1,0 +1,13 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ int owner;using(var c=cn.CreateCommand()){c.CommandText="SELECT ACTOR FROM RH_NOM_PRE_LOT WHERE ID_LOTE=3 AND CODIGO_EMPRESA=13";owner=Convert.ToInt32(await c.ExecuteScalarAsync());}var run=await RhNomCorridasDb.Leer(cn,13,owner,552,ct);var text=await RhNomCorridasDb.Documento(cn,run,"ENTRADA",ct);var doc=RhNomCorridas.Leer(text!,run.HashDatos,13,owner);var result=RhNomCorridas.Evaluar(doc,ct);Check(result.IsValid,"same-frozen-inputs-evaluate-successfully");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Run=552,run.Estado,run.Mensaje,run.HashDatos,run.HashResultado,FrozenEvaluationValid=result.IsValid,NativeVerificationReadOnly=true}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+":"+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(Exception ex){Console.WriteLine("R57_FAIL_CHECK="+ex.GetType().Name+":"+ex.Message);Environment.ExitCode=1;}

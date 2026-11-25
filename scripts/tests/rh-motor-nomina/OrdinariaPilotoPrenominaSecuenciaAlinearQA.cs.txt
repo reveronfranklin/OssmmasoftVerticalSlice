@@ -1,0 +1,12 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ using(var tx=cn.BeginTransaction()){using var c=cn.CreateCommand();c.Transaction=tx;c.BindByName=true;c.CommandText=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement.GetProperty("AlignmentSql").GetString();var max=c.Parameters.Add("p_MAXIMO",OracleDbType.Decimal);max.Direction=System.Data.ParameterDirection.Output;var last=c.Parameters.Add("p_ULTIMO",OracleDbType.Decimal);last.Direction=System.Data.ParameterDirection.Output;await c.ExecuteNonQueryAsync();Check(decimal.Parse(last.Value.ToString()!)>decimal.Parse(max.Value.ToString()!),"sequence-above-all-current-identities");await tx.CommitAsync();Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{MaximumExisting=max.Value.ToString(),LastReserved=last.Value.ToString(),NoRowChanges=true,NoDdl=true,SequenceValuesIntentionallyConsumed=true}}));}
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+":"+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

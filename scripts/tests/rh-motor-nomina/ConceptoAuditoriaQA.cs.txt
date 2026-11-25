@@ -1,0 +1,39 @@
+using System.Data;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Oracle.ManagedDataAccess.Client;
+if(args.Length!=2)throw new InvalidOperationException("Indique SQL y contextos QA.");
+using var cfg=JsonDocument.Parse(File.ReadAllText("/srv/ossmmasoft-pruebas/shared/config/vertical.json"));var root=cfg.RootElement;var company=int.Parse(root.GetProperty("settings").GetProperty("EmpresaConfig").ToString());
+var b=new OracleConnectionStringBuilder(root.GetProperty("ConnectionStrings").GetProperty("DefaultConnectionRH").GetString());b.ConnectionTimeout=8;using var cn=new OracleConnection(b.ConnectionString);var checks=new List<string>();
+void Check(bool value,string name){if(!value)throw new InvalidOperationException(name);checks.Add(name);}
+OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.CommandText=sql;c.BindByName=true;c.CommandTimeout=30;return c;}
+void Context(OracleCommand c,int empresa,int type,int period,DateTime date,int? concept=null){c.Parameters.Add("p_EMPRESA",OracleDbType.Int32).Value=empresa;c.Parameters.Add("p_TIPO",OracleDbType.Int32).Value=type;c.Parameters.Add("p_PERIODO",OracleDbType.Int32).Value=period;c.Parameters.Add("p_FECHA",OracleDbType.Date).Value=date;if(concept is not null)c.Parameters.Add("p_CONCEPTO",OracleDbType.Int32).Value=concept;}
+async Task<string> HashOld(){using var c=Cmd("SELECT TEXT FROM USER_SOURCE WHERE NAME='RH_PKG_ADJUNTAR_CARGO' ORDER BY TYPE,LINE");using var r=await c.ExecuteReaderAsync();var t=new StringBuilder();while(await r.ReadAsync())t.Append(r.IsDBNull(0)?"":r.GetString(0));return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(t.ToString())));}
+async Task<List<Dictionary<string,object?>>> Read(int empresa,int type,int period,DateTime date,int concept){using var c=Cmd("RH.SP_RH_NOM_CON_HIST");c.CommandType=CommandType.StoredProcedure;Context(c,empresa,type,period,date,concept);c.Parameters.Add("p_RESULT",OracleDbType.RefCursor,ParameterDirection.Output);using var r=await c.ExecuteReaderAsync();var rows=new List<Dictionary<string,object?>>();while(await r.ReadAsync()){Check(rows.Count<3,"bounded-images");var row=new Dictionary<string,object?>();for(int i=0;i<r.FieldCount;i++)row[r.GetName(i)]=r.IsDBNull(i)?null:r.GetValue(i);rows.Add(row);}return rows;}
+try{await cn.OpenAsync();
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();var t=root.GetProperty("OracleAnalysis").GetProperty("Targets").GetProperty("RH");Check(company==13&&r.GetString(0)==t.GetProperty("ExpectedDatabaseName").GetString()&&r.GetString(1)==t.GetProperty("ExpectedServerHost").GetString()&&r.GetString(2)=="RH","identity-QA");}
+ using var cases=JsonDocument.Parse(await File.ReadAllTextAsync(args[1]));var pairs=new List<(int Type,int Period,DateTime Date,int Concept)>();
+ foreach(var item in cases.RootElement.EnumerateArray()){
+  var type=item.GetProperty("CODIGO_TIPO_NOMINA").GetInt32();var period=item.GetProperty("CODIGO_PERIODO").GetInt32();var date=item.GetProperty("FECHA_NOMINA").GetDateTime();
+  using var c=Cmd("SELECT DISTINCT CODIGO_CONCEPTO FROM RH.RH_HISTORICO_NOMINA WHERE CODIGO_EMPRESA=:p_EMPRESA AND CODIGO_TIPO_NOMINA=:p_TIPO AND CODIGO_PERIODO=:p_PERIODO AND FECHA_NOMINA=:p_FECHA AND CODIGO_CONCEPTO>0 ORDER BY CODIGO_CONCEPTO");Context(c,company,type,period,date);using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync()){Check(pairs.Count<500,"bounded-concept-contexts");pairs.Add((type,period,date,r.GetInt32(0)));}
+ }
+ Check(pairs.Count>0&&pairs.Select(x=>(x.Type,x.Period)).Distinct().Count()==18,"eighteen-contexts");var old=await HashOld();
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='SP_RH_NOM_CON_HIST'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"object-name-unused");
+ var script=await File.ReadAllTextAsync(args[0]);using(var c=Cmd(Regex.Replace(script,@"(?m)^\s*/\s*$","").Trim()))await c.ExecuteNonQueryAsync();
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME='SP_RH_NOM_CON_HIST' AND OBJECT_TYPE='PROCEDURE' AND STATUS='VALID'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==1,"procedure-valid");
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_ERRORS WHERE NAME='SP_RH_NOM_CON_HIST'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"no-compile-errors");
+ int noFuture=0,equalTime=0,ties=0,nullDates=0,uniqueFuture=0,otherType=0;
+ foreach(var pair in pairs){DateTime? expectedDate;int expectedNull;
+  using(var c=Cmd("SELECT MIN(CASE WHEN FECHA_INS_H>=:p_FECHA THEN FECHA_INS_H END),NVL(SUM(CASE WHEN FECHA_INS_H IS NULL THEN 1 ELSE 0 END),0) FROM RH.RH_H_CONCEPTOS WHERE CODIGO_EMPRESA=:p_EMPRESA AND CODIGO_CONCEPTO=:p_CONCEPTO")){c.Parameters.Add("p_FECHA",OracleDbType.Date).Value=pair.Date;c.Parameters.Add("p_EMPRESA",OracleDbType.Int32).Value=company;c.Parameters.Add("p_CONCEPTO",OracleDbType.Int32).Value=pair.Concept;using var r=await c.ExecuteReaderAsync();await r.ReadAsync();expectedDate=r.IsDBNull(0)?null:r.GetDateTime(0);expectedNull=r.GetInt32(1);}
+  var rows=await Read(company,pair.Type,pair.Period,pair.Date,pair.Concept);Check(rows.Count>0,"related-concept-visible");var first=rows[0];var date=first["FECHA_EVENTO"] is null?(DateTime?)null:Convert.ToDateTime(first["FECHA_EVENTO"]);var total=Convert.ToInt32(first["TOTAL_CANDIDATOS"]);
+  Check(date==expectedDate&&Convert.ToInt32(first["EVENTOS_SIN_FECHA"])==expectedNull,"first-event-date-exact");
+  Check(date is null?total==0&&rows.Count==1:total>0&&rows.Count==Math.Min(total,3),"candidate-count-contract");
+  if(expectedNull>0)nullDates++;if(date is null)noFuture++;else if(date==pair.Date)equalTime++;else if(total>1)ties++;else{uniqueFuture++;if(Convert.ToInt32(first["CODIGO_TIPO_NOMINA"]??0)!=pair.Type)otherType++;}
+  foreach(var row in rows.Where(_=>date is not null))Check(Convert.ToInt32(row["CODIGO_EMPRESA"])==company&&Convert.ToInt32(row["CODIGO_CONCEPTO"])==pair.Concept&&Convert.ToDateTime(row["FECHA_INS_H"])==date,"audit-identity-exact");
+ }
+ var sample=pairs[0];Check((await Read(company+999,sample.Type,sample.Period,sample.Date,sample.Concept)).Count==0,"foreign-company-empty");Check((await Read(company,sample.Type,sample.Period,sample.Date,int.MaxValue)).Count==0,"unrelated-concept-empty");Check((await Read(company,sample.Type,sample.Period,sample.Date.AddSeconds(1),sample.Concept)).Count==0,"exact-context-time");
+ try{await Read(company,sample.Type,sample.Period,sample.Date,0);throw new InvalidOperationException("invalid-concept-accepted");}catch(OracleException ex)when(ex.Number==20001){Check(true,"invalid-concept-rejected");}
+ Check(old==await HashOld(),"old-package-unchanged");Console.WriteLine("R57_CONCEPTO="+JsonSerializer.Serialize(new{Status="OK",Company=company,Contexts=18,ConceptContexts=pairs.Count,NoFuture=noFuture,SameSecond=equalTime,Ties=ties,NullDates=nullDates,UniqueFuture=uniqueFuture,OtherPayrollType=otherType,Checks=checks,OldPayrollHash=old,ScriptSha256=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(script))),NoPersonalDataInOutput=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

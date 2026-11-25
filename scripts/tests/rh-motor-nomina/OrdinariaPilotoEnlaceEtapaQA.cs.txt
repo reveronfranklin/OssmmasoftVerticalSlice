@@ -1,0 +1,29 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var input=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;var models=new RhNomVersionesHandler(db);var origin=(await models.Get(new(1,71),company,ct)).Data!;var salary=(await models.Get(new(1,15),company,ct)).Data!;
+ Check(origin.Hash=="F6CA3B5698ED6DCB59DB908F3D2E6A7E6C8D27F4E1E2CF41A73726C828686585"&&salary.Hash=="87960D640ED17BE886E20B949A112E901A533500FB6E3403EF691A06B89FF924","pinned-origin-and-salary-models");
+ var cases=new List<object>();var counts=new Dictionary<string,int>();
+ foreach(var candidate in input.GetProperty("Cases").EnumerateArray()){
+ var archive=candidate.GetProperty("Archive").GetInt32();var saved=await RhNomArchivoCapsulasDb.Leer(cn,company,actor,archive,ct);var doc=new RhNomDocumentoEnlaceSueldo(RhNomEnlacesSueldo.Politica,new(origin,new(saved),salary));var original=JsonSerializer.Serialize(doc);
+ var result=RhNomEnlacesSueldo.Evaluar(doc,company,actor,ct);Check(result.Recalculo.Simulacion.Errores.Count==0,"linked-recalculation-succeeded-"+archive);
+ Check(JsonSerializer.Serialize(doc)==original,"original-evidence-not-mutated-"+archive);var replay=RhNomEnlacesSueldo.Evaluar(JsonSerializer.Deserialize<RhNomDocumentoEnlaceSueldo>(original)!,company,actor,ct);Check(JsonSerializer.Serialize(result)==JsonSerializer.Serialize(replay),"linked-exact-offline-replay-"+archive);
+ var baseline=RhNomModelosDesdeCaptura.Evaluar(origin,new(saved),company,actor,ct);
+ Check(result.MontoOriginal==result.MontoDerivado,"pilot-salary-equal-before-and-after-"+archive);
+ Check(result.Entradas.All(e=>e.ValorOriginal==e.ValorDerivado),"all-pilot-input-values-preserved-"+archive);
+ Check(JsonSerializer.Serialize(result.Recalculo)==JsonSerializer.Serialize(baseline.Simulacion),"complete-recalculation-and-controls-preserved-"+archive);
+ Check(result.Entradas.Where(e=>e.PhOriginal is not null).All(e=>JsonSerializer.Serialize(e.PhOriginal!.Documento.Historicas)==JsonSerializer.Serialize(e.PhDerivado!.Documento.Historicas)),"PH-history-preserved-"+archive);
+ Check(!result.AptaParaAplicacion&&!result.MovimientosAplicados&&!result.PropiedadLegacyAsignada,"no-financial-authorization-"+archive);
+ var ph=result.Entradas.Count(e=>e.PhOriginal is not null);var ac=result.Entradas.Count(e=>e.AcumuladorOriginal is not null);counts["ENLACE_REPRODUCIBLE"]=counts.GetValueOrDefault("ENLACE_REPRODUCIBLE")+1;
+ cases.Add(new{CaseHash=candidate.GetProperty("CaseHash").GetString(),Archive=archive,ResultHash=RhNomRecalculosHistoricos.Hash(result),SalaryHash=RhNomRecalculosHistoricos.Hash(result.Sueldo),Inputs=result.Entradas.Count,AccumulatorInputs=ac,PhInputs=ph,Proposals=result.Recalculo.ProyeccionConceptos!.Partidas.Count,State="ENLACE_REPRODUCIBLE"});
+ }
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-disabled");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Cases=cases,Counts=counts,Policy=RhNomEnlacesSueldo.Politica,Stage=RhNomEnlacesSueldo.Version,HelpersCompiledInProbeOnly=true,NoPayrollWrites=true,NoConfigurationWrites=true,NoCurrentProviderReadsDuringEvaluation=true,HistoricalParityCertified=false,OperationalPayrollReady=false}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

@@ -239,6 +239,12 @@ internal static class CntAutomaticoSupport
             return originValidation;
         }
 
+        if (CntAutomaticoTipos.Aplica(originValidation.Data!))
+        {
+            var typeValidation = await ValidateKnownTypeAsync(connectionDB, tipoComprobanteId, originValidation.Data!, empresa);
+            if (!typeValidation.IsValid) return typeValidation;
+        }
+
         if (fechaDesde == default || fechaHasta == default)
         {
             return new ResultDto<string>(string.Empty) { Data = null, IsValid = false, Message = "El rango de fechas es requerido." };
@@ -256,6 +262,44 @@ internal static class CntAutomaticoSupport
         }
 
         return new ResultDto<string>("OK") { IsValid = true, Message = "Success" };
+    }
+
+    private static async Task<ResultDto<string>> ValidateKnownTypeAsync(ConnectionDB connectionDB, int tipoId, string origen, int empresa)
+    {
+        try
+        {
+            using var cn = connectionDB.GetCntConnection();
+            await cn.OpenAsync();
+            using var cmd = new OracleCommand("CNT.SP_CNT_CAT_DESC_GET", cn)
+            { CommandType = CommandType.StoredProcedure, BindByName = true, CommandTimeout = 20 };
+            cmd.Parameters.Add("p_TITULO_ID", OracleDbType.Int32).Value = 5;
+            cmd.Parameters.Add("p_SEARCH_TEXT", OracleDbType.Varchar2).Value = CntDb.StringDbValue(null);
+            cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
+            cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
+            var message = cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
+            string? code = null;
+            var found = false;
+            using (var reader = await cmd.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    if (reader.SafeGetInt32("ID") != tipoId) continue;
+                    found = true;
+                    code = reader.SafeGetString("CODIGO");
+                }
+            }
+            var status = CntDb.GetMessage(message);
+            if (!CntDb.IsSuccessMessage(status))
+                return new ResultDto<string>(string.Empty) { IsValid = false, Message = status };
+            if (!found)
+                return new ResultDto<string>(string.Empty) { IsValid = false, Message = "El tipo de comprobante no existe para la empresa configurada." };
+            var error = CntAutomaticoTipos.Validar(origen, code);
+            return new ResultDto<string>(code ?? string.Empty) { IsValid = error is null, Message = error ?? "Success" };
+        }
+        catch (Exception ex)
+        {
+            return new ResultDto<string>(string.Empty) { IsValid = false, Message = $"Error tecnico al validar origen y tipo: {ex.Message}" };
+        }
     }
 
     private static async Task<ResultDto<string>> ValidatePeriodRangeAsync(ConnectionDB connectionDB, int codigoPeriodo, int empresa, DateTime fechaDesde, DateTime fechaHasta)
@@ -375,8 +419,8 @@ internal static class CntAutomaticoSupport
                        (SELECT COUNT(*) FROM CNT.CNT_DETALLE_LIBRO l WHERE l.CODIGO_IDENTIFICADOR = c.CODIGO_COMPROBANTE
                           AND l.CODIGO_EMPRESA = c.CODIGO_EMPRESA AND l.TIPO_DOCUMENTO_ID = c.TIPO_COMPROBANTE_ID
                           AND NVL(l.ORIGEN_ID, -1) = NVL(c.ORIGEN_ID, -1)) REL_LIBRO,
-                       NVL(SUM(CASE WHEN d.MONTO < 0 THEN -d.MONTO ELSE 0 END),0) TOTAL_DEBE,
-                       NVL(SUM(CASE WHEN d.MONTO > 0 THEN d.MONTO ELSE 0 END),0) TOTAL_HABER,
+                       NVL(SUM(CASE WHEN d.MONTO > 0 THEN d.MONTO ELSE 0 END),0) TOTAL_DEBE,
+                       NVL(SUM(CASE WHEN d.MONTO < 0 THEN -d.MONTO ELSE 0 END),0) TOTAL_HABER,
                        COUNT(d.CODIGO_DETALLE_COMPROBANTE) CANTIDAD
                   FROM CNT.CNT_COMPROBANTES c
                   LEFT JOIN CNT.CNT_DETALLE_COMPROBANTE d ON d.CODIGO_COMPROBANTE = c.CODIGO_COMPROBANTE AND d.CODIGO_EMPRESA = c.CODIGO_EMPRESA

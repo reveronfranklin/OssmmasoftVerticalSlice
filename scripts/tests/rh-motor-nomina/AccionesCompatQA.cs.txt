@@ -1,0 +1,20 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var outcomes=new List<object>();foreach(var version in Enumerable.Range(52,15)){
+ var loaded=await new RhNomVersionesHandler(db).Get(new(1,version),company,ct);Check(loaded.IsValid&&loaded.Data is not null,"read-draft-"+version);var model=loaded.Data!;Check(RhNomConfiguracion.Serializar(model.Configuracion).Hash==model.Hash,"unchanged-configuration-hash-"+version);
+ string? block=null;try{RhNomComposicionGrupo.VerificarCapturas(model.Configuracion);}catch(RhNomError ex){block=ex.Diagnostico.Codigo;}
+ Check(new[]{52,53,54,56,57,58}.Contains(version)?block=="SALIDA_EFECTIVA_NO_DEFINIDA":block is null,"expected-effective-value-policy-"+version);
+ outcomes.Add(new{Version=version,Type=model.CodigoTipoNomina,model.Hash,Block=block,HistoricalParityCertified=false});}
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_EVT"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"ledger-empty");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_SOL"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"financial-requests-empty");
+ Console.WriteLine("R57_ACCIONES_COMPAT="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Outcomes=outcomes,NoPayrollWrites=true,NoConfigurationWrites=true}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

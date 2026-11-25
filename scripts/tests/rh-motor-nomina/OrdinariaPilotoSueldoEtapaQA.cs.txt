@@ -1,0 +1,23 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var input=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;var models=new RhNomVersionesHandler(db);var origin=(await models.Get(new(1,71),company,ct)).Data!;var salary=(await models.Get(new(1,15),company,ct)).Data!;
+ Check(origin.Hash=="F6CA3B5698ED6DCB59DB908F3D2E6A7E6C8D27F4E1E2CF41A73726C828686585"&&salary.Hash=="87960D640ED17BE886E20B949A112E901A533500FB6E3403EF691A06B89FF924","pinned-origin-and-salary-models");
+ var cases=new List<object>();var outcomes=new Dictionary<string,int>();
+ foreach(var candidate in input.GetProperty("Cases").EnumerateArray()){
+ var archive=candidate.GetProperty("Archive").GetInt32();var saved=await RhNomArchivoCapsulasDb.Leer(cn,company,actor,archive,ct);var doc=new RhNomDocumentoEtapaSueldo(origin,new(saved),salary);var original=JsonSerializer.Serialize(doc);var result=RhNomEtapasSueldo.Evaluar(doc,company,actor,ct);Check(result.Simulacion.Simulacion.Errores.Count==0,"salary-stage-succeeded-"+archive);
+ Check(JsonSerializer.Serialize(doc)==original,"capture-and-origin-not-mutated-"+archive);var replay=RhNomEtapasSueldo.Evaluar(JsonSerializer.Deserialize<RhNomDocumentoEtapaSueldo>(original)!,company,actor,ct);Check(JsonSerializer.Serialize(result)==JsonSerializer.Serialize(replay),"salary-exact-offline-replay-"+archive);
+ var part=result.Simulacion.ProyeccionConceptos!.Partidas.Single();var source=RhNomCapsulasPrenomina.Leer(saved.Capsula);var rows=source.Imagenes.Where(r=>r.CodigoConcepto==part.CodigoConcepto&&r.Tipo=="F").ToList();var state=rows.Count==0?"SIN_MOVIMIENTO_F":rows.Count>1?"MOVIMIENTOS_F_MULTIPLES":RhNomNumeros.Leer(RhNomReferencias.NormalizarMontoOracle(rows[0].Monto))==RhNomNumeros.Leer(part.MontoPropuesto!)?"IGUAL_MOVIMIENTO_F_ACTUAL":"DIFERENTE_MOVIMIENTO_F_ACTUAL";outcomes[state]=outcomes.GetValueOrDefault(state)+1;
+ Check(!result.AptaParaAplicacion&&!result.BasesPosterioresIntegradas&&!result.MovimientosAplicados,"stage-not-integral-"+archive);
+ cases.Add(new{CaseHash=candidate.GetProperty("CaseHash").GetString(),Archive=archive,CaptureHash=saved.Capsula.Hash,SalaryResultHash=RhNomRecalculosHistoricos.Hash(result),CargoHash=result.HashCargo,State=state,CurrentSalaryRows=rows.Count,Entries=result.Entradas.Count,Outputs=result.Simulacion.ProyeccionConceptos.Partidas.Count});
+ }
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-disabled");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Cases=cases,Counts=outcomes,ModelVersion=15,Stage=RhNomEtapasSueldo.Version,HelperCompiledInProbeOnly=true,NoPayrollWrites=true,NoConfigurationWrites=true,NoCurrentProviderReadsDuringEvaluation=true,HistoricalParityCertified=false,LaterBasesIntegrated=false}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

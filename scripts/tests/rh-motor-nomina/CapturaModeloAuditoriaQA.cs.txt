@@ -1,0 +1,24 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var policy=cfg.GetSection("RhMotorNomina:BonosManualesE").Get<List<RhNomManualServidor>>()!;Check(policy.Count==53,"fifty-three-explicit-manual-pairs");Check(policy.Count(p=>p.ReferenciaDecision=="R57_USUARIO_SIN_FORMULA_VARIACIONES_20261122")==11,"eleven-new-user-decisions");
+ foreach(var type in policy.Select(p=>p.CodigoTipoNomina).Distinct())RhNomCapturasServidor.Politica(cfg,type);
+ foreach(var entry in policy){using var c=cn.CreateCommand();c.BindByName=true;c.CommandText="SELECT TIPO_CONCEPTO FROM RH_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND CODIGO_CONCEPTO=:c";c.Parameters.Add("e",OracleDbType.Int32).Value=company;c.Parameters.Add("t",OracleDbType.Int32).Value=entry.CodigoTipoNomina;c.Parameters.Add("c",OracleDbType.Int32).Value=entry.CodigoConcepto;using var r=await c.ExecuteReaderAsync();Check(await r.ReadAsync()&&RhNomRecalculosHistoricos.Hash(new RhNomConceptoSeleccion(company,entry.CodigoTipoNomina,entry.CodigoConcepto,r.GetString(0)))==entry.HashClasificacionEsperado&&!await r.ReadAsync(),"exact-classification-"+entry.CodigoConcepto);}
+ foreach(var id in new[]{1374,1375,1376})Check(policy.Any(p=>p.CodigoTipoNomina==12&&p.CodigoConcepto==id&&p.ReferenciaDecision=="R57_USUARIO_E_RET_CONSERVAR_F_CALCULAR_20261122"),"E-retained-F-not-reclassified-"+id);
+ var versions=new Dictionary<string,int>();for(var id=1;id<=14;id++){
+  var saved=await RhNomArchivoCapsulasDb.Leer(cn,company,actor,id,ct);var d=RhNomCapsulasPrenomina.Leer(saved.Capsula);versions[d.Version]=versions.GetValueOrDefault(d.Version)+1;
+  var summary=RhNomCapturasServidor.Resumir(saved,company,actor,true);Check(summary.Archivo.HashDocumento==saved.Capsula.Hash,"immutable-archive-replay-"+id);
+  if(d.FuentesModelo is {} sources){var model=await RhNomCfgDb.Revision(cn,company,sources.ModeloId,sources.Version,ct);RhNomModelosDesdeCaptura.VerificarFuentes(model,d,actor);Check(true,"complete-model-evidence-replay-"+id);}
+ }
+ Check(versions.Count==4&&versions[RhNomCapsulasPrenomina.VersionModelo]==5,"all-four-archive-formats-preserved");
+ foreach(var table in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"}){using var c=cn.CreateCommand();c.CommandText="SELECT COUNT(*) FROM "+table;Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"financial-empty-"+table);}
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-gate-closed");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Archives=versions,ManualPairs=53,NewVariations=11,PendingRetentionPairs=0,NoPayrollWrites=true,AuthenticationHttpTested=false}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

@@ -1,0 +1,21 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Oracle.ManagedDataAccess.Client;
+using var cfg=JsonDocument.Parse(File.ReadAllText("/srv/ossmmasoft-pruebas/shared/config/vertical.json"));var root=cfg.RootElement;
+var company=int.Parse(root.GetProperty("settings").GetProperty("EmpresaConfig").ToString());var checks=new List<string>();var identities=new List<string>();string? hash=null;
+void Check(bool value,string name){if(!value)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ foreach(var alias in new[]{"SIS","RH"}){
+  var b=new OracleConnectionStringBuilder(root.GetProperty("ConnectionStrings").GetProperty("DefaultConnection"+alias).GetString());b.ConnectionTimeout=8;using var cn=new OracleConnection(b.ConnectionString);await cn.OpenAsync();
+  OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.CommandText=sql;c.BindByName=true;c.CommandTimeout=20;return c;}
+  using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();var t=root.GetProperty("OracleAnalysis").GetProperty("Targets").GetProperty(alias);Check(company==13&&r.GetString(0)==t.GetProperty("ExpectedDatabaseName").GetString()&&r.GetString(1)==t.GetProperty("ExpectedServerHost").GetString()&&r.GetString(2)==alias,"identity-"+alias);identities.Add(alias);}
+  if(alias!="RH")continue;
+  foreach(var name in new[]{"RH_NOM_VAR","RH_NOM_VAR_SEQ","RH_NOM_MOD_CTL","RH_NOM_MOD_VER","TR_RH_NOM_VER_IMM","RH_PKG_NOM_CFG","SP_RH_NOM_CTX_HIST","SP_RH_NOM_CAR_HIST","SP_RH_NOM_REF_HIST","SP_RH_NOM_CON_HIST"}){
+   using var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME=:name AND STATUS='VALID'");c.Parameters.Add("name",OracleDbType.Varchar2).Value=name;Check(Convert.ToInt32(await c.ExecuteScalarAsync())==(name=="RH_PKG_NOM_CFG"?2:1),"valid-"+name);
+   using var e=Cmd("SELECT COUNT(*) FROM USER_ERRORS WHERE NAME=:name");e.Parameters.Add("name",OracleDbType.Varchar2).Value=name;Check(Convert.ToInt32(await e.ExecuteScalarAsync())==0,"no-errors-"+name);
+  }
+  using(var c=Cmd("SELECT TEXT FROM USER_SOURCE WHERE NAME='RH_PKG_ADJUNTAR_CARGO' ORDER BY TYPE,LINE"))using(var r=await c.ExecuteReaderAsync()){var text=new StringBuilder();while(await r.ReadAsync())text.Append(r.IsDBNull(0)?"":r.GetString(0));hash=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToString())));}
+ }
+ Console.WriteLine("R57_PREFLIGHT="+JsonSerializer.Serialize(new{Status="OK",Company=company,Checks=checks,OldPayrollHash=hash}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

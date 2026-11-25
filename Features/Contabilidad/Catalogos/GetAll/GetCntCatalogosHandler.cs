@@ -16,14 +16,14 @@ public class GetCntCatalogosHandler(ConnectionDB connectionDB, IConfiguration co
                 return new ResultDto<List<CntCatalogResponse>>(null!) { IsValid = false, Message = errorMessage };
             }
 
-            var tituloId = value.Catalogo?.ToLowerInvariant() switch
+            var codigoTitulo = value.Catalogo?.ToLowerInvariant() switch
             {
-                "tipos-comprobante" or "tipos" => 5,
-                "origenes-comprobante" or "origenes" => 1,
-                _ => 0
+                "tipos-comprobante" or "tipos" => "TDC",
+                "origenes-comprobante" or "origenes" => "ODC",
+                _ => null
             };
 
-            if (tituloId == 0)
+            if (codigoTitulo is null)
             {
                 return new ResultDto<List<CntCatalogResponse>>(null!) { Data = null, IsValid = false, Message = "Catalogo CNT no soportado." };
             }
@@ -31,7 +31,8 @@ public class GetCntCatalogosHandler(ConnectionDB connectionDB, IConfiguration co
             using var cn = connectionDB.GetCntConnection();
             await cn.OpenAsync();
             using var cmd = new OracleCommand("CNT.SP_CNT_CAT_DESC_GET", cn) { CommandType = CommandType.StoredProcedure, BindByName = true };
-            cmd.Parameters.Add("p_TITULO_ID", OracleDbType.Int32).Value = tituloId;
+            cmd.Parameters.Add("p_TITULO_ID", OracleDbType.Int32).Value = CntDb.DbValue((int?)null);
+            cmd.Parameters.Add("p_CODIGO_TITULO", OracleDbType.Varchar2).Value = codigoTitulo;
             cmd.Parameters.Add("p_SEARCH_TEXT", OracleDbType.Varchar2).Value = CntDb.StringDbValue(value.SearchText);
             cmd.Parameters.Add("p_CODIGO_EMPRESA", OracleDbType.Int32).Value = empresa;
             cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);

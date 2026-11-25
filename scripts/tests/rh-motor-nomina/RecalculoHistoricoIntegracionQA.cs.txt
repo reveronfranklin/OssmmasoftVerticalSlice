@@ -1,0 +1,48 @@
+using System.Data;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.CommandText=sql;c.BindByName=true;c.CommandTimeout=25;foreach(var (n,v) in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var models=new RhNomVersionesHandler(db);var listed=await models.GetAll(new(SearchText:"Q57_0523F8B5"),company,ct);Check(listed.IsValid&&listed.Data!.Count==1&&listed.Data[0].ModeloId==1&&listed.Data[0].UltimaVersion==9&&listed.Data[0].Descripcion.Contains("QA TEST NO USAR"),"isolated-fixture-version9");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND ID_MODELO_CALCULO=1",("e",company)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"fixture-not-associated-to-live-concepts");
+ var previous=(await models.Get(new(1,9),company,ct)).Data!;var config=previous.Configuracion;var parameter=config.FuentesActuales!.Single(b=>b.ParametroConcepto is not null).ParametroConcepto!;
+ var cases=new List<(int Period,DateTime Date,int Person,int Relation)>();
+ var periods=new List<(int Id,DateTime Date)>();
+ using(var c=Cmd("SELECT * FROM (SELECT CODIGO_PERIODO,FECHA_NOMINA FROM RH_PERIODOS WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=10 AND FECHA_CIERRE IS NOT NULL ORDER BY FECHA_NOMINA DESC,CODIGO_PERIODO DESC) WHERE ROWNUM<=8",("e",company)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())periods.Add((r.GetInt32(0),DateTime.SpecifyKind(r.GetDateTime(1),DateTimeKind.Unspecified)));
+ foreach(var period in periods)
+ {
+  using(var c=Cmd("SELECT COUNT(*),COUNT(PORCENTAJE) FROM RH_FORMULA_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND CODIGO_CONCEPTO=:c AND (FECHA_DESDE IS NULL OR FECHA_DESDE<=:d) AND (FECHA_HASTA IS NULL OR FECHA_HASTA>=:d)",("e",company),("c",parameter.CodigoConcepto),("d",period.Date)))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();if(r.GetInt32(0)!=1||r.GetInt32(1)!=1)continue;}
+  var people=new List<(int Person,int Relation)>();
+  using(var c=Cmd("SELECT * FROM (SELECT CODIGO_PERSONA,CODIGO_RELACION_CARGO FROM RH_HISTORICO_PERSONAL_CARGO WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=10 AND CODIGO_PERIODO=:p AND FECHA_NOMINA=:d AND CODIGO_PERSONA>0 AND CODIGO_RELACION_CARGO>0 AND SUELDO IS NOT NULL GROUP BY CODIGO_PERSONA,CODIGO_RELACION_CARGO HAVING COUNT(*)=1 ORDER BY CODIGO_PERSONA,CODIGO_RELACION_CARGO) WHERE ROWNUM<=10",("e",company),("p",period.Id),("d",period.Date)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())people.Add((r.GetInt32(0),r.GetInt32(1)));
+  foreach(var person in people){using var c=Cmd("SELECT COUNT(*) FROM RH_HISTORICO_NOMINA WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=10 AND CODIGO_PERIODO=:p AND FECHA_NOMINA=:d AND CODIGO_PERSONA=:person",("e",company),("p",period.Id),("d",period.Date),("person",person.Person));if(Convert.ToInt32(await c.ExecuteScalarAsync())>0){cases.Add((period.Id,period.Date,person.Person,person.Relation));break;}}
+  if(cases.Count==2)break;
+ }
+ Check(cases.Count==2,"two-distinct-closed-contexts-with-independent-sources");
+ var bindings=config.FuentesActuales.Select(b=>b.ParametroConcepto is null?b:b with{ParametroConcepto=b.ParametroConcepto with{PoliticaVigencia="FECHA_CONTEXTO"}}).ToList();
+ var vars=await new RhNomVariablesHandler(db).GetAll(new(SearchText:"Q57_0523F8B5"),company,ct);Check(vars.IsValid&&vars.Data!.Count==3,"fixture-variables-current");
+ var request=new RhNomModeloSave(1,9,10,config.Escenario,"Q57_0523F8B5 QA reconstruccion historica",vars.Data!.Select(v=>new RhNomVariableRef(v.Id,v.Version)).ToList(),config.Formulas,config.Parametros,true,RhNomCondiciones.Version,config.TablasTramos,RhNomTramos.Version,config.ReglasConcepto!.Select(RhNomReglasConcepto.Solicitud).ToList(),config.VersionReglas,bindings,RhNomFuentesModelo.Version);
+ var created=await models.Save(request,company,actor,ct);Check(created.IsValid&&created.Data!.Version==10,"fixture-revision10-date-based-parameters");
+ var handler=new RhNomRecalculoHistoricoHandler(db);var compared=0;var mismatches=0;
+ foreach(var item in cases)
+ {
+  var q=new RhNomRecalcularHistorico(1,10,item.Period,item.Date.ToString("yyyy-MM-dd'T'HH:mm:ss"),item.Person,item.Relation,"EQUIVALENTES_GUARDADOS");
+  var result=await handler.Handle(q,company,ct);Check(result.IsValid&&result.Data!.Entradas.Count==2,"reconstructed-and-calculated-closed-context");var data=result.Data!;
+  Check(data.Entradas.Single(e=>e.ProveedorModelo=="SUELDO_RELACION_ACTUAL").Valor==data.Cargo.Sueldo&&data.Entradas.Single(e=>e.ProveedorModelo=="SUELDO_RELACION_ACTUAL").ProveedorUsado=="SUELDO_CARGO_SNAPSHOT","historical-salary-source-not-current-relation");
+  Check(!data.ParidadCertificada&&!data.MovimientosAplicados&&data.Comparacion is null,"diagnostic-not-certified-no-reference-input");
+  var reference=await new RhNomReferenciaHistoricaHandler(db).Get(new(10,item.Period,q.FechaNomina,item.Person),company,ct);Check(reference.IsValid&&reference.Data!.IntegridadEstructural,"independent-reference-captured-after-calculation");
+  var comparison=await handler.Handle(q with{Comparar=true,HashReferenciaEsperado=reference.Data!.Hash},company,ct);Check(comparison.IsValid&&comparison.Data!.Comparacion!.OrigenEntradas=="FUENTES_HISTORICAS_RECONSTRUIDAS","comparison-uses-reconstructed-inputs-and-saved-rules");
+  Check(comparison.Data!.HashEntradas==data.HashEntradas,"reading-expected-amounts-does-not-change-input-hash");
+  compared++;mismatches+=comparison.Data.Comparacion!.Filas.Count(f=>f.Estado!="COINCIDE_IMPORTE");
+  Check(!(await handler.Handle(q with{Comparar=true,HashReferenciaEsperado=new string('B',64)},company,ct)).IsValid,"wrong-reference-hash-rejected");
+ }
+ var first=cases[0];var bad=new RhNomRecalcularHistorico(1,9,first.Period,first.Date.ToString("yyyy-MM-dd'T'HH:mm:ss"),first.Person,first.Relation,"EQUIVALENTES_GUARDADOS");Check(!(await handler.Handle(bad,company,ct)).IsValid,"old-open-ended-policy-cannot-be-historical-substitute");
+ Check(!(await handler.Handle(bad with{Version=10,CodigoPersona=int.MaxValue},company,ct)).IsValid,"foreign-person-no-historical-cargo");
+ Check((await models.Get(new(1,9),company,ct)).Data!.Hash==previous.Hash,"previous-current-context-model-unchanged");
+ Console.WriteLine("R57_HIST_RECALC="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Version=10,Contexts=cases.Count,Compared=compared,DiagnosticDifferences=mismatches,ParityCertified=false,NoPayrollWrites=true,NoPersonalDataInOutput=true,AuthenticationHttpTested=false}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

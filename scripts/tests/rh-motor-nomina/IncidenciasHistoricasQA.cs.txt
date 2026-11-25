@@ -1,0 +1,32 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ using var input=JsonDocument.Parse(File.ReadAllText(args[0]));var outcomes=new List<object>();var total=0;
+ foreach(var sample in input.RootElement.GetProperty("CandidatePeriods").EnumerateArray()){
+ var type=sample.GetProperty("Type").GetInt32();var period=sample.GetProperty("Period").GetInt32();var date=sample.GetProperty("Date").GetDateTime();var kind=sample.GetProperty("Kind").GetString();
+ var result=await new RhNomPoblacionHistoricaHandler(db).Handle(new(type,period,date.ToString("yyyy-MM-dd'T'HH:mm:ss")),company,ct);Check(result.IsValid&&result.Data is not null,"population-readable");var report=result.Data!;
+ var projections=new Dictionary<int,List<string?[]>>();
+ using(var c=Cmd("SELECT CODIGO_PERSONA,TO_CHAR(CODIGO_RELACION_CARGO,'TM9'),TO_CHAR(CODIGO_CARGO,'TM9'),TO_CHAR(SUELDO,'TM9'),TO_CHAR(FRECUENCIA_PAGO_ID,'TM9'),TO_CHAR(FECHA_INGRESO,'YYYY-MM-DD HH24:MI:SS'),TIPO_NOMINA FROM RH_HISTORICO_PERSONAL_CARGO WHERE CODIGO_EMPRESA=:e AND CODIGO_TIPO_NOMINA=:t AND CODIGO_PERIODO=:p AND FECHA_NOMINA=:f ORDER BY CODIGO_PERSONA,CODIGO_RELACION_CARGO",("e",company),("t",type),("p",period),("f",date)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync()){
+ var person=r.GetInt32(0);if(!projections.TryGetValue(person,out var rows)){rows=[];projections.Add(person,rows);}rows.Add(Enumerable.Range(1,6).Select(i=>r.IsDBNull(i)?(string?)null:r.GetString(i)).ToArray());}
+ Check(projections.Sum(x=>x.Value.Count)==report.FilasCargo,"all-projections-read");
+ var projectionHash=RhNomRecalculosHistoricos.Hash(projections.OrderBy(x=>x.Key).Select(x=>new{Person=x.Key,Rows=x.Value.Select(v=>JsonSerializer.Serialize(v)).Order(StringComparer.Ordinal).ToList()}));
+ var cases=new List<object>();foreach(var p in report.Personas.Where(x=>!x.CandidatoUnCargo)){
+ var rows=p.Archivo.CodigoPersona is {} id&&projections.TryGetValue(id,out var found)?found:new List<string?[]>();
+ var variants=rows.Select(x=>JsonSerializer.Serialize(x)).Distinct().Count();var reasons=p.Bloqueos;
+ cases.Add(new{CaseId="P"+period+"_C"+(cases.Count+1),Reasons=reasons,p.Archivo.FilasCargo,p.Archivo.Partidas,ProjectionVariants=variants,
+ SalaryVariants=rows.Select(x=>x[2]).Distinct().Count(),RelationVariants=rows.Select(x=>x[0]).Distinct().Count(),
+ InvalidRelationNull=rows.Count(x=>x[0] is null),InvalidRelationZero=rows.Count(x=>x[0]=="0"),InvalidRelationNegative=rows.Count(x=>x[0]?.StartsWith("-")==true),
+ Treatment=reasons.Contains("SNAPSHOT_DUPLICADO")?variants==1?"BLOQUEAR_DUPLICADO_PROYECCION_IGUAL":"BLOQUEAR_DUPLICADO_DIVERGENTE":reasons.Contains("RELACION_INVALIDA")?"BLOQUEAR_RELACION_INVALIDA":"SIN_PARTIDAS_NO_GENERAR_PAGO_POR_AUSENCIA"});}
+ Check(cases.Count==report.PersonasConBloqueos,"all-incidences-classified");total+=cases.Count;
+ outcomes.Add(new{Type=type,Period=period,Date=date,Kind=kind,ProjectionHash=projectionHash,report.HashPoblacion,report.PersonasConBloqueos,Cases=cases});}
+ Check(outcomes.Count==138&&total==840,"same-triennial-universe");
+ Console.WriteLine("R57_INCIDENCIAS="+JsonSerializer.Serialize(new{Status="OK",Checks=checks.Distinct().ToList(),Outcomes=outcomes,Incidences=total,NoPayrollWrites=true,NoConfigurationWrites=true,NoNamesOrAmountsInOutput=true,DuplicatesCollapsed=false,HistoricalParityCertified=false}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

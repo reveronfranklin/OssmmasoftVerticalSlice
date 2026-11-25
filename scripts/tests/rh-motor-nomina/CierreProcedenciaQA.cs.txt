@@ -1,0 +1,24 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;c.Parameters.Add("e",OracleDbType.Int32).Value=company;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL WHERE :e=13"))using(var r=await c.ExecuteReaderAsync()){if(!await r.ReadAsync()||r.GetString(0)!=cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]||r.GetString(1)!=cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]||r.GetString(2)!="RH")throw new InvalidOperationException("identity-qa");}
+ var results=new Dictionary<string,object>();
+ async Task Read(string name,string sql,int limit){using var c=Cmd(sql);c.InitialLONGFetchSize=-1;using var r=await c.ExecuteReaderAsync();var rows=new List<Dictionary<string,object?>>();while(await r.ReadAsync()){if(rows.Count>=limit)throw new InvalidOperationException("row-limit-"+name);var row=new Dictionary<string,object?>();for(int i=0;i<r.FieldCount;i++)row[r.GetName(i)]=r.IsDBNull(i)?null:r.GetValue(i);rows.Add(row);}results[name]=rows;}
+ await Read("HistoricalCoverage",@"SELECT P.CODIGO_TIPO_NOMINA TIPO,P.CODIGO_PERIODO PERIODO,
+ TO_CHAR(P.FECHA_NOMINA,'YYYY-MM-DD') FECHA,
+ TO_CHAR(P.FECHA_PRENOMINA,'YYYY-MM-DD HH24:MI:SS') PRENOMINA,
+ TO_CHAR(P.FECHA_CIERRE,'YYYY-MM-DD HH24:MI:SS') CIERRE,
+ (SELECT COUNT(*) FROM RH_HISTORICO_PERSONAL_CARGO C WHERE C.CODIGO_EMPRESA=P.CODIGO_EMPRESA AND C.CODIGO_TIPO_NOMINA=P.CODIGO_TIPO_NOMINA AND C.CODIGO_PERIODO=P.CODIGO_PERIODO) CARGOS,
+ (SELECT COUNT(*) FROM RH_HISTORICO_NOMINA H WHERE H.CODIGO_EMPRESA=P.CODIGO_EMPRESA AND H.CODIGO_TIPO_NOMINA=P.CODIGO_TIPO_NOMINA AND H.CODIGO_PERIODO=P.CODIGO_PERIODO) RESULTADOS,
+ (SELECT COUNT(*) FROM RH_HISTORICO_NOMINA H WHERE H.CODIGO_EMPRESA=P.CODIGO_EMPRESA AND H.CODIGO_TIPO_NOMINA=P.CODIGO_TIPO_NOMINA AND H.CODIGO_PERIODO=P.CODIGO_PERIODO AND NOT EXISTS(SELECT 1 FROM RH_HISTORICO_PERSONAL_CARGO C WHERE C.CODIGO_EMPRESA=H.CODIGO_EMPRESA AND C.CODIGO_TIPO_NOMINA=H.CODIGO_TIPO_NOMINA AND C.CODIGO_PERIODO=H.CODIGO_PERIODO AND C.CODIGO_PERSONA=H.CODIGO_PERSONA)) RESULTADOS_SIN_CARGO,
+ (SELECT COUNT(*) FROM (SELECT C.CODIGO_EMPRESA,C.CODIGO_TIPO_NOMINA,C.CODIGO_PERIODO,C.CODIGO_PERSONA,C.CODIGO_RELACION_CARGO FROM RH_HISTORICO_PERSONAL_CARGO C GROUP BY C.CODIGO_EMPRESA,C.CODIGO_TIPO_NOMINA,C.CODIGO_PERIODO,C.CODIGO_PERSONA,C.CODIGO_RELACION_CARGO HAVING COUNT(*)>1) D WHERE D.CODIGO_EMPRESA=P.CODIGO_EMPRESA AND D.CODIGO_TIPO_NOMINA=P.CODIGO_TIPO_NOMINA AND D.CODIGO_PERIODO=P.CODIGO_PERIODO) CLAVES_CARGO_DUPLICADAS
+ FROM RH_PERIODOS P WHERE P.CODIGO_EMPRESA=:e AND P.FECHA_CIERRE IS NOT NULL
+ AND P.CODIGO_PERIODO IN (5933,5921,5934,5922,5930,5926,5929,5925,5932,5920,5931,5919,5927,5923,5928,5924)
+ ORDER BY P.CODIGO_TIPO_NOMINA,P.FECHA_NOMINA",17);
+ await Read("ViewDefinition", "SELECT VIEW_NAME,TEXT FROM USER_VIEWS WHERE VIEW_NAME='RH_V_PERSONAL_CARGO' AND :e=13",2);
+ Console.WriteLine("R57_METADATA="+JsonSerializer.Serialize(new{Status="OK",Results=results,NoPersonalData=true,NoPayrollWrites=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

@@ -1,0 +1,21 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var measurements=new List<object>();string? expected=null;
+ foreach(var fetch in new long?[]{null,4L*1024*1024,null}){
+  using var c=cn.CreateCommand();c.BindByName=true;c.CommandType=System.Data.CommandType.StoredProcedure;c.CommandTimeout=25;c.CommandText="RH.RH_PKG_NOM_RUN.DOCUMENTO";
+  c.Parameters.Add("p_EMPRESA",OracleDbType.Int32).Value=company;c.Parameters.Add("p_ACTOR",OracleDbType.Int32).Value=actor;c.Parameters.Add("p_ID",OracleDbType.Int32).Value=95;c.Parameters.Add("p_TIPO",OracleDbType.Varchar2).Value="ENTRADA";c.Parameters.Add("p_RESULT",OracleDbType.RefCursor,System.Data.ParameterDirection.Output);
+  var timer=System.Diagnostics.Stopwatch.StartNew();using var r=await c.ExecuteReaderAsync();var openMs=timer.ElapsedMilliseconds;var defaultFetch=r.FetchSize;var rowSize=r.RowSize;if(fetch is {} f)r.FetchSize=f;
+  var text=new System.Text.StringBuilder();int rows=0;string? declared=null;while(await r.ReadAsync()){rows++;Check(r.GetInt32(r.GetOrdinal("PARTE"))==rows,"ordered-fragments");text.Append(r.GetString(r.GetOrdinal("FRAGMENTO")));declared=r.GetString(r.GetOrdinal("HUELLA"));}
+  var elapsed=timer.ElapsedMilliseconds;var hash=RhNomCorridas.Hash(text.ToString());Check(hash==declared,"full-document-hash-valid");expected??=hash;Check(expected==hash,"same-bytes-for-both-fetch-policies");
+  measurements.Add(new{RequestedFetch=fetch,DefaultFetch=defaultFetch,EffectiveFetch=r.FetchSize,RowSize=rowSize,Rows=rows,Characters=text.Length,OpenMs=openMs,TotalMs=elapsed,Hash=hash});
+ }
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Run=95,Measurements=measurements,NoPayrollWrites=true,NoMetadataWrites=true}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

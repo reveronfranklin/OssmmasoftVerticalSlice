@@ -1,0 +1,11 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;c.Parameters.Add("e",OracleDbType.Int32).Value=company;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL WHERE :e=13"))using(var r=await c.ExecuteReaderAsync()){if(!await r.ReadAsync()||r.GetString(0)!=cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]||r.GetString(1)!=cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]||r.GetString(2)!="RH")throw new InvalidOperationException("identity-qa");}
+ var rows=new List<object>();using(var c=Cmd("SELECT A.CODIGO_CONCEPTO_ACUMULA,A.CODIGO_EMPRESA,A.CODIGO_CONCEPTO,A.TIPO_ACUMULADO_ID,(SELECT COUNT(*) FROM RH_CONCEPTOS C WHERE C.CODIGO_EMPRESA=:e AND C.CODIGO_TIPO_NOMINA=12 AND C.CODIGO_CONCEPTO=A.CODIGO_CONCEPTO) FROM RH_CONCEPTOS_ACUMULA A WHERE A.TIPO_ACUMULADO_ID='1358' AND A.FECHA_HASTA IS NULL AND EXISTS(SELECT 1 FROM RH_CONCEPTOS C WHERE C.CODIGO_EMPRESA=:e AND C.CODIGO_TIPO_NOMINA=12 AND C.CODIGO_CONCEPTO=A.CODIGO_CONCEPTO) ORDER BY A.CODIGO_CONCEPTO,A.CODIGO_CONCEPTO_ACUMULA"))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())rows.Add(new{Id=r.IsDBNull(0)?(int?)null:r.GetInt32(0),Company=r.IsDBNull(1)?(int?)null:r.GetInt32(1),Concept=r.GetInt32(2),Group=r.IsDBNull(3)?null:r.GetString(3),Matches=r.GetInt32(4)});
+ Console.WriteLine("R57_METADATA="+JsonSerializer.Serialize(new{Status="OK",Rows=rows,NoPersonalData=true,NoPayrollWrites=true}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

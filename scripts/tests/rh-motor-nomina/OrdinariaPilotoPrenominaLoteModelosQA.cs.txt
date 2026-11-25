@@ -1,0 +1,15 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var revisions=new List<(int Version,string Hash)>();using(var c=cn.CreateCommand()){c.CommandText="SELECT VERSION,CONFIG_HASH FROM RH_NOM_MOD_VER WHERE CODIGO_EMPRESA=13 AND ID_MODELO=1 ORDER BY VERSION";using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync())revisions.Add((r.GetInt32(0),r.GetString(1)));}
+ var watch=System.Diagnostics.Stopwatch.StartNew();foreach(var version in revisions){var saved=await RhNomCfgDb.Revision(cn,13,1,version.Version,ct);Check(saved.Hash==version.Hash,"hash-preserved-v"+version.Version);}
+ var rejected=false;try{await RhNomCfgDb.Revision(cn,14,1,71,ct);}catch(RhNomError){rejected=true;}Check(rejected,"foreign-company-rejected");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Revisions=revisions.Count,ElapsedMs=watch.ElapsedMilliseconds,NoPayrollWrites=true}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+":"+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

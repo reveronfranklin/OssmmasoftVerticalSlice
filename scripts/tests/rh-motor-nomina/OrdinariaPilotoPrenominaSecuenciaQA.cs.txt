@@ -1,0 +1,13 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var readings=new Dictionary<string,string?>();foreach(var pair in new[]{("MaxMovement","SELECT TO_CHAR(MAX(CODIGO_MOV_NOMINA),'TM9') FROM RH_MOV_NOMINA"),("MaxTemporary","SELECT TO_CHAR(MAX(CODIGO_MOV_NOMINA),'TM9') FROM RH_TMP_NOMINA"),("Sequence","SELECT TO_CHAR(LAST_NUMBER,'TM9')||':'||INCREMENT_BY||':'||CACHE_SIZE||':'||CYCLE_FLAG FROM ALL_SEQUENCES WHERE SEQUENCE_OWNER='RH' AND SEQUENCE_NAME='RH_S_CODIGO_MOV_NOMINA'"),("TemporaryScope","SELECT TO_CHAR(COUNT(*),'TM9') FROM RH_TMP_NOMINA WHERE CODIGO_EMPRESA=13 AND CODIGO_TIPO_NOMINA=10 AND CODIGO_PERIODO=5696"),("OwnershipScope","SELECT TO_CHAR(COUNT(*),'TM9') FROM RH_NOM_PRE_CTL WHERE CODIGO_EMPRESA=13 AND CODIGO_TIPO_NOMINA=10 AND CODIGO_PERIODO=5696")}){using var c=cn.CreateCommand();c.CommandText=pair.Item2;var v=await c.ExecuteScalarAsync();readings[pair.Item1]=v is null or DBNull?null:Convert.ToString(v);}
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=readings}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+":"+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

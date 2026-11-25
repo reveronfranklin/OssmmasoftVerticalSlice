@@ -1,0 +1,21 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var configuration=new ConfigurationBuilder().AddConfiguration(cfg).AddInMemoryCollection(new Dictionary<string,string?>{{"RhMotorNomina:PrenominaEnabled","true"}}).Build();
+ var context=await RhNomPrenominaDb.Contexto(cn,company,10,5696,ct);var population=RhNomPrenominas.Poblacion(context);Check(population.Count==137,"137-assigned");Check(population.Count(c=>c.Estado=="EXCLUIDO")==5,"5-excluded");Check(population.Count(c=>c.Estado=="PENDIENTE")==132,"132-eligible");
+ var selectors=new List<RhNomSelectorPrenomina>{new("CODIGO_CONCEPTO","761",["F","V","E"]),new("CODIGO_CONCEPTO","1137",["F","V","E"]),new("CODIGO_CONCEPTO","1640",["F","V","E"]),new("CODIGO_CONCEPTO","1811",["F","V","E"]),new("PADRE_MODULO","DL",["F"],"D")};
+ var results=new List<object>();var input=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;foreach(var c in input.GetProperty("Cases").EnumerateArray().Where((x,i)=>i==0||i==65||i==130||i==131)){
+  var run=await RhNomCorridasDb.Leer(cn,company,actor,c.GetProperty("Run").GetInt32(),ct);var text=await RhNomCorridasDb.Documento(cn,run,"ENTRADA",ct);var job=RhNomCorridas.Leer(text!,run.HashDatos,company,actor);var projected=RhNomPrenominasProyeccion.Proyectar(job,context,selectors,ct);
+  Check(projected.AptaParaTemporal,"projection-"+run.IdRun+":"+string.Join(",",projected.Errores));results.Add(new{run.IdRun,projected.Persona,projected.Asignaciones,projected.Deducciones,projected.Neto,Included=projected.Filas.Count(r=>r.Incluida),Preserved=projected.Filas.Count(r=>r.Origen=="MOVIMIENTO_CONSERVADO"),Generated=projected.Filas.Count(r=>r.Origen=="RESULTADO_CALCULADO"),Removed=projected.Retiradas.Count});
+ }
+ var superseded=await RhNomPrenominaDb.Leer(cn,company,actor,1,null,ct);if(superseded is not null&&superseded.Documento.Estado=="CALCULANDO")await RhNomPrenominaDb.Guardar(cn,superseded,superseded.Documento with{Estado="CANCELADA"},ct);
+ var created=await new RhNomPrenominaHandler(db,configuration).Crear(new("QA_PRENOMINA_ORD10_V2",1,71,1,15,5696,selectors),company,actor,ct);Check(created.IsValid,created.Message??"create-failed");Check(created.Data.Documento.Estado=="CALCULANDO","batch-ready-for-worker");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Lote=created.Data.IdLote,Version=created.Data.Version,Assigned=population.Count,Eligible=132,Excluded=5,Vacant=context.Personas.Count(x=>x.Persona is null or <=0),PersonStates=context.Personas.Where(x=>x.Persona>0).GroupBy(x=>x.Estado).Select(g=>new{State=g.Key,Count=g.Count()}),Retirements=RhNomPrenominasProyeccion.Retiros(context,selectors),Results=results,NoPayrollWrites=true}}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+":"+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

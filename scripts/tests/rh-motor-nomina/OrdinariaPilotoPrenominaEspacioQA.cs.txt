@@ -1,0 +1,23 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ async Task<List<Dictionary<string,string?>>> Read(string sql){using var c=cn.CreateCommand();c.CommandText=sql;using var r=await c.ExecuteReaderAsync();var rows=new List<Dictionary<string,string?>>();while(await r.ReadAsync()){var d=new Dictionary<string,string?>();for(int i=0;i<r.FieldCount;i++)d[r.GetName(i)]=r.IsDBNull(i)?null:Convert.ToString(r.GetValue(i),System.Globalization.CultureInfo.InvariantCulture);rows.Add(d);}return rows;}
+ var lob=await Read("SELECT TABLE_NAME,COLUMN_NAME,SEGMENT_NAME,TABLESPACE_NAME FROM USER_LOBS WHERE SEGMENT_NAME='SYS_LOB0000109255C00013$$'");
+ var privileges=new List<object>();foreach(var alias in new[]{"RH","SIS","PRE","ADM","CNT","BM","CAT","RM","MFO"}){
+  try{
+   using var connection=alias switch{"RH"=>db.GetRhConnection(),"SIS"=>db.GetSisConnection(),"PRE"=>db.GetPresupuestoConnection(),"ADM"=>db.GetAdmConnection(),"CNT"=>db.GetCntConnection(),"BM"=>db.GetBmConnection(),"CAT"=>db.GetCatConnection(),"RM"=>db.GetRmConnection(),_=>db.GetMfoConnection()};await connection.OpenAsync();
+   using(var c=connection.CreateCommand()){c.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await c.ExecuteReaderAsync();await r.ReadAsync();if(r.GetString(0)!=cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]||r.GetString(1)!=cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]||r.GetString(2)!=cfg["OracleAnalysis:Targets:"+alias+":ExpectedSessionUser"]){privileges.Add(new{Alias=alias,State="OUTSIDE_RH_QA"});continue;}}
+   using var cmd=connection.CreateCommand();cmd.CommandText="SELECT PRIVILEGE FROM SESSION_PRIVS WHERE PRIVILEGE IN ('ALTER TABLESPACE','ALTER DATABASE','UNLIMITED TABLESPACE','SELECT ANY DICTIONARY')";using var reader=await cmd.ExecuteReaderAsync();var values=new List<string>();while(await reader.ReadAsync())values.Add(reader.GetString(0));privileges.Add(new{Alias=alias,Privileges=values});
+  }catch(OracleException ex){privileges.Add(new{Alias=alias,Oracle=ex.Number});}
+ }
+ object files,free;try{files=await Read("SELECT FILE_ID,FILE_NAME,BYTES,MAXBYTES,AUTOEXTENSIBLE,INCREMENT_BY FROM DBA_DATA_FILES WHERE TABLESPACE_NAME='SAMI_DATA01' ORDER BY FILE_ID");free=await Read("SELECT SUM(BYTES) FREE_BYTES,MAX(BYTES) LARGEST_EXTENT FROM DBA_FREE_SPACE WHERE TABLESPACE_NAME='SAMI_DATA01'");}catch(OracleException ex)when(ex.Number==942){files="DBA_REQUIRED";free="DBA_REQUIRED";}
+ var ts=await Read("SELECT TABLESPACE_NAME,BLOCK_SIZE,BIGFILE,STATUS FROM USER_TABLESPACES WHERE TABLESPACE_NAME='SAMI_DATA01'");
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Lob=lob,Files=files,Free=free,Privileges=privileges,DataSourceHost=System.Text.RegularExpressions.Regex.Match(cn.DataSource,@"(?i)HOST\s*=\s*([^\)\s]+)").Success?System.Text.RegularExpressions.Regex.Match(cn.DataSource,@"(?i)HOST\s*=\s*([^\)\s]+)").Groups[1].Value:cn.DataSource.Split(':')[0].TrimStart('/'),Database=cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"],Server=cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"],Tablespace=ts,NoChanges=true}}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

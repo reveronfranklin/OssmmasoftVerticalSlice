@@ -1,0 +1,17 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+
+ var ids=new List<int>();using(var c=Cmd("SELECT ID_CAP FROM RH_NOM_CAP_ARC WHERE CODIGO_EMPRESA=:e AND ACTOR=:a AND CLAVE_SOL LIKE 'SDK_R57_CAP%' ORDER BY ID_CAP",("e",company),("a",actor)))using(var r=await c.ExecuteReaderAsync(ct))while(await r.ReadAsync(ct)){Check(ids.Count<500,"bounded-sdk-archives");ids.Add(r.GetInt32(0));}
+ var documents=new List<object>();foreach(var id in ids){var saved=await RhNomArchivoCapsulasDb.Leer(cn,company,actor,id,ct);var summary=RhNomCapturasServidor.Resumir(saved,company,actor,true);var doc=RhNomCapsulasPrenomina.Leer(saved.Capsula);Check(summary.HashTotales==RhNomCapsulasPrenomina.Reproducir(saved.Capsula).Hash,"independent-archive-replay-"+id);if(doc.PeriodoCapturado is {} period&&period.PresupuestoPeriodo!=doc.Ambito.CodigoPresupuesto)Check(summary.Estado=="BLOQUEADO","archived-budget-mismatch-blocked-"+id);documents.Add(new{Id=id,Version=doc.Version,DocumentHash=saved.Capsula.Hash,TotalsHash=summary.HashTotales,State=summary.Estado});}
+ Check(ids.Count>=9&&ids.Contains(5),"all-technical-archives-including-timeout-capture-preserved");
+ Check(!cfg.GetValue<bool>("RhMotorNomina:AplicacionEnabled"),"financial-execution-disabled");foreach(var table in new[]{"RH_NOM_FIN_EVT","RH_NOM_FIN_SOL"})using(var c=Cmd("SELECT COUNT(*) FROM "+table))Check(Convert.ToInt32(await c.ExecuteScalarAsync(ct))==0,"real-empty-"+table);
+ Console.WriteLine("R57_CAP_SRV_REPLAY="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Archives=documents,PayrollTablesRead=false,ArchivesWritten=false,NoPayrollWrites=true,NoConfigurationWrites=true,ProceduresExecuted=false}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

@@ -1,0 +1,14 @@
+{
+  "Columns": [
+    "CODIGO_PRESUPUESTO", "DENOMINACION", "DESCRIPCION", "ANO", "MONTO_PRESUPUESTO",
+    "FECHA_DESDE", "FECHA_HASTA", "FECHA_APROBACION", "NUMERO_ORDENANZA", "FECHA_ORDENANZA",
+    "EXTRA1", "EXTRA2", "EXTRA3", "USUARIO_INS", "FECHA_INS", "USUARIO_UPD", "FECHA_UPD", "CODIGO_EMPRESA"
+  ],
+  "EmpresaColumn": "CODIGO_EMPRESA",
+  "Global": false,
+  "UseRowId": true,
+  "DefaultOrder": [
+    { "Columna": "FECHA_INS", "Direccion": "desc" },
+    { "Columna": "CODIGO_PRESUPUESTO", "Direccion": "desc" }
+  ]
+}

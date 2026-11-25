@@ -1,0 +1,22 @@
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var checks=new List<string>();
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+string Normalize(string text)=>Regex.Replace(string.Join("\n",text.Replace("\r","").Split('\n').Select(l=>l.TrimEnd())).Trim(),@"\A(TRIGGER|PACKAGE BODY|PACKAGE)\s+","$1 ");
+try{
+ using var cn=new OracleConnection(cfg["ConnectionStrings:DefaultConnectionRH"]);await cn.OpenAsync();OracleCommand Cmd(string sql){var c=cn.CreateCommand();c.BindByName=true;c.CommandTimeout=25;c.CommandText=sql;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(cfg.GetValue<int>("settings:EmpresaConfig")==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","qa-identity");}
+ var blocks=new List<string>();var block=new StringBuilder();foreach(var line in File.ReadLines(args[0])){if(line.TrimStart().StartsWith("--"))continue;if(line.Trim()=="/"){blocks.Add(block.ToString().Trim());block.Clear();}else block.AppendLine(line);}Check(string.IsNullOrWhiteSpace(block.ToString())&&blocks.Count==4,"four-complete-blocks");
+ foreach(var pair in new[]{(Index:1,Name:"TR_RH_NOM_FIN_PLAN_IMM",Type:"TRIGGER"),(Index:2,Name:"RH_PKG_NOM_FIN_PLAN",Type:"PACKAGE"),(Index:3,Name:"RH_PKG_NOM_FIN_PLAN",Type:"PACKAGE BODY")}){
+  using var c=Cmd("SELECT TEXT FROM USER_SOURCE WHERE NAME=:n AND TYPE=:t ORDER BY LINE");c.Parameters.Add("n",OracleDbType.Varchar2).Value=pair.Name;c.Parameters.Add("t",OracleDbType.Varchar2).Value=pair.Type;
+  var installed=new StringBuilder();using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())installed.Append(r.GetString(0));
+  if(installed.Length>0)Check(Normalize(installed.ToString())==Normalize(blocks[pair.Index].Replace("CREATE OR REPLACE ","")),"existing-definition-"+pair.Type);
+ }
+ foreach(var sql in blocks){using var c=Cmd(sql);await c.ExecuteNonQueryAsync();}
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_OBJECTS WHERE OBJECT_NAME IN ('RH_NOM_FIN_PLAN','RH_NOM_FIN_PLAN_SEQ','RH_PKG_NOM_FIN_PLAN','TR_RH_NOM_FIN_PLAN_IMM') AND STATUS='VALID'"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==5,"five-valid-objects");
+ using(var c=Cmd("SELECT COUNT(*) FROM USER_ERRORS WHERE NAME IN ('RH_PKG_NOM_FIN_PLAN','TR_RH_NOM_FIN_PLAN_IMM')"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"no-compilation-errors");
+ Console.WriteLine("R57_INSTALL="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,NoPayrollWrites=true,LegacyPackageChanged=false}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

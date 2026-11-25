@@ -1,0 +1,11 @@
+{
+  "modeloId": 7,
+  "version": 1,
+  "fechaReferencia": "2025-06-30",
+  "entradas": [
+    {
+      "codigo": "SUELDO",
+      "valor": "1300"
+    }
+  ]
+}

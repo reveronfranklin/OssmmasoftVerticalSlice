@@ -1,0 +1,44 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ using var input=JsonDocument.Parse(File.ReadAllText(args[0]));
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND ID_MODELO_CALCULO=1",("e",company)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"technical-model-not-bound");
+ var root=await new RhNomVersionesHandler(db).GetAll(new(SearchText:"Q57_0523F8B5"),company,ct);Check(root.IsValid&&root.Data!.Count==1&&root.Data[0].ModeloId==1&&root.Data[0].Descripcion.Contains("QA TEST NO USAR"),"technical-model-identity");
+ var jobs=new RhNomCorridasHandler(db,cfg);var states=new RhNomEstadosHandler(db,cfg);var outcomes=new List<object>();
+ foreach(var selected in input.RootElement.GetProperty("Models").EnumerateArray()){
+ int version=selected.GetProperty("Version").GetInt32(),type=selected.GetProperty("Type").GetInt32();
+ var loaded=await new RhNomVersionesHandler(db).Get(new(1,version),company,ct);Check(loaded.IsValid&&loaded.Data!.Hash==selected.GetProperty("Hash").GetString(),"pinned-model-"+version);var model=loaded.Data!;
+ int period,budget,person,relation;DateTime date;
+ using(var c=Cmd("SELECT * FROM (SELECT P.CODIGO_PERIODO,P.FECHA_NOMINA,T.CODIGO_PRESUPUESTO_ACTUAL,R.CODIGO_PERSONA,R.CODIGO_RELACION_CARGO FROM RH_PERIODOS P JOIN RH_TIPOS_NOMINA T ON T.CODIGO_EMPRESA=P.CODIGO_EMPRESA AND T.CODIGO_TIPO_NOMINA=P.CODIGO_TIPO_NOMINA JOIN RH_RELACION_CARGOS R ON R.CODIGO_EMPRESA=P.CODIGO_EMPRESA AND R.CODIGO_TIPO_NOMINA=P.CODIGO_TIPO_NOMINA AND R.CODIGO_PRESUPUESTO=T.CODIGO_PRESUPUESTO_ACTUAL WHERE P.CODIGO_EMPRESA=:e AND P.CODIGO_TIPO_NOMINA=:t AND P.FECHA_CIERRE IS NULL AND R.FECHA_FIN IS NULL AND R.SUELDO IS NOT NULL AND R.CODIGO_PERSONA>0 AND R.CODIGO_RELACION_CARGO>0 AND (R.FECHA_INI IS NULL OR R.FECHA_INI<=P.FECHA_NOMINA) AND (R.FECHA_INI_VIGENCIA IS NULL OR R.FECHA_INI_VIGENCIA<=P.FECHA_NOMINA) AND (R.FECHA_FIN_VIGENCIA IS NULL OR R.FECHA_FIN_VIGENCIA>=P.FECHA_NOMINA) AND (:prof=0 OR (SELECT COUNT(*) FROM RH_EDUCACION E WHERE E.CODIGO_PERSONA=R.CODIGO_PERSONA AND E.FECHA_FIN=(SELECT MAX(E1.FECHA_FIN) FROM RH_EDUCACION E1 WHERE E1.CODIGO_PERSONA=R.CODIGO_PERSONA))=1) ORDER BY P.FECHA_NOMINA DESC,R.CODIGO_RELACION_CARGO) WHERE ROWNUM=1",("e",company),("t",type),("prof",model.Configuracion.Variables.Any(v=>v.Codigo=="MIG_PR_TOTAL")?1:0)))using(var r=await c.ExecuteReaderAsync()){Check(await r.ReadAsync(),"eligible-composed-context");period=r.GetInt32(0);date=DateTime.SpecifyKind(r.GetDateTime(1),DateTimeKind.Unspecified);budget=r.GetInt32(2);person=r.GetInt32(3);relation=r.GetInt32(4);}
+
+ var q=new RhNomSimularActual(1,version,period,date.ToString("yyyy-MM-dd'T'HH:mm:ss"),budget,person,relation,null,"TIPO_ACTUAL_EXPLICITO","QA composicion efectiva worker persistido; solo simulacion.");
+ var create=new RhNomCrearCorrida("QA_EDUCACION_HOSTED_20261121_V"+version,Actual:q);var queued=await jobs.Crear(create,company,actor,ct);Check(queued.IsValid&&queued.Data is not null,"queued-"+version+": "+queued.Message);
+ var duplicate=await jobs.Crear(create,company,actor,ct);Check(duplicate.IsValid&&duplicate.Data!.IdRun==queued.Data!.IdRun,"idempotent-same-run-"+version);
+ RhNomCorrida? hosted=null;for(int n=0;n<90;n++){var status=await jobs.Get(new(queued.Data!.IdRun),company,actor,ct);Check(status.IsValid,"status-readable-"+version);hosted=status.Data;if(hosted?.Estado is "COMPLETADO" or "ERROR" or "CANCELADO")break;await Task.Delay(500);}
+ Check(hosted?.Estado=="COMPLETADO","hosted-completed-"+version+": "+hosted?.Mensaje);
+ var detail=await jobs.Detalle(new(hosted!.IdRun,"ACTUAL"),company,actor,ct);Check(detail.IsValid&&detail.Data!.Resultado?.IsValid==true,"stored-result-valid-"+version);var d=detail.Data!;
+ var replay=RhNomCorridas.Evaluar(d.Entrada);var replayText=RhNomCorridas.Serializar(replay,RhNomCorridas.MaxResultadoBytes);
+ Check(RhNomCorridas.Hash(replayText)==hosted.HashResultado&&replayText==RhNomCorridas.Serializar(d.Resultado,RhNomCorridas.MaxResultadoBytes),"stored-worker-result-exact-replay-"+version);
+ Check(!d.Resultado!.MovimientosAplicados&&!d.Resultado.ParidadCertificada,"simulation-only-"+version);
+ var current=await states.Get(new(1,version),company,ct);Check(current.IsValid&&current.Data!.Estado is "BORRADOR" or "VALIDADO","eligible-technical-state-"+version);var state=current.Data!;
+ if(state.Evidencia?.Pruebas.SingleOrDefault()?.IdRun!=hosted.IdRun){var validated=await states.Validar(new(1,version,model.Hash,state.VersionEstado,[hosted.IdRun],"QA validar worker real y politica efectiva; sin certificar paridad."),company,actor,ct);Check(validated.IsValid,"validation-persisted-"+version+": "+validated.Message);state=validated.Data!;}
+ var evidence=state.Evidencia!;RhNomValidaciones.Verificar(evidence,1,version,model.Hash);
+ Check(evidence.Nivel=="TECNICO"&&!state.Publicable&&!evidence.ParidadCertificada,"no-false-integral-certification-"+version);
+ Check(evidence.PuertasPendientes.Contains("SALIDA_EFECTIVA_NO_DEFINIDA")== (version==52),"persisted-effective-gate-"+version);
+ var publish=new RhNomPublicarRevision(1,version,model.Hash,state.VersionEstado,evidence.Hash,new(2026,11,21),null,"QA comprobar bloqueo de publicacion tecnica sin paridad integral.");
+ Check(!(await states.Publicar(publish,company,actor-1,ct)).IsValid,"technical-publication-rejected-"+version);
+ Check((await states.Get(new(1,version),company,ct)).Data!.VersionEstado==state.VersionEstado,"rejection-left-state-unchanged-"+version);
+ var audit=await states.Auditoria(new(1,version),company,ct);Check(audit.IsValid&&audit.Data!.Any(a=>a.Accion=="VALIDAR"&&a.HashValidacion==evidence.Hash),"technical-validation-audited-"+version);
+ outcomes.Add(new{Type=type,Version=version,model.Hash,IdRun=hosted.IdRun,hosted.HashDatos,hosted.HashResultado,hosted.Intentos,State=state.Estado,state.VersionEstado,ValidationHash=evidence.Hash,Gates=evidence.PuertasPendientes,Outputs=d.Resultado.Actual!.Simulacion.ProyeccionConceptos!.Partidas.Count,ExactReplay=true,Publicable=state.Publicable,HistoricalParityCertified=false});
+ }
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_EVT"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"ledger-empty-after-hosted-and-validation");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_SOL"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"financial-requests-empty");
+ Console.WriteLine("R57_EFECTIVO_HOSTED="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Outcomes=outcomes,ActualHostedWorker=true,NoPayrollWrites=true,TechnicalConfigurationWrites=true,HttpAuthenticationTested=false,HistoricalParityCertified=false}));
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

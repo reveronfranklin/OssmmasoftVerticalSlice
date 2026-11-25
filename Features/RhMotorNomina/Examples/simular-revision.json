@@ -1,0 +1,8 @@
+{
+  "modeloId": 7,
+  "version": 1,
+  "entradas": [
+    { "codigo": "SUELDO", "valor": "1300" },
+    { "codigo": "DIVISOR", "valor": "2" }
+  ]
+}

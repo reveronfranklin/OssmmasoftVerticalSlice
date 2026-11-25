@@ -1,0 +1,18 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var metadata=new List<object>();foreach(var table in new[]{"RH_PERSONAS_MOV_CONTROL","RH_FORMULA_CONCEPTOS","RH_DESCRIPTIVAS"}){
+ var triggers=new List<object>();using(var c=Cmd("SELECT TRIGGER_NAME,STATUS,TRIGGERING_EVENT FROM ALL_TRIGGERS WHERE TABLE_OWNER='RH' AND TABLE_NAME=:t ORDER BY TRIGGER_NAME",("t",table)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())triggers.Add(new{Name=r.GetString(0),Status=r.GetString(1),Events=r.GetString(2)});
+ var columns=new List<string>();using(var c=Cmd("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER='RH' AND TABLE_NAME=:t ORDER BY COLUMN_ID",("t",table)))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())columns.Add(r.GetString(0));metadata.Add(new{Table=table,Columns=columns,Triggers=triggers});}
+ var archives=new List<string>();using(var c=Cmd("SELECT TABLE_NAME FROM ALL_TABLES WHERE OWNER='RH' AND (TABLE_NAME LIKE '%CONTROL%' OR TABLE_NAME LIKE '%FORMULA%' OR TABLE_NAME LIKE '%DESCRIPT%' OR TABLE_NAME LIKE 'RH_H_%') ORDER BY TABLE_NAME"))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())archives.Add(r.GetString(0));
+ var programs=new List<object>();using(var c=Cmd("SELECT NAME,TYPE,LINE,TEXT FROM ALL_SOURCE WHERE OWNER='RH' AND UPPER(TEXT) LIKE '%RH_PERSONAS_MOV_CONTROL%' ORDER BY NAME,TYPE,LINE"))using(var r=await c.ExecuteReaderAsync())while(await r.ReadAsync())programs.Add(new{Name=r.GetString(0),Type=r.GetString(1),Line=Convert.ToInt32(r.GetValue(2)),Text=r.GetString(3)});
+ Console.WriteLine("R57_ENTRADAS_ARCHIVO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Metadata=metadata,ArchiveCandidates=archives,ControlReferences=programs,NoPayrollWrites=true}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

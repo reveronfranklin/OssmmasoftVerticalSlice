@@ -1,0 +1,17 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");const int actor=2147483646;var ct=CancellationToken.None;var checks=new List<string>();
+void Check(bool ok,string name){if(!ok)throw new InvalidOperationException(name);checks.Add(name);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();
+ using(var cmd=cn.CreateCommand()){cmd.CommandText="SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL";using var r=await cmd.ExecuteReaderAsync();await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ var input=JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;
+ foreach(var script in input.GetProperty("Scripts").EnumerateArray())foreach(var chunk in System.Text.RegularExpressions.Regex.Split(script.GetString()!,@"(?m)^/\s*$").Where(x=>!string.IsNullOrWhiteSpace(x))){using var c=cn.CreateCommand();c.CommandText=chunk.Trim();await c.ExecuteNonQueryAsync();}
+ var errors=new List<string>();using(var c=cn.CreateCommand()){c.CommandText="SELECT NAME||':'||LINE||':'||TEXT FROM ALL_ERRORS WHERE OWNER='RH' AND NAME IN ('RH_PKG_NOM_PRE','RH_PKG_NOM_PRE_TMP','RH_TRG_NOM_PRE_CIERRE') AND ATTRIBUTE='ERROR' ORDER BY NAME,SEQUENCE";using var r=await c.ExecuteReaderAsync();while(await r.ReadAsync())errors.Add(r.GetString(0));}Check(errors.Count==0,string.Join(";",errors));
+ var watch=System.Diagnostics.Stopwatch.StartNew();var old=await RhNomCfgDb.Revision(cn,13,1,71,ct);var oldMs=watch.ElapsedMilliseconds;watch.Restart();
+ using(var c=cn.CreateCommand()){c.CommandText="RH.SP_RH_NOM_VER_DOC";c.CommandType=System.Data.CommandType.StoredProcedure;c.BindByName=true;c.Parameters.Add("p_EMPRESA",OracleDbType.Int32).Value=13;c.Parameters.Add("p_MODELO",OracleDbType.Int32).Value=1;c.Parameters.Add("p_VERSION",OracleDbType.Int32).Value=71;c.Parameters.Add("p_RESULT",OracleDbType.RefCursor,System.Data.ParameterDirection.Output);using var r=await c.ExecuteReaderAsync();Check(await r.ReadAsync(),"revision-present");using var clob=r.GetOracleClob(r.GetOrdinal("DOCUMENTO"));var text=clob.Value;Check(text.Length==r.GetInt32(r.GetOrdinal("CONFIG_LARGO")),"clob-length");Check(RhNomCorridas.Hash(text)==old.Hash,"same-immutable-revision-hash");RhNomConfiguracion.Leer(text,old.Hash,13,1);}
+ Console.WriteLine("R57_CAP_MODELO="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Details=new{Installed=true,OldFragmentReaderMs=oldMs,ClobReaderMs=watch.ElapsedMilliseconds,Revision=71,Hash=old.Hash,NoPayrollWrites=true}}));
+}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}

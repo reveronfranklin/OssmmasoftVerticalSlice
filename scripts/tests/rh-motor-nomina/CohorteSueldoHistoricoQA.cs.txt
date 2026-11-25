@@ -1,0 +1,47 @@
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Oracle.ManagedDataAccess.Client;
+using OssmmasoftVerticalSlice.ContextDB;
+using OssmmasoftVerticalSlice.Features.RhMotorNomina;
+var cfg=new ConfigurationBuilder().AddJsonFile("/srv/ossmmasoft-pruebas/shared/config/vertical.json",false,false).Build();var db=new ConnectionDB(cfg);var company=cfg.GetValue<int>("settings:EmpresaConfig");var checks=new List<string>();const int actor=2147483646;var ct=CancellationToken.None;
+void Check(bool v,string n){if(!v)throw new InvalidOperationException(n);checks.Add(n);}
+try{
+ using var cn=db.GetRhConnection();await cn.OpenAsync();OracleCommand Cmd(string sql,params (string,object)[] values){var c=cn.CreateCommand();c.BindByName=true;c.CommandText=sql;c.CommandTimeout=25;foreach(var(n,v)in values)c.Parameters.Add(n,v is int?OracleDbType.Int32:v is DateTime?OracleDbType.Date:OracleDbType.Varchar2).Value=v;return c;}
+ using(var c=Cmd("SELECT SYS_CONTEXT('USERENV','DB_NAME'),SYS_CONTEXT('USERENV','SERVER_HOST'),SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL"))using(var r=await c.ExecuteReaderAsync()){await r.ReadAsync();Check(company==13&&r.GetString(0)==cfg["OracleAnalysis:Targets:RH:ExpectedDatabaseName"]&&r.GetString(1)==cfg["OracleAnalysis:Targets:RH:ExpectedServerHost"]&&r.GetString(2)=="RH","identity-qa");}
+ using var input=JsonDocument.Parse(File.ReadAllText(args[0]));var outcomes=new List<object>();var loaded=new Dictionary<int,RhNomModeloVersion>();
+ var versions=new Dictionary<int,int>{{10,15},{12,16},{13,17},{14,18},{20,19},{21,20},{22,21},{23,22}};
+ var hashes=input.RootElement.GetProperty("ModelHashes");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_CONCEPTOS WHERE CODIGO_EMPRESA=:e AND ID_MODELO_CALCULO=1",("e",company)))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"technical-model-not-bound-to-payroll");
+ foreach(var sample in input.RootElement.GetProperty("CandidatePeriods").EnumerateArray()){
+ var type=sample.GetProperty("Type").GetInt32();var period=sample.GetProperty("Period").GetInt32();var date=sample.GetProperty("Date").GetDateTime();var text=date.ToString("yyyy-MM-dd'T'HH:mm:ss",System.Globalization.CultureInfo.InvariantCulture);
+ var population=await new RhNomPoblacionHistoricaHandler(db).Handle(new(type,period,text),company,ct);Check(population.IsValid&&population.Data is not null,"whole-universe-"+type+"-"+period);var universe=population.Data!;
+ if(type==19){outcomes.Add(new{Type=type,Period=period,Date=text,Mode="MANUAL_CONSERVAR",Groups=universe.Personas.Count,universe.Partidas,universe.CandidatosUnCargo,universe.PersonasConBloqueos,Calculated=0,Compared=0,ParityCertified=false});continue;}
+ if(!loaded.TryGetValue(type,out var model)){var m=await new RhNomVersionesHandler(db).Get(new(1,versions[type]),company,ct);Check(m.IsValid&&m.Data is not null,"immutable-salary-model-"+type);model=m.Data!;Check(model.Hash==hashes.GetProperty(type.ToString()).GetString()&&model.CodigoTipoNomina==type&&model.Configuracion.CodigoEmpresa==company,"pinned-model-"+type);Check(!RhNomDependencias.Analizar(model).TieneBloqueos,"registered-salary-inputs-"+type);loaded.Add(type,model);}
+ int calculated=0,compared=0,equal=0,different=0,missing=0,unassociated=0,unbound=0,fullyEqual=0;var errors=new Dictionary<string,int>();var deltas=new Dictionary<string,int>();var evidences=new List<object>();
+ foreach(var person in universe.Personas.Where(p=>p.CandidatoUnCargo)){
+ var id=person.Archivo.CodigoPersona!.Value;var relation=person.Archivo.CodigoRelacionCargo!.Value;
+ var calc=await new RhNomRecalculoHistoricoHandler(db).Handle(new(1,model.Version,period,text,id,relation,"EQUIVALENTES_GUARDADOS"),company,ct);
+ if(!calc.IsValid||calc.Data is null){errors["RECALCULO_RECHAZADO"]=errors.GetValueOrDefault("RECALCULO_RECHAZADO")+1;continue;}calculated++;
+ // Expected monetary rows are read only after the independent input calculation.
+ var reference=await new RhNomReferenciaHistoricaHandler(db).Get(new(type,period,text,id),company,ct);
+ if(!reference.IsValid||reference.Data is null){errors["REFERENCIA_RECHAZADA"]=errors.GetValueOrDefault("REFERENCIA_RECHAZADA")+1;continue;}
+ try{
+ var query=new RhNomCompararPruebaQuery(1,model.Version,period,text,id,reference.Data.Hash,calc.Data.Entradas.Select(e=>new RhNomValorEntrada(e.CodigoVariable,e.Valor)).ToList(),model.Configuracion.ReglasConcepto!.Select(r=>new RhNomAsociacionPrueba(r.VariableSalida,r.Concepto.CodigoConcepto,r.Concepto.FrecuenciaId!.Value,r.TipoMovimiento)).ToList(),model.Configuracion.Formato==8?RhNomValores.Version:null);
+ var comparison=RhNomComparacionesPrueba.Comparar(model,query,reference.Data,ct);compared++;
+ foreach(var row in comparison.Filas){if(row.Estado=="COINCIDE_IMPORTE")equal++;else if(row.Estado=="SIN_PARTIDA_REFERENCIA")missing++;else{different++;if(row.Diferencia is {} delta)deltas[delta]=deltas.GetValueOrDefault(delta)+1;}}
+ unassociated+=comparison.SinAsociar.Count;unbound+=comparison.SalidasSinAsociar.Count;
+ if(comparison.Filas.Count>0&&comparison.Filas.All(f=>f.Estado=="COINCIDE_IMPORTE")&&comparison.SinAsociar.Count==0&&comparison.SalidasSinAsociar.Count==0)fullyEqual++;
+ evidences.Add(new{calc.Data.HashEntradas,comparison.HashReferencia});
+ }catch(RhNomError ex){errors[ex.Diagnostico.Codigo]=errors.GetValueOrDefault(ex.Diagnostico.Codigo)+1;}
+ }
+ Check(calculated+errors.GetValueOrDefault("RECALCULO_RECHAZADO")==universe.CandidatosUnCargo,"every-candidate-accounted-"+period);
+ var recaptured=await new RhNomPoblacionHistoricaHandler(db).Handle(new(type,period,text),company,ct);Check(recaptured.IsValid&&recaptured.Data!.HashPoblacion==universe.HashPoblacion,"population-stable-"+period);
+ outcomes.Add(new{Type=type,Period=period,Date=text,Mode="RECETA_TECNICA_SS",ModelVersion=model.Version,ModelHash=model.Hash,Groups=universe.Personas.Count,universe.Partidas,universe.CandidatosUnCargo,universe.PersonasConBloqueos,Calculated=calculated,Compared=compared,Equal=equal,Different=different,MissingSalaryReference=missing,UnassociatedReferenceRows=unassociated,UnboundOutputs=unbound,FullyEqualPersons=fullyEqual,AllRowsNumericallyEqual=universe.Personas.Count>0&&universe.PersonasConBloqueos==0&&fullyEqual==universe.Personas.Count,Errors=errors,Deltas=deltas,EvidenceHash=RhNomRecalculosHistoricos.Hash(evidences),ParityCertified=false});
+ Console.WriteLine("R57_COHORTE_PERIODO="+JsonSerializer.Serialize(outcomes[^1]));
+ Console.WriteLine("R57_PROGRESS="+type+":"+period+":"+compared);
+ }
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_EVT"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"real-ledger-still-empty");
+ using(var c=Cmd("SELECT COUNT(*) FROM RH_NOM_FIN_SOL"))Check(Convert.ToInt32(await c.ExecuteScalarAsync())==0,"real-financial-receipts-still-empty");
+ Console.WriteLine("R57_COHORTE="+JsonSerializer.Serialize(new{Status="OK",Checks=checks,Outcomes=outcomes,NoPayrollWrites=true,NoConfigurationWrites=true,NoPersonalIdentifiersInOutput=true,LegacyPackageCalled=false,HistoricalParityCertified=false,Scope="Full population coverage; salary technical recipes only, not complete migration"}));
+
+}catch(RhNomError ex){Console.WriteLine("R57_FAIL_DOMAIN="+ex.Diagnostico.Codigo+": "+ex.Message);Environment.ExitCode=1;}catch(OracleException ex){Console.WriteLine("R57_FAIL_ORACLE="+ex.Number);Environment.ExitCode=1;}catch(InvalidOperationException ex){Console.WriteLine("R57_FAIL_CHECK="+ex.Message);Environment.ExitCode=1;}
