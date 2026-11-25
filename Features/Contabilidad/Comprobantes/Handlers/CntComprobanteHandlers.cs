@@ -70,6 +70,7 @@ public class GetCntComprobantesHandler(ConnectionDB connectionDB, IConfiguration
             cmd.Parameters.Add("p_SearchText", OracleDbType.Varchar2).Value = CntDb.StringDbValue(value.SearchText);
             cmd.Parameters.Add("p_CODIGO_PERIODO", OracleDbType.Int32).Value = CntDb.DbValue(value.CodigoPeriodo);
             cmd.Parameters.Add("p_ORIGEN_ID", OracleDbType.Int32).Value = CntDb.DbValue(value.OrigenId);
+            cmd.Parameters.Add("p_TIPO_COMPROBANTE_ID", OracleDbType.Int32).Value = CntDb.DbValue(value.TipoComprobanteId);
             cmd.Parameters.Add("p_FECHA_DESDE", OracleDbType.Date).Value = CntDb.DbValue(value.FechaDesde);
             cmd.Parameters.Add("p_FECHA_HASTA", OracleDbType.Date).Value = CntDb.DbValue(value.FechaHasta);
             cmd.Parameters.Add("p_ESTADO_CMP", OracleDbType.Varchar2).Value = CntDb.StringDbValue(value.EstadoContable);
@@ -79,6 +80,8 @@ public class GetCntComprobantesHandler(ConnectionDB connectionDB, IConfiguration
             var pMessage = cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
             var pTotalRecords = cmd.Parameters.Add("p_TotalRecords", OracleDbType.Int32, ParameterDirection.Output);
             var pTotalPages = cmd.Parameters.Add("p_TotalPages", OracleDbType.Int32, ParameterDirection.Output);
+            var pTotalDebe = cmd.Parameters.Add("p_TOTAL_DEBE", OracleDbType.Decimal, ParameterDirection.Output);
+            var pTotalHaber = cmd.Parameters.Add("p_TOTAL_HABER", OracleDbType.Decimal, ParameterDirection.Output);
 
             var list = new List<CntComprobanteResponse>();
             using (var reader = await cmd.ExecuteReaderAsync())
@@ -98,7 +101,9 @@ public class GetCntComprobantesHandler(ConnectionDB connectionDB, IConfiguration
                 Message = message,
                 Page = pageNumber,
                 TotalPage = CntDb.GetIntOutput(pTotalPages),
-                CantidadRegistros = CntDb.GetIntOutput(pTotalRecords)
+                CantidadRegistros = CntDb.GetIntOutput(pTotalRecords),
+                Total1 = isSuccess ? CntDb.GetDecimalOutput(pTotalDebe) : 0m,
+                Total2 = isSuccess ? CntDb.GetDecimalOutput(pTotalHaber) : 0m
             };
         }
         catch (Exception ex)

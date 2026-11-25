@@ -974,23 +974,44 @@ CREATE OR REPLACE PROCEDURE CNT.SP_CNT_CAT_DESC_GET (
     p_SEARCH_TEXT    IN VARCHAR2,
     p_CODIGO_EMPRESA IN NUMBER,
     p_ResultSet      OUT SYS_REFCURSOR,
-    p_Message        OUT VARCHAR2
+    p_Message        OUT VARCHAR2,
+    p_CODIGO_TITULO  IN VARCHAR2 DEFAULT NULL
 ) AS
 BEGIN
-    OPEN p_ResultSet FOR
-        SELECT DESCRIPCION_ID AS ID,
-               CODIGO,
-               DESCRIPCION,
-               EXTRA1,
-               EXTRA2,
-               EXTRA3
-          FROM CNT.CNT_DESCRIPTIVAS
-         WHERE TITULO_ID = p_TITULO_ID
-           AND (CODIGO_EMPRESA IS NULL OR CODIGO_EMPRESA = p_CODIGO_EMPRESA)
-           AND (p_SEARCH_TEXT IS NULL
-                OR UPPER(CODIGO) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%'
-                OR UPPER(DESCRIPCION) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%')
-         ORDER BY CODIGO, DESCRIPCION;
+    IF p_CODIGO_TITULO IS NOT NULL THEN
+        OPEN p_ResultSet FOR
+            SELECT A.DESCRIPCION_ID AS ID,
+                   A.CODIGO,
+                   A.DESCRIPCION,
+                   A.EXTRA1,
+                   A.EXTRA2,
+                   A.EXTRA3
+              FROM CNT.CNT_DESCRIPTIVAS A,
+                   CNT.CNT_TITULOS B
+             WHERE B.CODIGO = p_CODIGO_TITULO
+               AND A.TITULO_ID = B.TITULO_ID
+               AND (p_SEARCH_TEXT IS NULL
+                    OR UPPER(A.CODIGO) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%'
+                    OR UPPER(A.DESCRIPCION) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%')
+             ORDER BY CASE WHEN p_CODIGO_TITULO = 'ODC'
+                           THEN A.DESCRIPCION ELSE A.CODIGO END;
+    ELSE
+        OPEN p_ResultSet FOR
+            SELECT DESCRIPCION_ID AS ID,
+                   CODIGO,
+                   DESCRIPCION,
+                   EXTRA1,
+                   EXTRA2,
+                   EXTRA3
+              FROM CNT.CNT_DESCRIPTIVAS
+             WHERE TITULO_ID = p_TITULO_ID
+               AND (CODIGO_EMPRESA IS NULL OR CODIGO_EMPRESA = p_CODIGO_EMPRESA)
+               AND (p_SEARCH_TEXT IS NULL
+                    OR UPPER(CODIGO) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%'
+                    OR UPPER(DESCRIPCION) LIKE '%' || UPPER(p_SEARCH_TEXT) || '%')
+             ORDER BY CODIGO, DESCRIPCION;
+
+    END IF;
 
     p_Message := 'Success';
 EXCEPTION
@@ -3018,7 +3039,10 @@ CREATE OR REPLACE PROCEDURE CNT.SP_CNT_CMP_GET_ALL (
     p_Message             OUT VARCHAR2,
     p_TotalRecords        OUT NUMBER,
     p_TotalPages          OUT NUMBER,
-    p_ESTADO_CMP          IN VARCHAR2 DEFAULT NULL
+    p_ESTADO_CMP          IN VARCHAR2 DEFAULT NULL,
+    p_TIPO_COMPROBANTE_ID IN NUMBER DEFAULT NULL,
+    p_TOTAL_DEBE          OUT NUMBER,
+    p_TOTAL_HABER         OUT NUMBER
 ) AS
     v_page_size   NUMBER := NVL(NULLIF(p_PageSize, 0), 10);
     v_page_number NUMBER := NVL(NULLIF(p_PageNumber, 0), 1);
@@ -3028,16 +3052,22 @@ BEGIN
     v_start_row := ((v_page_number - 1) * v_page_size) + 1;
     v_end_row := v_page_number * v_page_size;
 
-    SELECT COUNT(*)
-      INTO p_TotalRecords
+    SELECT COUNT(DISTINCT c.CODIGO_COMPROBANTE),
+           NVL(SUM(CASE WHEN d.MONTO > 0 THEN d.MONTO ELSE 0 END), 0),
+           NVL(SUM(CASE WHEN d.MONTO < 0 THEN -d.MONTO ELSE 0 END), 0)
+      INTO p_TotalRecords, p_TOTAL_DEBE, p_TOTAL_HABER
       FROM CNT.CNT_COMPROBANTES c
       LEFT JOIN CNT.CNT_PERIODOS p ON p.CODIGO_PERIODO = c.CODIGO_PERIODO
       LEFT JOIN CNT.CNT_DESCRIPTIVAS t ON t.DESCRIPCION_ID = c.TIPO_COMPROBANTE_ID
       LEFT JOIN CNT.CNT_DESCRIPTIVAS o ON o.DESCRIPCION_ID = c.ORIGEN_ID
+      LEFT JOIN CNT.CNT_DETALLE_COMPROBANTE d
+        ON d.CODIGO_COMPROBANTE = c.CODIGO_COMPROBANTE
+       AND d.CODIGO_EMPRESA = p_CODIGO_EMPRESA
      WHERE c.CODIGO_EMPRESA = p_CODIGO_EMPRESA
        AND (p_ESTADO_CMP IS NULL OR c.ESTADO_CMP = p_ESTADO_CMP)
        AND (p_CODIGO_PERIODO IS NULL OR c.CODIGO_PERIODO = p_CODIGO_PERIODO)
        AND (p_ORIGEN_ID IS NULL OR c.ORIGEN_ID = p_ORIGEN_ID)
+       AND (p_TIPO_COMPROBANTE_ID IS NULL OR c.TIPO_COMPROBANTE_ID = p_TIPO_COMPROBANTE_ID)
        AND (p_FECHA_DESDE IS NULL OR c.FECHA_COMPROBANTE >= p_FECHA_DESDE)
        AND (p_FECHA_HASTA IS NULL OR c.FECHA_COMPROBANTE < p_FECHA_HASTA + 1)
        AND (p_ES_AUTOMATICO IS NULL
@@ -3087,6 +3117,7 @@ BEGIN
        AND (p_ESTADO_CMP IS NULL OR c.ESTADO_CMP = p_ESTADO_CMP)
                            AND (p_CODIGO_PERIODO IS NULL OR c.CODIGO_PERIODO = p_CODIGO_PERIODO)
                            AND (p_ORIGEN_ID IS NULL OR c.ORIGEN_ID = p_ORIGEN_ID)
+       AND (p_TIPO_COMPROBANTE_ID IS NULL OR c.TIPO_COMPROBANTE_ID = p_TIPO_COMPROBANTE_ID)
                            AND (p_FECHA_DESDE IS NULL OR c.FECHA_COMPROBANTE >= p_FECHA_DESDE)
                            AND (p_FECHA_HASTA IS NULL OR c.FECHA_COMPROBANTE < p_FECHA_HASTA + 1)
                            AND (p_ES_AUTOMATICO IS NULL
@@ -3109,6 +3140,8 @@ EXCEPTION
         p_Message := SQLERRM;
         p_TotalRecords := 0;
         p_TotalPages := 0;
+        p_TOTAL_DEBE := 0;
+        p_TOTAL_HABER := 0;
 END;
 /
 

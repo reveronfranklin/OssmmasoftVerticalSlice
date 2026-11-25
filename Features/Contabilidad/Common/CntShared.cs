@@ -21,6 +21,13 @@ internal static class CntDb
 
     public static int GetIntOutput(OracleParameter parameter) => SupportDb.GetIntOutput(parameter);
 
+    public static decimal GetDecimalOutput(OracleParameter parameter) => parameter.Value switch
+    {
+        null or DBNull => 0m,
+        Oracle.ManagedDataAccess.Types.OracleDecimal number => number.IsNull ? 0m : number.Value,
+        var value => Convert.ToDecimal(value, System.Globalization.CultureInfo.InvariantCulture)
+    };
+
     public static bool IsSuccessMessage(string? message) => SupportDb.IsSuccessMessage(message);
 
     public static DateTime SafeGetDate(IDataReader reader, string columnName) => SupportDb.SafeGetDate(reader, columnName);

@@ -40,7 +40,7 @@ public record CntClonePlanCuentasCommand(int UsuarioId, int EmpresaOrigen);
 public record CntPeriodoGetAllQuery(int UsuarioId = 0, bool SoloAbiertos = false, DateTime? Fecha = null);
 public record CntMayorSearchQuery(int UsuarioId = 0, string SearchText = "", int PageSize = 20);
 public record CntAuxiliarSearchQuery(int UsuarioId = 0, string SearchText = "", int? CodigoMayor = null, int PageSize = 20);
-public record CntComprobanteGetAllQuery(int UsuarioId, int PageSize = 10, int PageNumber = 1, string SearchText = "", int? CodigoPeriodo = null, int? OrigenId = null, DateTime? FechaDesde = null, DateTime? FechaHasta = null, bool? EsAutomatico = null, string? EstadoContable = null);
+public record CntComprobanteGetAllQuery(int UsuarioId, int PageSize = 10, int PageNumber = 1, string SearchText = "", int? CodigoPeriodo = null, int? OrigenId = null, DateTime? FechaDesde = null, DateTime? FechaHasta = null, bool? EsAutomatico = null, string? EstadoContable = null, int? TipoComprobanteId = null);
 public record CntComprobanteGetByIdQuery(int CodigoComprobante, int UsuarioId);
 public record CntComprobantePrintQuery(int CodigoComprobante, int UsuarioId);
 public record CntComprobanteNumberQuery(int UsuarioId, int CodigoPeriodo, int TipoComprobanteId, DateTime FechaComprobante);
