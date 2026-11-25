@@ -653,3 +653,13 @@ Reglas de la politica:
   pantalla de parametros, no el despliegue del reporte.
 - **La limpieza de adjuntos huerfanos no esta implementada.**
   `SP_MFO_RESP_DELETE` informa cuantos quedaron sin fila, pero nadie los borra.
+
+## Reporte de compromisos con orden de pago y cheques
+
+El requerimiento 17 agrega el ejecutor `REPORTE_REL_COP_PDF` y el catalogo `ADM_PROVEEDORES_COP`. La semilla independiente `Sql/23_MFO_SEMILLA_REL_COP.sql <codigo_empresa>` publica el formulario `REP_REL_COP` despues de instalar sus procedimientos PRE y desplegar el backend.
+
+Entradas: `PROVEEDORES` MULTI_SELECT opcional, `FECHA_DESDE` y `FECHA_HASTA` obligatorias. Sin proveedores seleccionados se consulta solamente por el rango de fechas, dentro de la empresa configurada. Se mapean a `CodigosProveedores`, `FechaDesde` y `FechaHasta`; CodigoEmpresa y Usuario son parametros SISTEMA. Presupuesto y PUC no se solicitan en el formulario.
+
+La ruta `/apps/mfo/reporte/REP_REL_COP` reutiliza el visor integrado. El reporte conserva presupuesto/compromiso/ICP/PUC como clave y muestra montos netos de compromisos, ordenes y cheques sin multiplicarlos por hijos. La semilla configura 10000 filas base/hijas y 240 segundos; superar el limite devuelve ERROR y solicita refinar filtros, sin PDF parcial. Los permisos se asignan mediante la administracion existente, sin acceso general implicito.
+
+Contrato completo: [ReporteRelacionCompOpPagos](../ReporteRelacionCompOpPagos/ContratoFrontendReporteRelacionCompOpPagos.md). La existencia de la semilla en el repositorio no implica que este instalada en Oracle.
