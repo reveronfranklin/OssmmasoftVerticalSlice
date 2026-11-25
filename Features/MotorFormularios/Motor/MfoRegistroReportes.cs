@@ -3,6 +3,7 @@ using OssmmasoftVerticalSlice.Features.BienesMunicipales;
 using OssmmasoftVerticalSlice.Features.ReporteBm1;
 using OssmmasoftVerticalSlice.Features.ReporteChequesPeriodo;
 using OssmmasoftVerticalSlice.Features.ReporteRelacionCompromiso;
+using OssmmasoftVerticalSlice.Features.ReporteRelacionCompOpPagos;
 using OssmmasoftVerticalSlice.Features.ReporteRelacionRetencionIva;
 using OssmmasoftVerticalSlice.Helpers;
 
@@ -118,7 +119,8 @@ public static class MfoRegistroReportes
             // del motor que exige elegir un presupuesto: su formulario lo pide
             // contra el catalogo PRE_PRESUPUESTO, porque no existe -ni se
             // invento- un "presupuesto activo" en configuracion.
-            ["REPORTE_REL_COMPROMISO_PDF"] = EjecutarReporteRelCompromisoPdf
+            ["REPORTE_REL_COMPROMISO_PDF"] = EjecutarReporteRelCompromisoPdf,
+            ["REPORTE_REL_COP_PDF"] = EjecutarReporteRelCopPdf
         };
 
     public static bool EstaRegistrado(string? clave)
@@ -603,4 +605,28 @@ public static class MfoRegistroReportes
             resultado,
             mensaje);
     }
+
+    private static async Task<MfoResultadoEjecucion> EjecutarReporteRelCopPdf(MfoContextoEjecucion contexto)
+    {
+        var usuario = contexto.Param("Usuario")?.Texto;
+        if (string.IsNullOrWhiteSpace(usuario))
+            return MfoResultadoEjecucion.Error("No se pudo determinar el usuario conectado.");
+        var proveedores = contexto.Param("CodigosProveedores");
+        // Enteros descarta valores no enteros: rechazarlos antes para que una
+        // seleccion invalida nunca termine convertida en 'todos'.
+        if (proveedores is not null && proveedores.Multiples.Count != proveedores.Enteros.Count)
+            return MfoResultadoEjecucion.Error("La seleccion de proveedores contiene codigos invalidos.");
+        var query = new ReporteRelacionCompOpPagosQuery(
+            contexto.Param("FechaDesde")?.Fecha, contexto.Param("FechaHasta")?.Fecha,
+            proveedores?.Enteros, usuario);
+        var datos = await new ReporteRelacionCompOpPagosHandler(contexto.Conexiones, contexto.Config)
+            .HandleAsync(query, contexto.Cancelacion, contexto.Reporte.TimeoutSeg ?? 240, contexto.Reporte.MaxFilas);
+        if (!datos.IsValid || datos.Data is null) return MfoResultadoEjecucion.Error(datos.Message);
+        if (datos.Data.Items.Count == 0)
+            return MfoResultadoEjecucion.Vacio("No hay compromisos con los filtros seleccionados.");
+        contexto.Cancelacion.ThrowIfCancellationRequested();
+        var bytes = ReporteRelacionCompOpPagosPdfGenerator.Generate(datos.Data, query, ReportPrintContext.Create(usuario), contexto.Ambiente);
+        return new MfoResultadoEjecucion(bytes, "RelacionCompromisosOpPagos.pdf", datos.Data.CantidadFilas, "OK", string.Empty);
+    }
+
 }

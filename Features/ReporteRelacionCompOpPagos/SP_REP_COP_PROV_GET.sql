@@ -1,0 +1,22 @@
+-- SP_REP_COP_PROV_GET: 19 caracteres. Catalogo del formulario REP_REL_COP.
+CREATE OR REPLACE PROCEDURE PRE.SP_REP_COP_PROV_GET (
+    p_CodigoEmpresa IN NUMBER,
+    p_ResultSet OUT SYS_REFCURSOR,
+    p_Message OUT VARCHAR2
+) AS
+BEGIN
+    OPEN p_ResultSet FOR
+        SELECT P.CODIGO_PROVEEDOR,
+               TO_CHAR(P.CODIGO_PROVEEDOR) || ' - ' || P.NOMBRE_PROVEEDOR || ' / ' || P.RIF ETIQUETA
+          FROM ADM.ADM_PROVEEDORES P
+         WHERE P.CODIGO_EMPRESA = p_CodigoEmpresa
+         ORDER BY P.NOMBRE_PROVEEDOR, P.CODIGO_PROVEEDOR;
+    p_Message := 'success';
+EXCEPTION
+    WHEN OTHERS THEN
+        p_Message := SUBSTR(SQLERRM, 1, 4000);
+        OPEN p_ResultSet FOR
+            SELECT CAST(NULL AS NUMBER) CODIGO_PROVEEDOR,
+                   CAST(NULL AS VARCHAR2(1000)) ETIQUETA FROM DUAL WHERE 1 = 0;
+END SP_REP_COP_PROV_GET;
+/

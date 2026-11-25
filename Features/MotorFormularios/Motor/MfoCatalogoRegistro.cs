@@ -48,7 +48,8 @@ public static class MfoCatalogoRegistro
             // forma de resolverlo por configuracion -no existe un
             // PresupuestoConfig-, asi que lo elige el usuario, igual que en el
             // resto del ERP.
-            ["PRE_PRESUPUESTO"] = ResolverPrePresupuesto
+            ["PRE_PRESUPUESTO"] = ResolverPrePresupuesto,
+            ["ADM_PROVEEDORES_COP"] = ResolverProveedoresCop
         };
 
     public static bool EstaRegistrado(string? clave)
@@ -289,4 +290,29 @@ public static class MfoCatalogoRegistro
 
         return lista;
     }
+
+    private static async Task<List<MfoCatalogoOpcionResponse>> ResolverProveedoresCop(ConnectionDB conexiones, int empresa)
+    {
+        using var cn = conexiones.GetPresupuestoConnection();
+        await cn.OpenAsync();
+        using var cmd = new OracleCommand("PRE.SP_REP_COP_PROV_GET", cn)
+        {
+            CommandType = CommandType.StoredProcedure, BindByName = true, CommandTimeout = 60
+        };
+        cmd.Parameters.Add("p_CodigoEmpresa", OracleDbType.Int32).Value = empresa;
+        cmd.Parameters.Add("p_ResultSet", OracleDbType.RefCursor, ParameterDirection.Output);
+        var message = cmd.Parameters.Add("p_Message", OracleDbType.Varchar2, 4000, null, ParameterDirection.Output);
+        var lista = new List<MfoCatalogoOpcionResponse>();
+        using (var reader = await cmd.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+                lista.Add(new MfoCatalogoOpcionResponse(
+                    reader.SafeGetInt32("CODIGO_PROVEEDOR").ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    reader.SafeGetString("ETIQUETA")));
+        }
+        if (message.Value?.ToString()?.Trim().ToLowerInvariant() is not ("success" or "suscces"))
+            throw new InvalidOperationException(message.Value?.ToString() ?? "Sin respuesta del catalogo de proveedores.");
+        return lista;
+    }
+
 }
